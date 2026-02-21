@@ -176,14 +176,20 @@ class MetricsMiddleware(Middleware):
         output: dict[str, Any],
         context: Any,
     ) -> dict[str, Any] | None:
-        start_time = context.data["_metrics_starts"].pop()
+        starts = context.data.get("_metrics_starts", [])
+        if not starts:
+            return None
+        start_time = starts.pop()
         duration_s = time.time() - start_time
         self._collector.increment_calls(module_id, "success")
         self._collector.observe_duration(module_id, duration_s)
         return None
 
     def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any) -> dict[str, Any] | None:
-        start_time = context.data["_metrics_starts"].pop()
+        starts = context.data.get("_metrics_starts", [])
+        if not starts:
+            return None
+        start_time = starts.pop()
         duration_s = time.time() - start_time
         error_code = error.code if isinstance(error, ModuleError) else type(error).__name__
         self._collector.increment_calls(module_id, "error")

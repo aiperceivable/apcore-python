@@ -353,6 +353,28 @@ class TestMetricsMiddlewareNested:
         assert snap["counters"][key_b] == 1
 
 
+class TestMetricsMiddlewareSkippedBefore:
+    """Tests for MetricsMiddleware when before() was never called."""
+
+    def test_after_without_before_returns_none(self):
+        """after() returns None without crashing when before() was never called."""
+        c = MetricsCollector()
+        mw = MetricsMiddleware(c)
+        ctx = Context.create()
+        result = mw.after("mod.a", {}, {"r": 1}, ctx)
+        assert result is None
+        assert c.snapshot()["counters"] == {}
+
+    def test_on_error_without_before_returns_none(self):
+        """on_error() returns None without crashing when before() was never called."""
+        c = MetricsCollector()
+        mw = MetricsMiddleware(c)
+        ctx = Context.create()
+        result = mw.on_error("mod.a", {}, RuntimeError("fail"), ctx)
+        assert result is None
+        assert c.snapshot()["counters"] == {}
+
+
 class TestMetricsMiddlewareIntegration:
     """Integration-style test using real MetricsCollector."""
 

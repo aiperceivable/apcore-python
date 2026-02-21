@@ -138,7 +138,10 @@ class ObsLoggingMiddleware(Middleware):
         output: dict[str, Any],
         context: Any,
     ) -> dict[str, Any] | None:
-        start_time = context.data["_obs_logging_starts"].pop()
+        starts = context.data.get("_obs_logging_starts", [])
+        if not starts:
+            return None
+        start_time = starts.pop()
         duration_ms = (time.time() - start_time) * 1000
         extra: dict[str, Any] = {
             "module_id": module_id,
@@ -150,7 +153,10 @@ class ObsLoggingMiddleware(Middleware):
         return None
 
     def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any) -> dict[str, Any] | None:
-        start_time = context.data["_obs_logging_starts"].pop()
+        starts = context.data.get("_obs_logging_starts", [])
+        if not starts:
+            return None
+        start_time = starts.pop()
         duration_ms = (time.time() - start_time) * 1000
         self._logger.error(
             "Module call failed",

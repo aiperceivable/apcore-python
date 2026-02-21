@@ -315,3 +315,21 @@ class TestObsLoggingMiddleware:
         mw = ObsLoggingMiddleware(logger=None)
         assert mw._logger is not None
         assert isinstance(mw._logger, ContextLogger)
+
+    def test_after_without_before_returns_none(self):
+        """after() returns None without crashing when before() was never called."""
+        buf = io.StringIO()
+        logger = ContextLogger(name="obs", output=buf)
+        mw = ObsLoggingMiddleware(logger=logger)
+        ctx = Context.create()
+        result = mw.after("mod.a", {}, {"r": 1}, ctx)
+        assert result is None
+
+    def test_on_error_without_before_returns_none(self):
+        """on_error() returns None without crashing when before() was never called."""
+        buf = io.StringIO()
+        logger = ContextLogger(name="obs", output=buf)
+        mw = ObsLoggingMiddleware(logger=logger)
+        ctx = Context.create()
+        result = mw.on_error("mod.a", {}, RuntimeError("fail"), ctx)
+        assert result is None
