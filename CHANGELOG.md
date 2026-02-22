@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [0.5.0] - 2026-02-21
+## [0.5.0] - 2026-02-22
 
 ### Changed
 
@@ -36,11 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MiddlewareManager** - Added `execute_before_async()`, `execute_after_async()`, `execute_on_error_async()` for proper async middleware dispatch with `inspect.iscoroutinefunction` detection
 - **RefResolver** - Added `clear_cache()` public method for cache management
 - **Executor** - Added `clear_async_cache()` public method
+#### Schema Export
+- **SchemaExporter** - Added `streaming` hint to `export_mcp()` annotations from `ModuleAnnotations`
 
 ### Fixed
 
 #### Memory Safety
 - **context** - Changed `Identity.roles` from mutable `list[str]` to immutable `tuple[str, ...]` in frozen dataclass
+
+#### Observability
+- **context_logger / metrics** - Handle cases where `before()` was never called in `ObsLoggingMiddleware` and `MetricsMiddleware`
 
 #### Security
 - **acl** - Added explicit `encoding="utf-8"` to YAML file open
@@ -221,6 +226,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.5.0]: https://github.com/aipartnerup/apcore-python/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/aipartnerup/apcore-python/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/aipartnerup/apcore-python/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/aipartnerup/apcore-python/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/aipartnerup/apcore-python/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/aipartnerup/apcore-python/releases/tag/v0.2.1
 [0.2.0]: https://github.com/aipartnerup/apcore-python/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aipartnerup/apcore-python/releases/tag/v0.1.0
