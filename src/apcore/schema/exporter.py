@@ -52,6 +52,7 @@ class SchemaExporter:
                 "destructiveHint": annotations.destructive if annotations else False,
                 "idempotentHint": annotations.idempotent if annotations else False,
                 "openWorldHint": annotations.open_world if annotations else True,
+                "streaming": getattr(annotations, "streaming", False) if annotations else False,
             },
         }
 

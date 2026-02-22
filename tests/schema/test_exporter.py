@@ -106,6 +106,14 @@ class TestExportMcp:
         assert result["annotations"]["destructiveHint"] is False
         assert result["annotations"]["idempotentHint"] is False
         assert result["annotations"]["openWorldHint"] is True
+        assert result["annotations"]["streaming"] is False
+
+    def test_streaming_annotation(self) -> None:
+        sd = _make_schema_def()
+        ann = _make_annotations(streaming=True)
+        exporter = SchemaExporter()
+        result = exporter.export_mcp(sd, annotations=ann)
+        assert result["annotations"]["streaming"] is True
 
     def test_custom_name(self) -> None:
         sd = _make_schema_def()
