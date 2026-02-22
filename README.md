@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./apcore-logo.svg" alt="apcore logo" width="200"/>
+  <img src="https://raw.githubusercontent.com/aipartnerup/apcore-typescript/main/apcore-logo.svg" alt="apcore logo" width="200"/>
 </div>
 
 # apcore
