@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-02-23
+
+### Added
+
+#### Extension System
+- **ExtensionManager / ExtensionPoint** - Added a unified extension-point framework for `discoverer`, `middleware`, `acl`, `span_exporter`, and `module_validator`
+- **Extension wiring** - Added `apply()` support to connect registered extensions into `Registry` and `Executor`
+
+#### Async Task & Cancellation
+- **AsyncTaskManager** - Added background task orchestration with status tracking, cancellation, concurrency limits, shutdown, and cleanup
+- **TaskStatus / TaskInfo** - Added task lifecycle enum and metadata dataclass for async task management
+- **CancelToken / ExecutionCancelledError** - Added cooperative cancellation primitives and integrated cancellation checks into executor flows
+
+#### Trace Context & Observability
+- **TraceContext / TraceParent** - Added W3C Trace Context utilities for `inject()`, `extract()`, and strict parsing via `from_traceparent()`
+- **Context.create(trace_parent=...)** - Added distributed-tracing entry support by accepting inbound trace context
+- **OTLPExporter top-level export** - Added OTLP exporter re-exports in observability and top-level public API
+
+#### Registry Enhancements
+- **Custom discoverer/validator hooks** - Added `set_discoverer()` and `set_validator()` integration paths
+- **Module describe support** - Added `Registry.describe()` for human-readable module descriptions
+- **Hot-reload APIs** - Added `watch()`, `unwatch()`, and file-change handling helpers for extension directories
+- **Validation constants/protocols** - Added `MAX_MODULE_ID_LENGTH`, `RESERVED_WORDS`, `Discoverer`, and `ModuleValidator` exports
+
+### Changed
+
+#### Public API Surface
+- Expanded top-level `apcore` exports to include cancellation, extensions, async task types, trace context types, additional registry protocols/constants, and new error classes
+
+#### Error System
+- Added `ModuleExecuteError` and `InternalError` to the framework error hierarchy and exports
+- Extended `ErrorCodes` with additional constants used by newer execution/extension paths
+
+### Fixed
+
+#### Execution & Redaction
+- **executor** - Added recursive `_secret_` key redaction for nested dictionaries
+- **executor** - Preserved explicit cancellation semantics by re-raising `ExecutionCancelledError`
+
+#### Import Graph Robustness
+- Reduced import-coupling risk across middleware/observability/trace typing paths while preserving existing runtime behavior and public interfaces
 
 ## [0.5.0] - 2026-02-22
 
@@ -231,6 +272,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.6.0]: https://github.com/aipartnerup/apcore-python/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aipartnerup/apcore-python/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aipartnerup/apcore-python/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aipartnerup/apcore-python/compare/v0.2.3...v0.3.0

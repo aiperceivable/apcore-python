@@ -97,7 +97,7 @@ from apcore.observability import (
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     # Core
