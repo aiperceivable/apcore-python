@@ -111,14 +111,18 @@ executor = Executor(registry=registry, acl=acl)
 ```
 src/apcore/
     __init__.py          # Public API
+    async_task.py        # Background task manager
+    cancel.py            # Cooperative cancellation primitives
     context.py           # Execution context & identity
     executor.py          # Core execution engine
     decorator.py         # @module decorator
     bindings.py          # YAML binding loader
     config.py            # Configuration
     acl.py               # Access control
+    extensions.py        # Extension point manager
     errors.py            # Error hierarchy
     module.py            # Module annotations & metadata
+    trace_context.py     # W3C trace context helpers
     middleware/          # Middleware system
     observability/       # Tracing, metrics, logging
     registry/            # Module discovery & registration
@@ -162,7 +166,7 @@ Apache-2.0
 
 - **Documentation**: [docs/apcore](https://github.com/aipartnerup/apcore) - Complete documentation
 - **Website**: [aipartnerup.com](https://aipartnerup.com)
-- **GitHub**: [aipartnerup/apcore](https://github.com/aipartnerup/apcore)
+- **GitHub**: [aipartnerup/apcore-python](https://github.com/aipartnerup/apcore-python)
 - **PyPI**: [apcore](https://pypi.org/project/apcore/)
-- **Issues**: [GitHub Issues](https://github.com/aipartnerup/apcore/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/aipartnerup/apcore/discussions)
+- **Issues**: [GitHub Issues](https://github.com/aipartnerup/apcore-python/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/aipartnerup/apcore-python/discussions)
