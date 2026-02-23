@@ -12,7 +12,22 @@ authors = [
     {name = "aipartnerup", email = "tercel.yi@gmail.com"}
 ]
 license = {text = "Apache-2.0"}
-keywords = ["ai", "task-orchestration", "schema-driven", "llm", "framework", "pydantic"]
+keywords = [
+    "ai",
+    "llm",
+    "framework",
+    "task-orchestration",
+    "schema-driven",
+    "pydantic",
+    "middleware",
+    "observability",
+    "tracing",
+    "metrics",
+    "async",
+    "access-control",
+    "registry",
+    "trace-context",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
