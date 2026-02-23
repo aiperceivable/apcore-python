@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeAlias
 
-from apcore.context import Context
+Context: TypeAlias = Any
 
 
 class Middleware:
@@ -29,7 +29,11 @@ class Middleware:
         return None
 
     def on_error(
-        self, module_id: str, inputs: dict[str, Any], error: Exception, context: Context
+        self,
+        module_id: str,
+        inputs: dict[str, Any],
+        error: Exception,
+        context: Context,
     ) -> dict[str, Any] | None:
         """Called when an error occurs. Return recovery dict or None."""
         return None

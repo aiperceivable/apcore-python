@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from apcore.middleware.base import Middleware
+from apcore.middleware.base import Context, Middleware
 
-if TYPE_CHECKING:
-    from apcore.context import Context
 
 __all__ = ["LoggingMiddleware"]
 

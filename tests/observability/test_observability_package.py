@@ -60,6 +60,12 @@ class TestObservabilityPackageExports:
 
         assert MetricsMiddleware is _MetricsMiddleware
 
+    def test_otlp_exporter_identity(self):
+        from apcore.observability import OTLPExporter
+        from apcore.observability.tracing import OTLPExporter as _OTLPExporter
+
+        assert OTLPExporter is _OTLPExporter
+
     def test_all_contains_all_public_names(self):
         import apcore.observability as obs
 
@@ -69,6 +75,7 @@ class TestObservabilityPackageExports:
             "MetricsCollector",
             "MetricsMiddleware",
             "ObsLoggingMiddleware",
+            "OTLPExporter",
             "Span",
             "SpanExporter",
             "StdoutExporter",
@@ -82,8 +89,8 @@ class TestObservabilityPackageExports:
         for name in obs.__all__:
             assert hasattr(obs, name), f"{name} in __all__ but not an attribute"
 
-    def test_otlp_exporter_not_in_package(self):
-        import apcore.observability as obs
+    def test_otlp_exporter_importable_from_top_level(self):
+        from apcore import OTLPExporter
+        from apcore.observability.tracing import OTLPExporter as _OTLPExporter
 
-        assert "OTLPExporter" not in obs.__all__
-        assert not hasattr(obs, "OTLPExporter")
+        assert OTLPExporter is _OTLPExporter

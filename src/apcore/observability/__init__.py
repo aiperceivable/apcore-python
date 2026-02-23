@@ -18,6 +18,7 @@ from apcore.observability.context_logger import ContextLogger, ObsLoggingMiddlew
 from apcore.observability.metrics import MetricsCollector, MetricsMiddleware
 from apcore.observability.tracing import (
     InMemoryExporter,
+    OTLPExporter,
     Span,
     SpanExporter,
     StdoutExporter,
@@ -30,6 +31,7 @@ __all__ = [
     "MetricsCollector",
     "MetricsMiddleware",
     "ObsLoggingMiddleware",
+    "OTLPExporter",
     "Span",
     "SpanExporter",
     "StdoutExporter",

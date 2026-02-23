@@ -5,23 +5,26 @@ from __future__ import annotations
 import inspect
 import logging
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from apcore.middleware.base import Middleware
+from apcore.errors import ModuleError
+from apcore.middleware.base import Context, Middleware
 
-if TYPE_CHECKING:
-    from apcore.context import Context
 
 __all__ = ["MiddlewareManager", "MiddlewareChainError"]
 
 _logger = logging.getLogger(__name__)
 
 
-class MiddlewareChainError(Exception):
+class MiddlewareChainError(ModuleError):
     """Raised when a middleware's before() fails. Carries context for error recovery."""
 
     def __init__(self, original: Exception, executed_middlewares: list[Middleware]) -> None:
-        super().__init__(str(original))
+        super().__init__(
+            code="MIDDLEWARE_CHAIN_ERROR",
+            message=str(original),
+            cause=original,
+        )
         self.original = original
         self.executed_middlewares = executed_middlewares
 
@@ -62,7 +65,10 @@ class MiddlewareManager:
             return list(self._middlewares)
 
     def execute_before(
-        self, module_id: str, inputs: dict[str, Any], context: Context
+        self,
+        module_id: str,
+        inputs: dict[str, Any],
+        context: Context,
     ) -> tuple[dict[str, Any], list[Middleware]]:
         """Execute before() on all middlewares in registration order.
 
@@ -130,7 +136,10 @@ class MiddlewareManager:
         return None
 
     async def execute_before_async(
-        self, module_id: str, inputs: dict[str, Any], context: Context
+        self,
+        module_id: str,
+        inputs: dict[str, Any],
+        context: Context,
     ) -> tuple[dict[str, Any], list[Middleware]]:
         """Async-aware execute_before: awaits coroutine middlewares, calls sync ones directly."""
         current_inputs = inputs

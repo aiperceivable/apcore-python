@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Level 2 Conformance (Phase 1)
+- **ExtensionManager** and **ExtensionPoint** for unified extension point management (discoverer, middleware, acl, span_exporter, module_validator) with `register()`, `get()`, `get_all()`, `unregister()`, `apply()`, `list_points()` methods
+- **AsyncTaskManager**, **TaskStatus**, **TaskInfo** for async task execution with status tracking (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED), cancellation, and concurrency limiting
+- **TraceContext** and **TraceParent** for W3C Trace Context support with `inject()`, `extract()`, and `from_traceparent()` methods
+- `Context.create()` now accepts optional `trace_parent` parameter for distributed trace propagation
+
 #### Async Middleware
 - **MiddlewareManager** - Added `execute_before_async()`, `execute_after_async()`, `execute_on_error_async()` for proper async middleware dispatch with `inspect.iscoroutinefunction` detection
 - **RefResolver** - Added `clear_cache()` public method for cache management
@@ -218,7 +224,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **pydantic** >= 2.0 - Schema validation and serialization
 - **pyyaml** >= 6.0 - YAML binding support
-- **pluggy** >= 1.0 - Plugin system for registry discovery
 
 ### Supported Python Versions
 

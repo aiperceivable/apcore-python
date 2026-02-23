@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from apcore.context import Context
-from apcore.middleware.base import Middleware
+from apcore.middleware.base import Context, Middleware
 
 __all__ = ["BeforeMiddleware", "AfterMiddleware"]
 

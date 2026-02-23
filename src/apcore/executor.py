@@ -13,6 +13,7 @@ from typing import Any, Callable
 import pydantic
 
 from apcore.acl import ACL
+from apcore.cancel import ExecutionCancelledError
 from apcore.config import Config
 from apcore.context import Context
 from apcore.errors import (
@@ -114,8 +115,11 @@ def _redact_fields(data: dict[str, Any], schema_dict: dict[str, Any]) -> None:
 def _redact_secret_prefix(data: dict[str, Any]) -> None:
     """In-place redaction of keys starting with _secret_."""
     for key in data:
-        if key.startswith("_secret_") and data[key] is not None:
+        value = data[key]
+        if key.startswith("_secret_") and value is not None:
             data[key] = REDACTED_VALUE
+        elif isinstance(value, dict):
+            _redact_secret_prefix(value)
 
 
 # =============================================================================
@@ -205,6 +209,14 @@ class Executor:
         """Return a copy of the current middleware list."""
         return self._middleware_manager.snapshot()
 
+    def set_acl(self, acl: ACL) -> None:
+        """Set the access control provider.
+
+        Args:
+            acl: The ACL instance to use for access control enforcement.
+        """
+        self._acl = acl
+
     def use(self, middleware: Middleware) -> Executor:
         """Add class-based middleware and return self for chaining."""
         self._middleware_manager.add(middleware)
@@ -292,6 +304,10 @@ class Executor:
                 executed_middlewares = []  # Prevent double on_error in outer except
                 raise mce.original from mce
 
+            # Cancel check before execution
+            if ctx.cancel_token is not None:
+                ctx.cancel_token.check()
+
             # Step 7 -- Execute with timeout
             output = self._execute_with_timeout(module, module_id, inputs, ctx)
 
@@ -308,6 +324,8 @@ class Executor:
             # Step 9 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
 
+        except ExecutionCancelledError:
+            raise
         except Exception as exc:
             # Error handling for steps 6-9
             if executed_middlewares:
@@ -552,6 +570,10 @@ class Executor:
                 executed_middlewares = []
                 raise mce.original from mce
 
+            # Cancel check before execution
+            if ctx.cancel_token is not None:
+                ctx.cancel_token.check()
+
             # Step 7 -- Execute (async)
             output = await self._execute_async(module, module_id, inputs, ctx)
 
@@ -568,6 +590,8 @@ class Executor:
             # Step 9 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
 
+        except ExecutionCancelledError:
+            raise
         except Exception as exc:
             # Error handling for steps 6-9
             if executed_middlewares:
@@ -656,6 +680,10 @@ class Executor:
                 executed_middlewares = []
                 raise mce.original from mce
 
+            # Cancel check before execution
+            if ctx.cancel_token is not None:
+                ctx.cancel_token.check()
+
             # Step 7 -- Stream or fallback
             if not hasattr(module, "stream") or module.stream is None:
                 # Fallback: delegate to _execute_async, yield single chunk
@@ -697,6 +725,8 @@ class Executor:
                     module_id, effective_inputs, accumulated, ctx
                 )
 
+        except ExecutionCancelledError:
+            raise
         except Exception as exc:
             # Error handling with middleware recovery
             if executed_middlewares:

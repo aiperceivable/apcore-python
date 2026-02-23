@@ -6,7 +6,7 @@ import logging
 import re
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, runtime_checkable
 
 from apcore.errors import (
     InvalidInputError,
@@ -36,7 +36,46 @@ REGISTRY_EVENTS: dict[str, str] = {
 
 MODULE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
-__all__ = ["Registry", "REGISTRY_EVENTS", "MODULE_ID_PATTERN"]
+
+@runtime_checkable
+class Discoverer(Protocol):
+    """Protocol for custom module discovery."""
+
+    def discover(self, roots: list[str]) -> list[dict[str, Any]]:
+        """Discover modules from the given root directories.
+
+        Returns:
+            List of dicts with at least 'module_id' and 'module' keys.
+        """
+        ...
+
+
+@runtime_checkable
+class ModuleValidator(Protocol):
+    """Protocol for custom module validation."""
+
+    def validate(self, module: Any) -> list[str]:
+        """Validate a module.
+
+        Returns:
+            List of error strings. Empty list means valid.
+        """
+        ...
+
+
+MAX_MODULE_ID_LENGTH = 128
+
+RESERVED_WORDS = frozenset({"system", "internal", "core", "apcore", "plugin", "schema", "acl"})
+
+__all__ = [
+    "Registry",
+    "REGISTRY_EVENTS",
+    "MODULE_ID_PATTERN",
+    "MAX_MODULE_ID_LENGTH",
+    "RESERVED_WORDS",
+    "Discoverer",
+    "ModuleValidator",
+]
 
 
 class Registry:
@@ -88,15 +127,32 @@ class Registry:
         self._id_map: dict[str, dict[str, Any]] = {}
         self._schema_cache: dict[str, dict[str, Any]] = {}
         self._config = config
+        self._custom_discoverer: Discoverer | None = None
+        self._custom_validator: ModuleValidator | None = None
 
         # Load ID map if provided
         if id_map_path is not None:
             self._id_map = load_id_map(Path(id_map_path))
 
+    # ----- Custom Discoverer / Validator -----
+
+    def set_discoverer(self, discoverer: Discoverer) -> None:
+        """Set a custom module discoverer."""
+        self._custom_discoverer = discoverer
+
+    def set_validator(self, validator: ModuleValidator) -> None:
+        """Set a custom module validator."""
+        self._custom_validator = validator
+
     # ----- Discovery -----
 
     def discover(self) -> int:
         """Discover and register modules from configured extension directories.
+
+        If a custom discoverer is set via ``set_discoverer()``, it is used
+        instead of the default file-system scanning logic.  If a custom
+        validator is set via ``set_validator()``, it replaces the built-in
+        ``validate_module()`` check.
 
         Returns:
             Number of modules successfully registered in this discovery pass.
@@ -105,6 +161,51 @@ class Registry:
             CircularDependencyError: If circular dependencies detected among modules.
             ConfigNotFoundError: If a configured extension root does not exist.
         """
+        if self._custom_discoverer is not None:
+            return self._discover_custom()
+        return self._discover_default()
+
+    def _discover_custom(self) -> int:
+        """Run discovery using the custom discoverer."""
+        assert self._custom_discoverer is not None  # noqa: S101
+
+        root_paths = [str(r["root"]) for r in self._extension_roots]
+        custom_modules = self._custom_discoverer.discover(root_paths)
+
+        registered_count = 0
+        for entry in custom_modules:
+            mod_id: str = entry["module_id"]
+            mod: Any = entry["module"]
+
+            # Apply custom validator if set
+            if self._custom_validator is not None:
+                errors = self._custom_validator.validate(mod)
+                if errors:
+                    logger.warning(
+                        "Custom validator rejected module '%s': %s",
+                        mod_id,
+                        "; ".join(errors),
+                    )
+                    continue
+
+            try:
+                self.register(mod_id, mod)
+                registered_count += 1
+            except Exception as e:
+                logger.warning("Failed to register custom-discovered module '%s': %s", mod_id, e)
+
+        if registered_count == 0 and custom_modules:
+            logger.warning(
+                "No modules successfully registered from %d custom-discovered entries",
+                len(custom_modules),
+            )
+        elif registered_count == 0:
+            logger.warning("No modules discovered by custom discoverer")
+
+        return registered_count
+
+    def _discover_default(self) -> int:
+        """Run discovery using the default file-system scanning logic."""
         # Determine scan params from config
         max_depth = 8
         follow_symlinks = False
@@ -168,10 +269,13 @@ class Registry:
                 continue
             resolved_classes[dm.canonical_id] = cls
 
-        # Step 5: Validate module classes
+        # Step 5: Validate module classes (use custom validator if set)
         valid_classes: dict[str, type] = {}
         for mod_id, cls in resolved_classes.items():
-            errors = validate_module(cls)
+            if self._custom_validator is not None:
+                errors = self._custom_validator.validate(cls)
+            else:
+                errors = validate_module(cls)
             if errors:
                 logger.warning("Module '%s' failed validation: %s", mod_id, "; ".join(errors))
                 continue
@@ -251,6 +355,14 @@ class Registry:
                 f"Invalid module ID: '{module_id}'. Must match pattern: "
                 f"{MODULE_ID_PATTERN.pattern} (lowercase, digits, underscores, dots only; no hyphens)"
             )
+
+        if len(module_id) > MAX_MODULE_ID_LENGTH:
+            raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
+
+        parts = module_id.split(".")
+        for part in parts:
+            if part in RESERVED_WORDS:
+                raise InvalidInputError(f"Module ID contains reserved word: '{part}'")
 
         with self._lock:
             if module_id in self._modules:
@@ -378,11 +490,53 @@ class Registry:
             input_schema=input_json,
             output_schema=output_json,
             version=meta.get("version") or getattr(module, "version", "1.0.0"),
-            tags=(meta.get("tags") if meta.get("tags") is not None else list(getattr(module, "tags", []) or [])),
+            tags=list(meta.get("tags") or getattr(module, "tags", None) or []),
             annotations=getattr(module, "annotations", None),
             examples=list(getattr(module, "examples", []) or []),
             metadata=meta.get("metadata", {}),
         )
+
+    def describe(self, module_id: str) -> str:
+        """Return a human-readable description of a module.
+
+        Args:
+            module_id: The ID of the module to describe.
+
+        Returns:
+            Markdown-formatted description string.
+
+        Raises:
+            ModuleNotFoundError: If module is not registered.
+        """
+        module = self.get(module_id)
+        if module is None:
+            raise ModuleNotFoundError(module_id)
+
+        # Check for custom describe method
+        if hasattr(module, "describe") and callable(module.describe):
+            return str(module.describe())
+
+        # Auto-generate from descriptor
+        descriptor = self.get_definition(module_id)
+        if descriptor is None:
+            return f"Module: {module_id}\n\nNo description available."
+
+        lines = [f"# {descriptor.module_id}"]
+        if descriptor.description:
+            lines.append(f"\n{descriptor.description}")
+        if descriptor.tags:
+            lines.append(f"\n**Tags:** {', '.join(descriptor.tags)}")
+        if descriptor.input_schema and descriptor.input_schema.get("properties"):
+            lines.append("\n**Parameters:**")
+            for param, schema in descriptor.input_schema["properties"].items():
+                param_type = schema.get("type", "any")
+                param_desc = schema.get("description", "")
+                required = param in descriptor.input_schema.get("required", [])
+                req_marker = " (required)" if required else ""
+                lines.append(f"- `{param}` ({param_type}){req_marker}: {param_desc}")
+        if descriptor.documentation:
+            lines.append(f"\n**Documentation:**\n{descriptor.documentation}")
+        return "\n".join(lines)
 
     # ----- Event System -----
 
@@ -415,6 +569,140 @@ class Registry:
                     module_id,
                     e,
                 )
+
+    # ----- Hot Reload -----
+
+    def watch(self) -> None:
+        """Start watching extension directories for file changes.
+
+        Requires the optional ``watchdog`` dependency.
+        Raises ImportError if watchdog is not installed.
+        """
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler, FileSystemEvent
+        except ImportError:
+            raise ImportError("watchdog is required for hot reload. Install it with: pip install watchdog")
+
+        if hasattr(self, "_observer") and self._observer is not None:
+            return  # Already watching
+
+        outer_registry = self
+
+        class _ModuleChangeHandler(FileSystemEventHandler):
+            def __init__(self) -> None:
+                self._registry = outer_registry
+                self._debounce_timer: dict[str, float] = {}
+
+            def _should_process(self, path: str) -> bool:
+                if not path.endswith(".py"):
+                    return False
+                now = __import__("time").time()
+                last = self._debounce_timer.get(path, 0.0)
+                if now - last < 0.3:
+                    return False
+                self._debounce_timer[path] = now
+                return True
+
+            def on_modified(self, event: FileSystemEvent) -> None:
+                if event.is_directory:
+                    return
+                path = str(event.src_path)
+                if not self._should_process(path):
+                    return
+                self._registry._handle_file_change(path)
+
+            def on_created(self, event: FileSystemEvent) -> None:
+                if event.is_directory:
+                    return
+                path = str(event.src_path)
+                if not self._should_process(path):
+                    return
+                self._registry._handle_file_change(path)
+
+            def on_deleted(self, event: FileSystemEvent) -> None:
+                if event.is_directory:
+                    return
+                path = str(event.src_path)
+                if not path.endswith(".py"):
+                    return
+                self._registry._handle_file_deletion(path)
+
+        self._observer = Observer()
+        handler = _ModuleChangeHandler()
+
+        for root_config in self._extension_roots:
+            root_path = root_config.get("root", "")
+            if root_path and __import__("os").path.isdir(root_path):
+                self._observer.schedule(handler, root_path, recursive=True)
+
+        self._observer.start()
+
+    def unwatch(self) -> None:
+        """Stop watching extension directories for file changes."""
+        if hasattr(self, "_observer") and self._observer is not None:
+            self._observer.stop()
+            self._observer.join()
+            self._observer = None
+
+    def _handle_file_change(self, path: str) -> None:
+        """Handle a file modification or creation event."""
+        import importlib.util
+        import os
+
+        # Try to find which module this file belongs to
+        module_id = self._path_to_module_id(path)
+        if module_id and self.has(module_id):
+            # Reload: unregister old, re-discover
+            old_module = self.get(module_id)
+            if old_module and hasattr(old_module, "on_unload"):
+                try:
+                    old_module.on_unload()
+                except Exception:
+                    pass
+            self.unregister(module_id)
+
+        # Try to re-import and register
+        try:
+            spec = importlib.util.spec_from_file_location("_hot_reload", path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                # Find module class (look for execute method)
+                for attr_name in dir(mod):
+                    attr = getattr(mod, attr_name)
+                    if isinstance(attr, type) and hasattr(attr, "execute"):
+                        instance = attr()
+                        new_id = module_id or os.path.splitext(os.path.basename(path))[0]
+                        if self.has(new_id):
+                            self.unregister(new_id)
+                        self.register(new_id, instance)
+                        break
+        except Exception as e:
+            logger.warning("Hot reload failed for %s: %s", path, e)
+
+    def _handle_file_deletion(self, path: str) -> None:
+        """Handle a file deletion event."""
+        module_id = self._path_to_module_id(path)
+        if module_id and self.has(module_id):
+            module = self.get(module_id)
+            if module and hasattr(module, "on_unload"):
+                try:
+                    module.on_unload()
+                except Exception:
+                    pass
+            self.unregister(module_id)
+
+    def _path_to_module_id(self, path: str) -> str | None:
+        """Map a file path to a module ID if known."""
+        import os
+
+        basename = os.path.splitext(os.path.basename(path))[0]
+        # Check if any registered module ID ends with this basename
+        for mid in self.module_ids:
+            if mid.endswith(basename) or mid == basename:
+                return mid
+        return None
 
     # ----- Cache -----
 

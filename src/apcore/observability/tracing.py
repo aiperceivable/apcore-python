@@ -198,6 +198,14 @@ class TracingMiddleware(Middleware):
         self._sampling_rate = sampling_rate
         self._sampling_strategy = sampling_strategy
 
+    def set_exporter(self, exporter: SpanExporter) -> None:
+        """Replace the span exporter used by this middleware.
+
+        Args:
+            exporter: The new SpanExporter to use.
+        """
+        self._exporter = exporter
+
     def _should_sample(self, context: Any) -> bool:
         """Make or inherit sampling decision."""
         existing = context.data.get("_tracing_sampled")

@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 # Core
+from apcore.cancel import CancelToken, ExecutionCancelledError
 from apcore.context import Context, ContextFactory, Identity
 from apcore.registry import Registry
-from apcore.registry.registry import MODULE_ID_PATTERN, REGISTRY_EVENTS
-from apcore.registry.types import ModuleDescriptor
+from apcore.registry.registry import (
+    MAX_MODULE_ID_LENGTH,
+    MODULE_ID_PATTERN,
+    REGISTRY_EVENTS,
+    RESERVED_WORDS,
+    Discoverer,
+    ModuleValidator,
+)
+from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescriptor
 from apcore.executor import Executor, redact_sensitive, REDACTED_VALUE
 
 # Module types
@@ -18,16 +26,32 @@ from apcore.config import Config
 # Errors
 from apcore.errors import (
     ACLDeniedError,
+    ACLRuleError,
+    BindingCallableNotFoundError,
+    BindingFileInvalidError,
+    BindingInvalidTargetError,
+    BindingModuleNotFoundError,
+    BindingNotCallableError,
+    BindingSchemaMissingError,
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
     CircularDependencyError,
     ConfigError,
+    ConfigNotFoundError,
     ErrorCodes,
+    FuncMissingReturnTypeError,
+    FuncMissingTypeHintError,
+    InternalError,
     InvalidInputError,
     ModuleError,
+    ModuleExecuteError,
+    ModuleLoadError,
     ModuleNotFoundError,
     ModuleTimeoutError,
+    SchemaCircularRefError,
+    SchemaNotFoundError,
+    SchemaParseError,
     SchemaValidationError,
 )
 
@@ -40,11 +64,18 @@ from apcore.middleware import (
     BeforeMiddleware,
     LoggingMiddleware,
     Middleware,
+    MiddlewareChainError,
     MiddlewareManager,
 )
 
 # Decorators
 from apcore.decorator import FunctionModule, module
+
+# Extensions
+from apcore.extensions import ExtensionManager, ExtensionPoint
+
+# Async tasks
+from apcore.async_task import AsyncTaskManager, TaskInfo, TaskStatus
 
 # Bindings
 from apcore.bindings import BindingLoader
@@ -56,15 +87,22 @@ from apcore.observability import (
     MetricsCollector,
     MetricsMiddleware,
     ObsLoggingMiddleware,
+    OTLPExporter,
     Span,
+    SpanExporter,
     StdoutExporter,
     TracingMiddleware,
 )
+
+# Trace Context
+from apcore.trace_context import TraceContext, TraceParent
 
 __version__ = "0.5.0"
 
 __all__ = [
     # Core
+    "CancelToken",
+    "ExecutionCancelledError",
     "Context",
     "ContextFactory",
     "Identity",
@@ -76,24 +114,47 @@ __all__ = [
     "ValidationResult",
     # Registry types
     "ModuleDescriptor",
+    "DiscoveredModule",
+    "DependencyInfo",
     # Config
     "Config",
     # Registry constants
     "REGISTRY_EVENTS",
     "MODULE_ID_PATTERN",
+    "MAX_MODULE_ID_LENGTH",
+    "RESERVED_WORDS",
+    # Registry protocols
+    "Discoverer",
+    "ModuleValidator",
     # Errors
     "ErrorCodes",
     "ModuleError",
-    "SchemaValidationError",
     "ACLDeniedError",
-    "ModuleNotFoundError",
-    "ConfigError",
-    "CircularDependencyError",
-    "InvalidInputError",
-    "ModuleTimeoutError",
+    "ACLRuleError",
+    "BindingCallableNotFoundError",
+    "BindingFileInvalidError",
+    "BindingInvalidTargetError",
+    "BindingModuleNotFoundError",
+    "BindingNotCallableError",
+    "BindingSchemaMissingError",
     "CallDepthExceededError",
-    "CircularCallError",
     "CallFrequencyExceededError",
+    "CircularCallError",
+    "CircularDependencyError",
+    "ConfigError",
+    "ConfigNotFoundError",
+    "FuncMissingReturnTypeError",
+    "FuncMissingTypeHintError",
+    "InternalError",
+    "InvalidInputError",
+    "ModuleExecuteError",
+    "ModuleLoadError",
+    "ModuleNotFoundError",
+    "ModuleTimeoutError",
+    "SchemaCircularRefError",
+    "SchemaNotFoundError",
+    "SchemaParseError",
+    "SchemaValidationError",
     # ACL
     "ACL",
     "ACLRule",
@@ -103,9 +164,17 @@ __all__ = [
     "BeforeMiddleware",
     "AfterMiddleware",
     "LoggingMiddleware",
+    "MiddlewareChainError",
     # Decorators
     "module",
     "FunctionModule",
+    # Extensions
+    "ExtensionManager",
+    "ExtensionPoint",
+    # Async tasks
+    "AsyncTaskManager",
+    "TaskStatus",
+    "TaskInfo",
     # Bindings
     "BindingLoader",
     # Utilities
@@ -120,4 +189,9 @@ __all__ = [
     "Span",
     "StdoutExporter",
     "InMemoryExporter",
+    "OTLPExporter",
+    "SpanExporter",
+    # Trace Context
+    "TraceContext",
+    "TraceParent",
 ]

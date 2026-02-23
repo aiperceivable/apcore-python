@@ -17,7 +17,11 @@ from apcore.errors import (
     InvalidInputError,
     ModuleNotFoundError,
 )
-from apcore.registry.registry import Registry
+from apcore.registry.registry import (
+    MAX_MODULE_ID_LENGTH,
+    RESERVED_WORDS,
+    Registry,
+)
 from apcore.registry.types import ModuleDescriptor
 
 
@@ -43,7 +47,7 @@ class _ValidModule:
     tags = ["test", "sample"]
     version = "2.0.0"
 
-    def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def execute(self, inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         return {"result": inputs["value"]}
 
 
@@ -55,7 +59,7 @@ class _ValidModuleB:
     description = "Another valid test module"
     tags = ["test"]
 
-    def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         return {"result": "b"}
 
 
@@ -69,7 +73,7 @@ class _ModuleWithOnLoad:
     def __init__(self) -> None:
         self.load_called = False
 
-    def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         return {"result": "ok"}
 
     def on_load(self) -> None:
@@ -83,7 +87,7 @@ class _ModuleWithFailingOnLoad:
     output_schema = _TestOutput
     description = "Module with failing on_load"
 
-    def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         return {"result": "fail"}
 
     def on_load(self) -> None:
@@ -100,7 +104,7 @@ class _ModuleWithOnUnload:
     def __init__(self) -> None:
         self.unload_called = False
 
-    def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         return {"result": "ok"}
 
     def on_unload(self) -> None:
@@ -114,7 +118,7 @@ class _ModuleWithFailingOnUnload:
     output_schema = _TestOutput
     description = "Module with failing on_unload"
 
-    def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         return {"result": "fail"}
 
     def on_unload(self) -> None:
@@ -812,3 +816,304 @@ class TestThreadSafety:
             t.join()
 
         assert errors == []
+
+
+# ===== describe() =====
+
+
+class _ModuleWithCustomDescribe:
+    """Module with a custom describe() method."""
+
+    input_schema = _TestInput
+    output_schema = _TestOutput
+    description = "Module with custom describe"
+
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
+        return {"result": "ok"}
+
+    def describe(self) -> str:
+        return "Custom description from the module itself."
+
+
+class _ModuleWithDocumentation:
+    """Module with documentation for auto-generated describe."""
+
+    input_schema = _TestInput
+    output_schema = _TestOutput
+    description = "A documented module"
+    tags = ["util", "math"]
+    documentation = "This module does interesting things.\nSee docs for details."
+
+    def execute(self, inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
+        return {"result": inputs["value"]}
+
+
+class TestDescribe:
+    def test_describe_custom_method(self) -> None:
+        """describe() calls module.describe() when it exists."""
+        reg = Registry()
+        mod = _ModuleWithCustomDescribe()
+        reg.register("test.custom", mod)
+        result = reg.describe("test.custom")
+        assert result == "Custom description from the module itself."
+
+    def test_describe_auto_generated(self) -> None:
+        """describe() auto-generates markdown from descriptor when no custom method."""
+        reg = Registry()
+        mod = _ValidModule()
+        reg.register("test.auto", mod)
+        result = reg.describe("test.auto")
+        assert "# test.auto" in result
+        assert "A valid test module" in result
+        assert "**Tags:** test, sample" in result
+        assert "**Parameters:**" in result
+        assert "`value`" in result
+
+    def test_describe_includes_documentation(self) -> None:
+        """describe() includes documentation section when available."""
+        reg = Registry()
+        mod = _ModuleWithDocumentation()
+        reg.register("test.documented", mod)
+        result = reg.describe("test.documented")
+        assert "**Documentation:**" in result
+        assert "This module does interesting things." in result
+
+    def test_describe_not_found_raises(self) -> None:
+        """describe() raises ModuleNotFoundError for unregistered module."""
+        reg = Registry()
+        with pytest.raises(ModuleNotFoundError):
+            reg.describe("nonexistent.module")
+
+
+# ===== Hot Reload (watch/unwatch) =====
+
+
+class TestHotReload:
+    def test_watch_raises_import_error_without_watchdog(self) -> None:
+        """watch() raises ImportError when watchdog is not installed."""
+        import sys
+        from unittest.mock import patch
+
+        reg = Registry()
+        # Temporarily make watchdog unimportable
+        with patch.dict(sys.modules, {"watchdog": None, "watchdog.observers": None, "watchdog.events": None}):
+            with pytest.raises(ImportError, match="watchdog is required"):
+                reg.watch()
+
+    def test_unwatch_safe_when_not_watching(self) -> None:
+        """unwatch() is safe to call when not watching."""
+        reg = Registry()
+        # Should not raise
+        reg.unwatch()
+        # Call again to verify idempotent
+        reg.unwatch()
+
+    def test_path_to_module_id_maps_basename(self) -> None:
+        """_path_to_module_id() maps a file path to a module ID correctly."""
+        reg = Registry()
+        reg.register("my_module", _ValidModule())
+        result = reg._path_to_module_id("/some/path/my_module.py")
+        assert result == "my_module"
+
+    def test_path_to_module_id_maps_with_namespace(self) -> None:
+        """_path_to_module_id() maps a namespaced module correctly."""
+        reg = Registry()
+        reg.register("ns.my_module", _ValidModule())
+        result = reg._path_to_module_id("/some/path/my_module.py")
+        assert result == "ns.my_module"
+
+    def test_path_to_module_id_returns_none_for_unknown(self) -> None:
+        """_path_to_module_id() returns None for an unknown file."""
+        reg = Registry()
+        reg.register("my_module", _ValidModule())
+        result = reg._path_to_module_id("/some/path/unknown_file.py")
+        assert result is None
+
+    def test_handle_file_deletion_unregisters_module(self) -> None:
+        """_handle_file_deletion() unregisters a known module."""
+        reg = Registry()
+        mod = _ModuleWithOnUnload()
+        reg.register("deletable", mod)
+        assert reg.has("deletable")
+
+        reg._handle_file_deletion("/extensions/deletable.py")
+
+        assert not reg.has("deletable")
+        assert mod.unload_called is True
+
+    def test_handle_file_deletion_no_op_for_unknown(self) -> None:
+        """_handle_file_deletion() does nothing for an unknown file."""
+        reg = Registry()
+        reg.register("existing", _ValidModule())
+        # Should not raise, should not affect existing modules
+        reg._handle_file_deletion("/some/path/unknown.py")
+        assert reg.has("existing")
+
+
+# ===== Custom Discoverer =====
+
+
+class _MockDiscoverer:
+    """A mock discoverer for testing."""
+
+    def __init__(self, modules: list[dict[str, Any]]) -> None:
+        self.modules = modules
+        self.called_with: list[str] | None = None
+
+    def discover(self, roots: list[str]) -> list[dict[str, Any]]:
+        self.called_with = roots
+        return self.modules
+
+
+class TestCustomDiscoverer:
+    def test_custom_discoverer_used(self) -> None:
+        """When a custom discoverer is set, discover() uses it."""
+        mod_a = _ValidModule()
+        mod_b = _ValidModuleB()
+        discoverer = _MockDiscoverer(
+            [
+                {"module_id": "custom.a", "module": mod_a},
+                {"module_id": "custom.b", "module": mod_b},
+            ]
+        )
+
+        reg = Registry()
+        reg.set_discoverer(discoverer)
+        count = reg.discover()
+
+        assert count == 2
+        assert reg.has("custom.a")
+        assert reg.has("custom.b")
+        assert reg.get("custom.a") is mod_a
+        assert reg.get("custom.b") is mod_b
+        assert discoverer.called_with == ["./extensions"]
+
+    def test_default_discoverer_used_when_none_set(self, tmp_path: Path) -> None:
+        """When no custom discoverer is set, default scanning is used."""
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        _write_module_file(ext / "default_mod.py", "DefaultModModule", "Default module")
+
+        reg = Registry(extensions_dir=str(ext))
+        count = reg.discover()
+
+        assert count == 1
+        assert reg.has("default_mod")
+
+
+# ===== Custom Validator =====
+
+
+class _RejectAllValidator:
+    """Validator that rejects all modules."""
+
+    def validate(self, module: Any) -> list[str]:
+        return ["rejected by custom validator"]
+
+
+class _AcceptAllValidator:
+    """Validator that accepts all modules."""
+
+    def validate(self, module: Any) -> list[str]:
+        return []
+
+
+class TestCustomValidator:
+    def test_custom_validator_rejects_module(self) -> None:
+        """When custom validator returns errors, modules are rejected."""
+        mod = _ValidModule()
+        discoverer = _MockDiscoverer(
+            [
+                {"module_id": "rejected.mod", "module": mod},
+            ]
+        )
+
+        reg = Registry()
+        reg.set_discoverer(discoverer)
+        reg.set_validator(_RejectAllValidator())
+        count = reg.discover()
+
+        assert count == 0
+        assert not reg.has("rejected.mod")
+
+    def test_custom_validator_accepts_module(self) -> None:
+        """When custom validator returns empty list, modules are accepted."""
+        mod = _ValidModule()
+        discoverer = _MockDiscoverer(
+            [
+                {"module_id": "accepted.mod", "module": mod},
+            ]
+        )
+
+        reg = Registry()
+        reg.set_discoverer(discoverer)
+        reg.set_validator(_AcceptAllValidator())
+        count = reg.discover()
+
+        assert count == 1
+        assert reg.has("accepted.mod")
+        assert reg.get("accepted.mod") is mod
+
+    def test_custom_validator_with_default_discover(self, tmp_path: Path) -> None:
+        """Custom validator works with default file-system discovery too."""
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        _write_module_file(ext / "val_mod.py", "ValModModule", "Validated module")
+
+        reg = Registry(extensions_dir=str(ext))
+        reg.set_validator(_RejectAllValidator())
+        count = reg.discover()
+
+        # The custom validator rejects all, so nothing should be registered
+        assert count == 0
+        assert not reg.has("val_mod")
+
+
+# ===== Registry Constants =====
+
+
+class TestRegistryConstants:
+    def test_max_module_id_length_is_128(self) -> None:
+        """MAX_MODULE_ID_LENGTH is 128."""
+        assert MAX_MODULE_ID_LENGTH == 128
+
+    def test_max_module_id_length_is_int(self) -> None:
+        """MAX_MODULE_ID_LENGTH is an integer."""
+        assert isinstance(MAX_MODULE_ID_LENGTH, int)
+
+    def test_reserved_words_is_frozenset(self) -> None:
+        """RESERVED_WORDS is a frozenset."""
+        assert isinstance(RESERVED_WORDS, frozenset)
+
+    def test_reserved_words_contains_expected_values(self) -> None:
+        """RESERVED_WORDS contains all expected reserved words."""
+        expected = {"system", "internal", "core", "apcore", "plugin", "schema", "acl"}
+        assert RESERVED_WORDS == expected
+
+    def test_reserved_words_rejects_reserved_module_id(self) -> None:
+        """Registry.register() rejects module IDs containing reserved words."""
+        reg = Registry()
+        with pytest.raises(InvalidInputError, match="reserved word"):
+            reg.register("system", _ValidModule())
+
+    def test_reserved_words_rejects_reserved_segment(self) -> None:
+        """Registry.register() rejects module IDs with a reserved word as a segment."""
+        reg = Registry()
+        with pytest.raises(InvalidInputError, match="reserved word"):
+            reg.register("my.internal.module", _ValidModule())
+
+    def test_max_module_id_length_enforced(self) -> None:
+        """Registry.register() rejects module IDs exceeding MAX_MODULE_ID_LENGTH."""
+        reg = Registry()
+        long_id = "a" * (MAX_MODULE_ID_LENGTH + 1)
+        with pytest.raises(InvalidInputError, match="maximum length"):
+            reg.register(long_id, _ValidModule())
+
+    def test_module_id_at_max_length_accepted(self) -> None:
+        """Registry.register() accepts module IDs exactly at MAX_MODULE_ID_LENGTH."""
+        reg = Registry()
+        # Build a valid ID of exactly MAX_MODULE_ID_LENGTH characters
+        # Pattern requires: starts with [a-z], then [a-z0-9_]
+        exact_id = "a" * MAX_MODULE_ID_LENGTH
+        reg.register(exact_id, _ValidModule())
+        assert reg.has(exact_id)

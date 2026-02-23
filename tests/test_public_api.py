@@ -174,6 +174,47 @@ class TestPublicAPIImports:
 
         assert FunctionModule is not None
 
+    # -- Extensions --
+
+    def test_extension_manager_importable(self):
+        from apcore import ExtensionManager
+
+        assert ExtensionManager is not None
+
+    def test_extension_point_importable(self):
+        from apcore import ExtensionPoint
+
+        assert ExtensionPoint is not None
+
+    # -- Async tasks --
+
+    def test_async_task_manager_importable(self):
+        from apcore import AsyncTaskManager
+
+        assert AsyncTaskManager is not None
+
+    def test_task_status_importable(self):
+        from apcore import TaskStatus
+
+        assert TaskStatus is not None
+
+    def test_task_info_importable(self):
+        from apcore import TaskInfo
+
+        assert TaskInfo is not None
+
+    # -- Trace Context --
+
+    def test_trace_context_importable(self):
+        from apcore import TraceContext
+
+        assert TraceContext is not None
+
+    def test_trace_parent_importable(self):
+        from apcore import TraceParent
+
+        assert TraceParent is not None
+
     # -- Bindings --
 
     def test_binding_loader_importable(self):
@@ -235,16 +276,28 @@ class TestPublicAPIImports:
 
         assert InMemoryExporter is not None
 
+    # -- Registry protocols --
+
+    def test_discoverer_importable(self):
+        from apcore import Discoverer
+
+        assert Discoverer is not None
+
+    def test_module_validator_importable(self):
+        from apcore import ModuleValidator
+
+        assert ModuleValidator is not None
+
     # -- Shadowing safety --
 
     def test_module_not_found_error_is_not_builtin(self):
         assert apcore.ModuleNotFoundError is not builtins.ModuleNotFoundError
         assert issubclass(apcore.ModuleNotFoundError, apcore.ModuleError)
 
-    # -- Explicit exclusions --
+    # -- SpanExporter is now exported --
 
-    def test_span_exporter_not_in_top_level(self):
-        assert "SpanExporter" not in apcore.__all__
+    def test_span_exporter_in_top_level(self):
+        assert "SpanExporter" in apcore.__all__
 
     # -- Version --
 
@@ -259,6 +312,8 @@ class TestPublicAPIAll:
 
     EXPECTED_NAMES = {
         # Core
+        "CancelToken",
+        "ExecutionCancelledError",
         "Context",
         "ContextFactory",
         "Identity",
@@ -270,24 +325,47 @@ class TestPublicAPIAll:
         "ValidationResult",
         # Registry types
         "ModuleDescriptor",
+        "DiscoveredModule",
+        "DependencyInfo",
         # Registry constants
         "REGISTRY_EVENTS",
         "MODULE_ID_PATTERN",
+        "MAX_MODULE_ID_LENGTH",
+        "RESERVED_WORDS",
+        # Registry protocols
+        "Discoverer",
+        "ModuleValidator",
         # Config
         "Config",
         # Errors
         "ErrorCodes",
         "ModuleError",
-        "SchemaValidationError",
         "ACLDeniedError",
-        "ModuleNotFoundError",
-        "ConfigError",
-        "CircularDependencyError",
-        "InvalidInputError",
-        "ModuleTimeoutError",
+        "ACLRuleError",
+        "BindingCallableNotFoundError",
+        "BindingFileInvalidError",
+        "BindingInvalidTargetError",
+        "BindingModuleNotFoundError",
+        "BindingNotCallableError",
+        "BindingSchemaMissingError",
         "CallDepthExceededError",
-        "CircularCallError",
         "CallFrequencyExceededError",
+        "CircularCallError",
+        "CircularDependencyError",
+        "ConfigError",
+        "ConfigNotFoundError",
+        "FuncMissingReturnTypeError",
+        "FuncMissingTypeHintError",
+        "InternalError",
+        "InvalidInputError",
+        "ModuleExecuteError",
+        "ModuleLoadError",
+        "ModuleNotFoundError",
+        "ModuleTimeoutError",
+        "SchemaCircularRefError",
+        "SchemaNotFoundError",
+        "SchemaParseError",
+        "SchemaValidationError",
         # ACL
         "ACL",
         "ACLRule",
@@ -297,9 +375,17 @@ class TestPublicAPIAll:
         "BeforeMiddleware",
         "AfterMiddleware",
         "LoggingMiddleware",
+        "MiddlewareChainError",
         # Decorators
         "module",
         "FunctionModule",
+        # Extensions
+        "ExtensionManager",
+        "ExtensionPoint",
+        # Async tasks
+        "AsyncTaskManager",
+        "TaskStatus",
+        "TaskInfo",
         # Bindings
         "BindingLoader",
         # Utilities
@@ -312,8 +398,13 @@ class TestPublicAPIAll:
         "MetricsMiddleware",
         "MetricsCollector",
         "Span",
+        "SpanExporter",
         "StdoutExporter",
         "InMemoryExporter",
+        "OTLPExporter",
+        # Trace Context
+        "TraceContext",
+        "TraceParent",
     }
 
     def test_all_contains_all_expected_names(self):

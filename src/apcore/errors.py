@@ -31,6 +31,8 @@ __all__ = [
     "BindingFileInvalidError",
     "CircularDependencyError",
     "ModuleLoadError",
+    "ModuleExecuteError",
+    "InternalError",
     "ErrorCodes",
 ]
 
@@ -396,6 +398,29 @@ class ModuleLoadError(ModuleError):
         )
 
 
+class ModuleExecuteError(ModuleError):
+    """Raised when module execution fails with an unhandled error."""
+
+    def __init__(self, module_id: str = "", message: str = "Module execution failed", **kwargs: Any) -> None:
+        super().__init__(
+            code="MODULE_EXECUTE_ERROR",
+            message=message,
+            details={"module_id": module_id},
+            **kwargs,
+        )
+
+
+class InternalError(ModuleError):
+    """Raised for unexpected internal framework errors."""
+
+    def __init__(self, message: str = "Internal error", **kwargs: Any) -> None:
+        super().__init__(
+            code="GENERAL_INTERNAL_ERROR",
+            message=message,
+            **kwargs,
+        )
+
+
 class ErrorCodes:
     """All framework error codes as constants.
 
@@ -432,6 +457,11 @@ class ErrorCodes:
     BINDING_SCHEMA_MISSING = "BINDING_SCHEMA_MISSING"
     BINDING_FILE_INVALID = "BINDING_FILE_INVALID"
     CIRCULAR_DEPENDENCY = "CIRCULAR_DEPENDENCY"
+    MIDDLEWARE_CHAIN_ERROR = "MIDDLEWARE_CHAIN_ERROR"
+    # Forward declarations for Level 2 Phase 2 features.
+    # Exception classes will be added when the corresponding features are implemented.
+    GENERAL_NOT_IMPLEMENTED = "GENERAL_NOT_IMPLEMENTED"
+    DEPENDENCY_NOT_FOUND = "DEPENDENCY_NOT_FOUND"
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("ErrorCodes is immutable")
