@@ -40,9 +40,13 @@ __all__ = [
     "ErrorCodes",
 ]
 
+_UNSET: Any = object()
+
 
 class ModuleError(Exception):
     """Base error for all apcore framework errors."""
+
+    _default_retryable: bool | None = None
 
     def __init__(
         self,
@@ -51,6 +55,10 @@ class ModuleError(Exception):
         details: dict[str, Any] | None = None,
         cause: Exception | None = None,
         trace_id: str | None = None,
+        retryable: Any = _UNSET,
+        ai_guidance: str | None = None,
+        user_fixable: bool | None = None,
+        suggestion: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -59,13 +67,42 @@ class ModuleError(Exception):
         self.cause = cause
         self.trace_id = trace_id
         self.timestamp = datetime.now(timezone.utc).isoformat()
+        self.retryable = self._default_retryable if retryable is _UNSET else retryable
+        self.ai_guidance = ai_guidance
+        self.user_fixable = user_fixable
+        self.suggestion = suggestion
 
     def __str__(self) -> str:
         return f"[{self.code}] {self.message}"
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict with sparse output (null fields omitted)."""
+        d: dict[str, Any] = {
+            "code": self.code,
+            "message": self.message,
+        }
+        if self.details:
+            d["details"] = self.details
+        if self.cause is not None:
+            d["cause"] = str(self.cause)
+        if self.trace_id is not None:
+            d["trace_id"] = self.trace_id
+        d["timestamp"] = self.timestamp
+        if self.retryable is not None:
+            d["retryable"] = self.retryable
+        if self.ai_guidance is not None:
+            d["ai_guidance"] = self.ai_guidance
+        if self.user_fixable is not None:
+            d["user_fixable"] = self.user_fixable
+        if self.suggestion is not None:
+            d["suggestion"] = self.suggestion
+        return d
+
 
 class ConfigNotFoundError(ModuleError):
     """Raised when a configuration file cannot be found."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, config_path: str, **kwargs: Any) -> None:
         super().__init__(
@@ -79,6 +116,8 @@ class ConfigNotFoundError(ModuleError):
 class ConfigError(ModuleError):
     """Raised when configuration is invalid."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(code="CONFIG_INVALID", message=message, **kwargs)
 
@@ -86,12 +125,16 @@ class ConfigError(ModuleError):
 class ACLRuleError(ModuleError):
     """Raised when an ACL rule is invalid."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(code="ACL_RULE_ERROR", message=message, **kwargs)
 
 
 class ACLDeniedError(ModuleError):
     """Raised when ACL denies access."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, caller_id: str | None, target_id: str, **kwargs: Any) -> None:
         super().__init__(
@@ -119,6 +162,8 @@ class ApprovalError(ModuleError):
     Note: ``result`` is typed as ``Any`` to avoid a circular import with
     ``apcore.approval`` where ``ApprovalResult`` is defined.
     """
+
+    _default_retryable: bool | None = False
 
     def __init__(
         self,
@@ -149,6 +194,8 @@ class ApprovalError(ModuleError):
 class ApprovalDeniedError(ApprovalError):
     """Raised when an approval handler rejects the request."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, result: Any, module_id: str = "", **kwargs: Any) -> None:
         reason = getattr(result, "reason", None) or ""
         msg = f"Approval denied for module '{module_id}'"
@@ -166,6 +213,8 @@ class ApprovalDeniedError(ApprovalError):
 class ApprovalTimeoutError(ApprovalError):
     """Raised when an approval request times out."""
 
+    _default_retryable: bool | None = True
+
     def __init__(self, result: Any, module_id: str = "", **kwargs: Any) -> None:
         super().__init__(
             code="APPROVAL_TIMEOUT",
@@ -178,6 +227,8 @@ class ApprovalTimeoutError(ApprovalError):
 
 class ApprovalPendingError(ApprovalError):
     """Raised when an approval is pending async resolution (Phase B)."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, result: Any, module_id: str = "", **kwargs: Any) -> None:
         approval_id = getattr(result, "approval_id", None)
@@ -199,6 +250,8 @@ class ApprovalPendingError(ApprovalError):
 class ModuleNotFoundError(ModuleError):
     """Raised when a module cannot be found."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, module_id: str, **kwargs: Any) -> None:
         super().__init__(
             code="MODULE_NOT_FOUND",
@@ -210,6 +263,8 @@ class ModuleNotFoundError(ModuleError):
 
 class ModuleTimeoutError(ModuleError):
     """Raised when module execution exceeds timeout."""
+
+    _default_retryable: bool | None = True
 
     def __init__(self, module_id: str, timeout_ms: int, **kwargs: Any) -> None:
         super().__init__(
@@ -233,6 +288,8 @@ class ModuleTimeoutError(ModuleError):
 class SchemaValidationError(ModuleError):
     """Raised when schema validation fails."""
 
+    _default_retryable: bool | None = False
+
     def __init__(
         self,
         message: str = "Schema validation failed",
@@ -250,6 +307,8 @@ class SchemaValidationError(ModuleError):
 class SchemaNotFoundError(ModuleError):
     """Raised when a schema file or reference target cannot be found."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, schema_id: str, **kwargs: Any) -> None:
         super().__init__(
             code="SCHEMA_NOT_FOUND",
@@ -262,12 +321,16 @@ class SchemaNotFoundError(ModuleError):
 class SchemaParseError(ModuleError):
     """Raised when a schema file has invalid syntax."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(code="SCHEMA_PARSE_ERROR", message=message, **kwargs)
 
 
 class SchemaCircularRefError(ModuleError):
     """Raised when circular $ref references are detected."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, ref_path: str, **kwargs: Any) -> None:
         super().__init__(
@@ -280,6 +343,8 @@ class SchemaCircularRefError(ModuleError):
 
 class CallDepthExceededError(ModuleError):
     """Raised when call chain exceeds maximum depth."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any) -> None:
         super().__init__(
@@ -303,6 +368,8 @@ class CallDepthExceededError(ModuleError):
 class CircularCallError(ModuleError):
     """Raised when a circular call is detected."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, module_id: str, call_chain: list[str], **kwargs: Any) -> None:
         super().__init__(
             code="CIRCULAR_CALL",
@@ -319,6 +386,8 @@ class CircularCallError(ModuleError):
 
 class CallFrequencyExceededError(ModuleError):
     """Raised when a module is called too many times."""
+
+    _default_retryable: bool | None = False
 
     def __init__(
         self,
@@ -359,12 +428,16 @@ class CallFrequencyExceededError(ModuleError):
 class InvalidInputError(ModuleError):
     """Raised for invalid input."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, message: str = "Invalid input", **kwargs: Any) -> None:
         super().__init__(code="GENERAL_INVALID_INPUT", message=message, **kwargs)
 
 
 class FuncMissingTypeHintError(ModuleError):
     """Raised when a function parameter has no type annotation or a forward reference cannot be resolved."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, *, function_name: str, parameter_name: str, **kwargs: Any) -> None:
         super().__init__(
@@ -381,6 +454,8 @@ class FuncMissingTypeHintError(ModuleError):
 class FuncMissingReturnTypeError(ModuleError):
     """Raised when a function has no return type annotation."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, *, function_name: str, **kwargs: Any) -> None:
         super().__init__(
             code="FUNC_MISSING_RETURN_TYPE",
@@ -392,6 +467,8 @@ class FuncMissingReturnTypeError(ModuleError):
 
 class BindingInvalidTargetError(ModuleError):
     """Raised when a binding target string does not contain a ':' separator."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, *, target: str, **kwargs: Any) -> None:
         super().__init__(
@@ -405,6 +482,8 @@ class BindingInvalidTargetError(ModuleError):
 class BindingModuleNotFoundError(ModuleError):
     """Raised when a binding target module cannot be imported."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, *, module_path: str, **kwargs: Any) -> None:
         super().__init__(
             code="BINDING_MODULE_NOT_FOUND",
@@ -416,6 +495,8 @@ class BindingModuleNotFoundError(ModuleError):
 
 class BindingCallableNotFoundError(ModuleError):
     """Raised when a callable cannot be found in the target module."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, *, callable_name: str, module_path: str, **kwargs: Any) -> None:
         super().__init__(
@@ -429,6 +510,8 @@ class BindingCallableNotFoundError(ModuleError):
 class BindingNotCallableError(ModuleError):
     """Raised when a resolved binding target is not callable."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, *, target: str, **kwargs: Any) -> None:
         super().__init__(
             code="BINDING_NOT_CALLABLE",
@@ -440,6 +523,8 @@ class BindingNotCallableError(ModuleError):
 
 class BindingSchemaMissingError(ModuleError):
     """Raised when no schema is provided and auto-generation from type hints fails."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, *, target: str, **kwargs: Any) -> None:
         super().__init__(
@@ -453,6 +538,8 @@ class BindingSchemaMissingError(ModuleError):
 class BindingFileInvalidError(ModuleError):
     """Raised when a binding file has parse errors, missing required fields, or is empty."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, *, file_path: str, reason: str, **kwargs: Any) -> None:
         super().__init__(
             code="BINDING_FILE_INVALID",
@@ -464,6 +551,8 @@ class BindingFileInvalidError(ModuleError):
 
 class CircularDependencyError(ModuleError):
     """Raised when circular dependencies are detected among modules."""
+
+    _default_retryable: bool | None = False
 
     def __init__(self, cycle_path: list[str], **kwargs: Any) -> None:
         super().__init__(
@@ -477,6 +566,8 @@ class CircularDependencyError(ModuleError):
 class ModuleLoadError(ModuleError):
     """Raised when a module file cannot be loaded or resolved."""
 
+    _default_retryable: bool | None = False
+
     def __init__(self, module_id: str, reason: str, **kwargs: Any) -> None:
         super().__init__(
             code="MODULE_LOAD_ERROR",
@@ -489,6 +580,8 @@ class ModuleLoadError(ModuleError):
 class ModuleExecuteError(ModuleError):
     """Raised when module execution fails with an unhandled error."""
 
+    _default_retryable: bool | None = None
+
     def __init__(self, module_id: str = "", message: str = "Module execution failed", **kwargs: Any) -> None:
         super().__init__(
             code="MODULE_EXECUTE_ERROR",
@@ -500,6 +593,8 @@ class ModuleExecuteError(ModuleError):
 
 class InternalError(ModuleError):
     """Raised for unexpected internal framework errors."""
+
+    _default_retryable: bool | None = True
 
     def __init__(self, message: str = "Internal error", **kwargs: Any) -> None:
         super().__init__(

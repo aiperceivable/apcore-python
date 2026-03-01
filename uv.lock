@@ -13,10 +13,9 @@ wheels = [
 
 [[package]]
 name = "apcore"
-version = "0.5.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
-    { name = "pluggy" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
@@ -35,7 +34,6 @@ dev = [
 requires-dist = [
     { name = "apdev", extras = ["dev"], marker = "extra == 'dev'", specifier = ">=0.1.6" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
-    { name = "pluggy", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
