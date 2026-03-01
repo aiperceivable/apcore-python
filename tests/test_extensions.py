@@ -52,12 +52,12 @@ class TestExtensionManagerInit:
     def test_has_five_built_in_points(self) -> None:
         mgr = ExtensionManager()
         points = mgr.list_points()
-        assert len(points) == 5
+        assert len(points) == 6
 
     def test_built_in_point_names(self) -> None:
         mgr = ExtensionManager()
         names = {p.name for p in mgr.list_points()}
-        assert names == {"discoverer", "middleware", "acl", "span_exporter", "module_validator"}
+        assert names == {"discoverer", "middleware", "acl", "span_exporter", "module_validator", "approval_handler"}
 
     def test_list_points_returns_extension_point_instances(self) -> None:
         mgr = ExtensionManager()

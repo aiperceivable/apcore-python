@@ -3,12 +3,12 @@
 ## Overall Progress
 
 ```
-[>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>] 42/42 tasks (100%)
+[>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>] 48/48 tasks (100%)
 ```
 
 | Status | Count |
 |--------|-------|
-| Completed | 7 modules |
+| Completed | 8 modules |
 | In Progress | 0 modules |
 | Pending | 0 modules |
 
@@ -23,6 +23,7 @@
 | 5 | [acl-system](./acl-system/) | Pattern-based ACL with first-match-wins evaluation and conditional rules | completed | 5/5 |
 | 6 | [observability](./observability/) | Distributed tracing, metrics collection, and structured logging middleware | completed | 7/7 |
 | 7 | [decorator-bindings](./decorator-bindings/) | @module decorator for code-first and BindingLoader for YAML-driven module registration | completed | 6/6 |
+| 8 | [approval-system](./approval-system/) | Runtime approval gate at Step 4.5 with ApprovalHandler protocol and Phase A/B flows | completed | 6/6 |
 
 ## Module Dependencies
 
@@ -37,6 +38,7 @@ graph TD
     DB --> SS
     OBS[observability] --> MS
     OBS --> CE
+    APP[approval-system] --> CE
 
     style CE fill:#2d6,stroke:#333,color:#fff
     style SS fill:#2d6,stroke:#333,color:#fff
@@ -45,6 +47,7 @@ graph TD
     style ACL fill:#2d6,stroke:#333,color:#fff
     style OBS fill:#2d6,stroke:#333,color:#fff
     style DB fill:#2d6,stroke:#333,color:#fff
+    style APP fill:#2d6,stroke:#333,color:#fff
 ```
 
 ## Recommended Implementation Order
@@ -75,6 +78,12 @@ graph TD
 | Module | Rationale |
 |--------|-----------|
 | [observability](./observability/) | Depends on middleware-system and core-executor; adds tracing/metrics/logging |
+
+### Phase 5: Extensions (Why last: extends executor with optional capabilities)
+
+| Module | Rationale |
+|--------|-----------|
+| [approval-system](./approval-system/) | Depends on core-executor; adds optional runtime approval gate |
 
 ---
 

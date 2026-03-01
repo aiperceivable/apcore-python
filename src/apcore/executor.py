@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import inspect
 import logging
 import threading
@@ -13,11 +14,15 @@ from typing import Any, Callable
 import pydantic
 
 from apcore.acl import ACL
+from apcore.approval import ApprovalHandler, ApprovalRequest, ApprovalResult
 from apcore.cancel import ExecutionCancelledError
 from apcore.config import Config
 from apcore.context import Context
 from apcore.errors import (
     ACLDeniedError,
+    ApprovalDeniedError,
+    ApprovalPendingError,
+    ApprovalTimeoutError,
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
@@ -28,7 +33,7 @@ from apcore.errors import (
 )
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
-from apcore.module import ValidationResult
+from apcore.module import ModuleAnnotations, ValidationResult
 from apcore.registry import Registry
 
 __all__ = ["redact_sensitive", "REDACTED_VALUE", "Executor"]
@@ -142,6 +147,7 @@ class Executor:
         middlewares: list[Middleware] | None = None,
         acl: ACL | None = None,
         config: Config | None = None,
+        approval_handler: ApprovalHandler | None = None,
     ) -> None:
         """Initialize the Executor.
 
@@ -150,11 +156,13 @@ class Executor:
             middlewares: Optional list of middleware instances to register.
             acl: Optional ACL for access control enforcement.
             config: Optional configuration for timeout/depth settings.
+            approval_handler: Optional approval handler for Step 4.5 gate.
         """
         self._registry = registry
         self._middleware_manager = MiddlewareManager()
         self._acl = acl
         self._config = config
+        self._approval_handler = approval_handler
 
         if middlewares:
             for mw in middlewares:
@@ -185,6 +193,7 @@ class Executor:
         middlewares: list[Middleware] | None = None,
         acl: ACL | None = None,
         config: Config | None = None,
+        approval_handler: ApprovalHandler | None = None,
     ) -> Executor:
         """Convenience factory for creating an Executor from a Registry.
 
@@ -193,11 +202,18 @@ class Executor:
             middlewares: Optional middleware list.
             acl: Optional access control list.
             config: Optional configuration.
+            approval_handler: Optional approval handler.
 
         Returns:
             A configured Executor instance.
         """
-        return cls(registry=registry, middlewares=middlewares, acl=acl, config=config)
+        return cls(
+            registry=registry,
+            middlewares=middlewares,
+            acl=acl,
+            config=config,
+            approval_handler=approval_handler,
+        )
 
     @property
     def registry(self) -> Registry:
@@ -216,6 +232,14 @@ class Executor:
             acl: The ACL instance to use for access control enforcement.
         """
         self._acl = acl
+
+    def set_approval_handler(self, handler: ApprovalHandler) -> None:
+        """Set the approval handler for Step 4.5 gate.
+
+        Args:
+            handler: The ApprovalHandler instance to use for approval enforcement.
+        """
+        self._approval_handler = handler
 
     def use(self, middleware: Middleware) -> Executor:
         """Add class-based middleware and return self for chaining."""
@@ -275,6 +299,9 @@ class Executor:
             allowed = self._acl.check(ctx.caller_id, module_id, ctx)
             if not allowed:
                 raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
+
+        # Step 4.5 -- Approval Gate
+        self._check_approval_sync(module, module_id, inputs, ctx)
 
         # Step 5 -- Input Validation and Redaction
         if hasattr(module, "input_schema") and module.input_schema is not None:
@@ -366,6 +393,111 @@ class Executor:
             return ValidationResult(valid=True, errors=[])
         except pydantic.ValidationError as e:
             return ValidationResult(valid=False, errors=_convert_validation_errors(e))
+
+    def _needs_approval(self, module: Any) -> bool:
+        """Check if a module requires approval, handling both dict and dataclass annotations."""
+        annotations = getattr(module, "annotations", None)
+        if annotations is None:
+            return False
+        if isinstance(annotations, ModuleAnnotations):
+            return annotations.requires_approval
+        if isinstance(annotations, dict):
+            return bool(annotations.get("requires_approval", False))
+        return False
+
+    def _build_approval_request(
+        self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context
+    ) -> ApprovalRequest:
+        """Build an ApprovalRequest from module metadata."""
+        annotations = getattr(module, "annotations", None)
+        if isinstance(annotations, ModuleAnnotations):
+            ann = annotations
+        elif isinstance(annotations, dict):
+            valid_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
+            ann = ModuleAnnotations(**{k: v for k, v in annotations.items() if k in valid_fields})
+        else:
+            ann = ModuleAnnotations()
+
+        return ApprovalRequest(
+            module_id=module_id,
+            arguments=inputs,
+            context=ctx,
+            annotations=ann,
+            description=getattr(module, "description", None),
+            tags=getattr(module, "tags", None) or [],
+        )
+
+    def _handle_approval_result(self, result: ApprovalResult, module_id: str) -> None:
+        """Map an ApprovalResult status to the appropriate action or error."""
+        if result.status == "approved":
+            return
+        if result.status == "rejected":
+            raise ApprovalDeniedError(result=result, module_id=module_id)
+        if result.status == "timeout":
+            raise ApprovalTimeoutError(result=result, module_id=module_id)
+        if result.status == "pending":
+            raise ApprovalPendingError(result=result, module_id=module_id)
+        _logger.warning("Unknown approval status '%s' for module %s, treating as denied", result.status, module_id)
+        raise ApprovalDeniedError(result=result, module_id=module_id)
+
+    def _emit_approval_event(self, result: ApprovalResult, module_id: str, ctx: Context) -> None:
+        """Emit an audit event for the approval decision (logging + span event)."""
+        _logger.info(
+            "Approval decision: module=%s status=%s approved_by=%s reason=%s",
+            module_id,
+            result.status,
+            result.approved_by,
+            result.reason,
+        )
+        spans_stack: list[Any] = ctx.data.get("_tracing_spans", [])
+        if spans_stack:
+            spans_stack[-1].events.append(
+                {
+                    "name": "approval_decision",
+                    "module_id": module_id,
+                    "status": result.status,
+                    "approved_by": result.approved_by or "",
+                    "reason": result.reason or "",
+                    "approval_id": result.approval_id or "",
+                }
+            )
+
+    def _check_approval_sync(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> None:
+        """Step 4.5: Approval gate (sync path). Bridges to async handler."""
+        if self._approval_handler is None:
+            return
+        if not self._needs_approval(module):
+            return
+
+        # Phase B resume: pop _approval_token and check
+        if "_approval_token" in inputs:
+            token = inputs.pop("_approval_token")
+            coro = self._approval_handler.check_approval(token)
+        else:
+            request = self._build_approval_request(module, module_id, inputs, ctx)
+            coro = self._approval_handler.request_approval(request)
+
+        result = self._run_async_in_sync(coro, module_id, 0)
+        self._emit_approval_event(result, module_id, ctx)
+        self._handle_approval_result(result, module_id)
+
+    async def _check_approval_async(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> None:
+        """Step 4.5: Approval gate (async path)."""
+        if self._approval_handler is None:
+            return
+        if not self._needs_approval(module):
+            return
+
+        # Phase B resume: pop _approval_token and check
+        if "_approval_token" in inputs:
+            token = inputs.pop("_approval_token")
+            result = await self._approval_handler.check_approval(token)
+        else:
+            request = self._build_approval_request(module, module_id, inputs, ctx)
+            result = await self._approval_handler.request_approval(request)
+
+        self._emit_approval_event(result, module_id, ctx)
+        self._handle_approval_result(result, module_id)
 
     def _check_safety(self, module_id: str, ctx: Context) -> None:
         """Run call chain safety checks (step 2)."""
@@ -541,6 +673,9 @@ class Executor:
             if not allowed:
                 raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
 
+        # Step 4.5 -- Approval Gate
+        await self._check_approval_async(module, module_id, inputs, ctx)
+
         # Step 5 -- Input Validation and Redaction
         if hasattr(module, "input_schema") and module.input_schema is not None:
             try:
@@ -649,6 +784,9 @@ class Executor:
             allowed = self._acl.check(ctx.caller_id, module_id, ctx)
             if not allowed:
                 raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
+
+        # Step 4.5 -- Approval Gate
+        await self._check_approval_async(module, module_id, effective_inputs, ctx)
 
         # Step 5 -- Input Validation and Redaction
         if hasattr(module, "input_schema") and module.input_schema is not None:

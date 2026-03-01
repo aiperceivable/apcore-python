@@ -11,6 +11,10 @@ __all__ = [
     "ConfigError",
     "ACLRuleError",
     "ACLDeniedError",
+    "ApprovalError",
+    "ApprovalDeniedError",
+    "ApprovalTimeoutError",
+    "ApprovalPendingError",
     "ModuleNotFoundError",
     "ModuleTimeoutError",
     "SchemaValidationError",
@@ -106,6 +110,90 @@ class ACLDeniedError(ModuleError):
     def target_id(self) -> str:
         """The target module ID that was denied access to."""
         return self.details["target_id"]
+
+
+class ApprovalError(ModuleError):
+    """Base error for all approval-related errors.
+
+    Carries the full ApprovalResult for inspection by callers.
+    Note: ``result`` is typed as ``Any`` to avoid a circular import with
+    ``apcore.approval`` where ``ApprovalResult`` is defined.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        result: Any,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            code=code,
+            message=message,
+            details={"module_id": kwargs.pop("module_id", None)},
+            **kwargs,
+        )
+        self.result = result
+
+    @property
+    def module_id(self) -> str | None:
+        """The module ID that required approval."""
+        return self.details.get("module_id")
+
+    @property
+    def reason(self) -> str | None:
+        """Human-readable reason from the approval handler's decision."""
+        return getattr(self.result, "reason", None)
+
+
+class ApprovalDeniedError(ApprovalError):
+    """Raised when an approval handler rejects the request."""
+
+    def __init__(self, result: Any, module_id: str = "", **kwargs: Any) -> None:
+        reason = getattr(result, "reason", None) or ""
+        msg = f"Approval denied for module '{module_id}'"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(
+            code="APPROVAL_DENIED",
+            message=msg,
+            result=result,
+            module_id=module_id,
+            **kwargs,
+        )
+
+
+class ApprovalTimeoutError(ApprovalError):
+    """Raised when an approval request times out."""
+
+    def __init__(self, result: Any, module_id: str = "", **kwargs: Any) -> None:
+        super().__init__(
+            code="APPROVAL_TIMEOUT",
+            message=f"Approval timed out for module '{module_id}'",
+            result=result,
+            module_id=module_id,
+            **kwargs,
+        )
+
+
+class ApprovalPendingError(ApprovalError):
+    """Raised when an approval is pending async resolution (Phase B)."""
+
+    def __init__(self, result: Any, module_id: str = "", **kwargs: Any) -> None:
+        approval_id = getattr(result, "approval_id", None)
+        super().__init__(
+            code="APPROVAL_PENDING",
+            message=f"Approval pending for module '{module_id}'",
+            result=result,
+            module_id=module_id,
+            **kwargs,
+        )
+        self.details["approval_id"] = approval_id
+
+    @property
+    def approval_id(self) -> str | None:
+        """The approval ID for async resume."""
+        return self.details.get("approval_id")
 
 
 class ModuleNotFoundError(ModuleError):
@@ -458,6 +546,9 @@ class ErrorCodes:
     BINDING_FILE_INVALID = "BINDING_FILE_INVALID"
     CIRCULAR_DEPENDENCY = "CIRCULAR_DEPENDENCY"
     MIDDLEWARE_CHAIN_ERROR = "MIDDLEWARE_CHAIN_ERROR"
+    APPROVAL_DENIED = "APPROVAL_DENIED"
+    APPROVAL_TIMEOUT = "APPROVAL_TIMEOUT"
+    APPROVAL_PENDING = "APPROVAL_PENDING"
     # Forward declarations for Level 2 Phase 2 features.
     # Exception classes will be added when the corresponding features are implemented.
     GENERAL_NOT_IMPLEMENTED = "GENERAL_NOT_IMPLEMENTED"

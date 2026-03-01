@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 # Core
+from apcore.approval import (
+    AlwaysDenyHandler,
+    ApprovalHandler,
+    ApprovalRequest,
+    ApprovalResult,
+    AutoApproveHandler,
+    CallbackApprovalHandler,
+)
 from apcore.cancel import CancelToken, ExecutionCancelledError
 from apcore.context import Context, ContextFactory, Identity
 from apcore.registry import Registry
@@ -27,6 +35,10 @@ from apcore.config import Config
 from apcore.errors import (
     ACLDeniedError,
     ACLRuleError,
+    ApprovalDeniedError,
+    ApprovalError,
+    ApprovalPendingError,
+    ApprovalTimeoutError,
     BindingCallableNotFoundError,
     BindingFileInvalidError,
     BindingInvalidTargetError,
@@ -97,7 +109,7 @@ from apcore.observability import (
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     # Core
@@ -108,6 +120,13 @@ __all__ = [
     "Identity",
     "Registry",
     "Executor",
+    # Approval
+    "ApprovalHandler",
+    "ApprovalRequest",
+    "ApprovalResult",
+    "AlwaysDenyHandler",
+    "AutoApproveHandler",
+    "CallbackApprovalHandler",
     # Module types
     "ModuleAnnotations",
     "ModuleExample",
@@ -131,6 +150,10 @@ __all__ = [
     "ModuleError",
     "ACLDeniedError",
     "ACLRuleError",
+    "ApprovalError",
+    "ApprovalDeniedError",
+    "ApprovalTimeoutError",
+    "ApprovalPendingError",
     "BindingCallableNotFoundError",
     "BindingFileInvalidError",
     "BindingInvalidTargetError",

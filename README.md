@@ -19,7 +19,8 @@ Schema-driven module development framework for AI-perceivable interfaces.
 - **Observability** -- Tracing (spans), metrics collection, and structured context logging
 - **Async support** -- Seamless sync and async module execution
 - **Safety guards** -- Call depth limits, circular call detection, frequency throttling
-- **Extension points** -- Unified extension management for discoverers, middleware, ACL, span exporters, and module validators
+- **Approval system** -- Pluggable approval gate (Step 4.5) with sync/async handlers, Phase B resume, and audit events
+- **Extension points** -- Unified extension management for discoverers, middleware, ACL, approval handlers, span exporters, and module validators
 - **Async task management** -- Background module execution with status tracking, cancellation, and concurrency limiting
 - **W3C Trace Context** -- traceparent header injection/extraction for distributed tracing interop
 
@@ -119,6 +120,7 @@ src/apcore/
     bindings.py          # YAML binding loader
     config.py            # Configuration
     acl.py               # Access control
+    approval.py          # Approval system
     extensions.py        # Extension point manager
     errors.py            # Error hierarchy
     module.py            # Module annotations & metadata

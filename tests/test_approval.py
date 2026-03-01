@@ -1,0 +1,253 @@
+"""Unit tests for approval data types, error classes, and built-in handlers."""
+
+from __future__ import annotations
+
+import pytest
+
+from apcore.approval import (
+    AlwaysDenyHandler,
+    ApprovalHandler,
+    ApprovalRequest,
+    ApprovalResult,
+    AutoApproveHandler,
+    CallbackApprovalHandler,
+)
+from apcore.context import Context
+from apcore.errors import (
+    ApprovalDeniedError,
+    ApprovalError,
+    ApprovalPendingError,
+    ApprovalTimeoutError,
+    ErrorCodes,
+)
+from apcore.module import ModuleAnnotations
+
+
+# ---------------------------------------------------------------------------
+# ApprovalRequest
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalRequest:
+    def test_fields(self) -> None:
+        ctx = Context.create()
+        ann = ModuleAnnotations(requires_approval=True)
+        req = ApprovalRequest(
+            module_id="test.module",
+            arguments={"key": "value"},
+            context=ctx,
+            annotations=ann,
+            description="Test module",
+            tags=["admin"],
+        )
+        assert req.module_id == "test.module"
+        assert req.arguments == {"key": "value"}
+        assert req.context is ctx
+        assert req.annotations is ann
+        assert req.description == "Test module"
+        assert req.tags == ["admin"]
+
+    def test_defaults(self) -> None:
+        ctx = Context.create()
+        ann = ModuleAnnotations(requires_approval=True)
+        req = ApprovalRequest(
+            module_id="m",
+            arguments={},
+            context=ctx,
+            annotations=ann,
+        )
+        assert req.description is None
+        assert req.tags == []
+
+    def test_frozen(self) -> None:
+        ctx = Context.create()
+        ann = ModuleAnnotations(requires_approval=True)
+        req = ApprovalRequest(module_id="m", arguments={}, context=ctx, annotations=ann)
+        with pytest.raises(AttributeError):
+            req.module_id = "other"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# ApprovalResult
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalResult:
+    def test_approved(self) -> None:
+        result = ApprovalResult(status="approved", approved_by="admin")
+        assert result.status == "approved"
+        assert result.approved_by == "admin"
+        assert result.reason is None
+        assert result.approval_id is None
+        assert result.metadata is None
+
+    def test_rejected_with_reason(self) -> None:
+        result = ApprovalResult(status="rejected", reason="Not authorized")
+        assert result.status == "rejected"
+        assert result.reason == "Not authorized"
+
+    def test_pending_with_id(self) -> None:
+        result = ApprovalResult(status="pending", approval_id="tok-123")
+        assert result.status == "pending"
+        assert result.approval_id == "tok-123"
+
+    def test_frozen(self) -> None:
+        result = ApprovalResult(status="approved")
+        with pytest.raises(AttributeError):
+            result.status = "rejected"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Error classes
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalErrors:
+    def test_approval_denied_error(self) -> None:
+        result = ApprovalResult(status="rejected", reason="Policy violation")
+        err = ApprovalDeniedError(result=result, module_id="test.mod")
+        assert err.code == "APPROVAL_DENIED"
+        assert "test.mod" in err.message
+        assert "Policy violation" in err.message
+        assert err.result is result
+        assert err.module_id == "test.mod"
+        assert isinstance(err, ApprovalError)
+
+    def test_approval_timeout_error(self) -> None:
+        result = ApprovalResult(status="timeout")
+        err = ApprovalTimeoutError(result=result, module_id="test.mod")
+        assert err.code == "APPROVAL_TIMEOUT"
+        assert "test.mod" in err.message
+        assert err.result is result
+
+    def test_approval_pending_error(self) -> None:
+        result = ApprovalResult(status="pending", approval_id="abc-123")
+        err = ApprovalPendingError(result=result, module_id="test.mod")
+        assert err.code == "APPROVAL_PENDING"
+        assert err.approval_id == "abc-123"
+        assert err.result is result
+
+    def test_error_codes_exist(self) -> None:
+        assert ErrorCodes.APPROVAL_DENIED == "APPROVAL_DENIED"
+        assert ErrorCodes.APPROVAL_TIMEOUT == "APPROVAL_TIMEOUT"
+        assert ErrorCodes.APPROVAL_PENDING == "APPROVAL_PENDING"
+
+    def test_approval_error_inherits_module_error(self) -> None:
+        result = ApprovalResult(status="rejected")
+        err = ApprovalDeniedError(result=result)
+        assert isinstance(err, ApprovalError)
+        assert hasattr(err, "timestamp")
+        assert hasattr(err, "code")
+
+    def test_reason_property_returns_result_reason(self) -> None:
+        """e.reason shortcut matches e.result.reason (per executor-api.md pattern)."""
+        result = ApprovalResult(status="rejected", reason="Policy violation")
+        err = ApprovalDeniedError(result=result, module_id="test.mod")
+        assert err.reason == "Policy violation"
+
+    def test_reason_property_none_when_no_reason(self) -> None:
+        result = ApprovalResult(status="timeout")
+        err = ApprovalTimeoutError(result=result, module_id="test.mod")
+        assert err.reason is None
+
+    def test_reason_property_on_pending_error(self) -> None:
+        result = ApprovalResult(status="pending", reason="Awaiting manager", approval_id="tok-1")
+        err = ApprovalPendingError(result=result, module_id="test.mod")
+        assert err.reason == "Awaiting manager"
+
+
+# ---------------------------------------------------------------------------
+# Built-in handlers
+# ---------------------------------------------------------------------------
+
+
+class TestAlwaysDenyHandler:
+    @pytest.mark.asyncio
+    async def test_request_approval_rejects(self) -> None:
+        handler = AlwaysDenyHandler()
+        ctx = Context.create()
+        request = ApprovalRequest(
+            module_id="test.mod",
+            arguments={},
+            context=ctx,
+            annotations=ModuleAnnotations(requires_approval=True),
+        )
+        result = await handler.request_approval(request)
+        assert result.status == "rejected"
+        assert result.reason == "Always denied"
+
+    @pytest.mark.asyncio
+    async def test_check_approval_rejects(self) -> None:
+        handler = AlwaysDenyHandler()
+        result = await handler.check_approval("some-id")
+        assert result.status == "rejected"
+
+    def test_satisfies_protocol(self) -> None:
+        handler = AlwaysDenyHandler()
+        assert isinstance(handler, ApprovalHandler)
+
+
+class TestAutoApproveHandler:
+    @pytest.mark.asyncio
+    async def test_request_approval_approves(self) -> None:
+        handler = AutoApproveHandler()
+        ctx = Context.create()
+        request = ApprovalRequest(
+            module_id="test.mod",
+            arguments={},
+            context=ctx,
+            annotations=ModuleAnnotations(requires_approval=True),
+        )
+        result = await handler.request_approval(request)
+        assert result.status == "approved"
+        assert result.approved_by == "auto"
+
+    @pytest.mark.asyncio
+    async def test_check_approval_approves(self) -> None:
+        handler = AutoApproveHandler()
+        result = await handler.check_approval("some-id")
+        assert result.status == "approved"
+
+    def test_satisfies_protocol(self) -> None:
+        handler = AutoApproveHandler()
+        assert isinstance(handler, ApprovalHandler)
+
+
+class TestCallbackApprovalHandler:
+    @pytest.mark.asyncio
+    async def test_delegates_to_callback(self) -> None:
+        async def my_callback(request: ApprovalRequest) -> ApprovalResult:
+            return ApprovalResult(
+                status="approved",
+                approved_by="callback",
+                metadata={"module": request.module_id},
+            )
+
+        handler = CallbackApprovalHandler(my_callback)
+        ctx = Context.create()
+        request = ApprovalRequest(
+            module_id="test.mod",
+            arguments={"x": 1},
+            context=ctx,
+            annotations=ModuleAnnotations(requires_approval=True),
+        )
+        result = await handler.request_approval(request)
+        assert result.status == "approved"
+        assert result.approved_by == "callback"
+        assert result.metadata == {"module": "test.mod"}
+
+    @pytest.mark.asyncio
+    async def test_check_approval_rejects(self) -> None:
+        async def noop(request: ApprovalRequest) -> ApprovalResult:
+            return ApprovalResult(status="approved")
+
+        handler = CallbackApprovalHandler(noop)
+        result = await handler.check_approval("some-id")
+        assert result.status == "rejected"
+
+    def test_satisfies_protocol(self) -> None:
+        async def noop(request: ApprovalRequest) -> ApprovalResult:
+            return ApprovalResult(status="approved")
+
+        handler = CallbackApprovalHandler(noop)
+        assert isinstance(handler, ApprovalHandler)

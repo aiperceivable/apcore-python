@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-01
+
+### Added
+
+#### Approval System (PROTOCOL_SPEC §7)
+- **ApprovalHandler Protocol** - Async protocol for pluggable approval handlers with `request_approval()` and `check_approval()` methods
+- **ApprovalRequest / ApprovalResult** - Frozen dataclasses carrying invocation context and handler decisions with `Literal` status typing
+- **Phase A (synchronous)** - Handler blocks until approval decision; denied/timeout raise immediately
+- **Phase B (asynchronous)** - `pending` status returns `_approval_token` for async resume via `check_approval()`
+- **Built-in handlers** - `AlwaysDenyHandler` (safe default), `AutoApproveHandler` (testing), `CallbackApprovalHandler` (custom logic)
+- **Approval errors** - `ApprovalError`, `ApprovalDeniedError`, `ApprovalTimeoutError`, `ApprovalPendingError` with `result`, `module_id`, and `reason` properties
+- **Audit events (Level 3)** - Dual-channel emission: `logging.info()` always + span events when tracing is active
+- **Extension point** - `approval_handler` registered as a built-in extension point in `ExtensionManager`
+- **ErrorCodes** - Added `APPROVAL_DENIED`, `APPROVAL_TIMEOUT`, `APPROVAL_PENDING` constants
+
+#### Executor Integration
+- **Step 4.5 approval gate** - Inserted between ACL (Step 4) and input validation (Step 5) in `call()`, `call_async()`, and `stream()`
+- **Executor.set_approval_handler()** - Runtime handler configuration
+- **Executor.from_registry()** - Added `approval_handler` parameter
+- **Dict and dataclass annotations** - Both `ModuleAnnotations` and dict-style `requires_approval` supported
+- **Unknown status fail-closed** - Unrecognized approval statuses treated as denied with warning log
+
+### Changed
+
+#### Structural Alignment
+- Approval errors re-exported from `apcore.approval` for multi-language SDK consistency; canonical definitions remain in `errors.py`
+- `ApprovalResult.status` typed as `Literal["approved", "rejected", "timeout", "pending"]` per PROTOCOL_SPEC §7.3.2
+
 ## [0.6.0] - 2026-02-23
 
 ### Added
@@ -272,6 +300,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.7.0]: https://github.com/aipartnerup/apcore-python/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/aipartnerup/apcore-python/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aipartnerup/apcore-python/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aipartnerup/apcore-python/compare/v0.3.0...v0.4.0

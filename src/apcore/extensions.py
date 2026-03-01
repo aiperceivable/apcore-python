@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from apcore.acl import ACL
+from apcore.approval import ApprovalHandler
 from apcore.middleware import Middleware
 from apcore.observability.tracing import Span, SpanExporter, TracingMiddleware
 from apcore.registry.registry import Discoverer, ModuleValidator
@@ -48,7 +49,7 @@ class ExtensionPoint:
 
 
 def _built_in_points() -> dict[str, ExtensionPoint]:
-    """Return the five pre-registered extension points."""
+    """Return the pre-registered extension points."""
     return {
         "discoverer": ExtensionPoint(
             name="discoverer",
@@ -80,14 +81,20 @@ def _built_in_points() -> dict[str, ExtensionPoint]:
             description="Custom module validation",
             multiple=False,
         ),
+        "approval_handler": ExtensionPoint(
+            name="approval_handler",
+            extension_type=ApprovalHandler,
+            description="Approval handler for Step 4.5 gate",
+            multiple=False,
+        ),
     }
 
 
 class ExtensionManager:
     """Manages extension points and their registered implementations.
 
-    Pre-registers five built-in extension points: discoverer, middleware,
-    acl, span_exporter, and module_validator.
+    Pre-registers built-in extension points: discoverer, middleware,
+    acl, span_exporter, module_validator, and approval_handler.
     """
 
     def __init__(self) -> None:
@@ -183,6 +190,7 @@ class ExtensionManager:
             - discoverer -> registry.set_discoverer()
             - module_validator -> registry.set_validator()
             - acl -> executor.set_acl()
+            - approval_handler -> executor.set_approval_handler()
             - middleware -> executor.use() for each
             - span_exporter -> find TracingMiddleware, set exporter (composite if multiple)
 
@@ -204,6 +212,11 @@ class ExtensionManager:
         acl = self.get("acl")
         if acl is not None:
             executor.set_acl(acl)
+
+        # Approval handler
+        approval = self.get("approval_handler")
+        if approval is not None:
+            executor.set_approval_handler(approval)
 
         # Middleware
         for mw in self.get_all("middleware"):

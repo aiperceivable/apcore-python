@@ -1,0 +1,136 @@
+"""Approval system: protocol, data types, built-in handlers, and errors."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol, runtime_checkable
+
+from apcore.context import Context
+from apcore.errors import (
+    ApprovalDeniedError as ApprovalDeniedError,
+    ApprovalError as ApprovalError,
+    ApprovalPendingError as ApprovalPendingError,
+    ApprovalTimeoutError as ApprovalTimeoutError,
+)
+from apcore.module import ModuleAnnotations
+
+__all__ = [
+    "ApprovalRequest",
+    "ApprovalResult",
+    "ApprovalHandler",
+    "AlwaysDenyHandler",
+    "AutoApproveHandler",
+    "CallbackApprovalHandler",
+    "ApprovalError",
+    "ApprovalDeniedError",
+    "ApprovalTimeoutError",
+    "ApprovalPendingError",
+]
+
+
+@dataclass(frozen=True)
+class ApprovalRequest:
+    """Carries invocation context to the approval handler.
+
+    Attributes:
+        module_id: Canonical module ID being invoked.
+        arguments: Input arguments for the call.
+        context: Full execution context (trace_id, identity, call_chain).
+        annotations: Module's annotation set (requires_approval is guaranteed true).
+        description: Module's human-readable description.
+        tags: Module's tags.
+    """
+
+    module_id: str
+    arguments: dict[str, Any]
+    context: Context
+    annotations: ModuleAnnotations
+    description: str | None = None
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ApprovalResult:
+    """Carries the approval handler's decision.
+
+    Attributes:
+        status: One of: "approved", "rejected", "timeout", "pending".
+        approved_by: Identifier of the approver (human, agent, policy).
+        reason: Human-readable explanation for the decision.
+        approval_id: Phase B token for async resume.
+        metadata: Additional metadata from the approval process.
+    """
+
+    status: Literal["approved", "rejected", "timeout", "pending"]
+    approved_by: str | None = None
+    reason: str | None = None
+    approval_id: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+@runtime_checkable
+class ApprovalHandler(Protocol):
+    """Protocol for pluggable approval handlers.
+
+    Implementations receive an ApprovalRequest and return an ApprovalResult.
+    Both methods are asynchronous.
+    """
+
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResult:
+        """Request approval for a module invocation."""
+        ...
+
+    async def check_approval(self, approval_id: str) -> ApprovalResult:
+        """Check status of a previously pending approval (Phase B).
+
+        Default implementations SHOULD return rejected.
+        """
+        ...
+
+
+class AlwaysDenyHandler:
+    """Built-in handler that always rejects. Safe default for enforcement."""
+
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResult:
+        """Always reject the request."""
+        return ApprovalResult(status="rejected", reason="Always denied")
+
+    async def check_approval(self, approval_id: str) -> ApprovalResult:
+        """Always reject Phase B checks."""
+        return ApprovalResult(status="rejected", reason="Always denied")
+
+
+class AutoApproveHandler:
+    """Built-in handler that always approves. For testing and development."""
+
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResult:
+        """Always approve the request."""
+        return ApprovalResult(status="approved", approved_by="auto")
+
+    async def check_approval(self, approval_id: str) -> ApprovalResult:
+        """Always approve Phase B checks."""
+        return ApprovalResult(status="approved", approved_by="auto")
+
+
+class CallbackApprovalHandler:
+    """Built-in handler that delegates to a user-provided async callback.
+
+    Args:
+        callback: Async function that receives an ApprovalRequest and returns
+            an ApprovalResult.
+    """
+
+    def __init__(
+        self,
+        callback: Callable[[ApprovalRequest], Coroutine[Any, Any, ApprovalResult]],
+    ) -> None:
+        self._callback = callback
+
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResult:
+        """Delegate to the user-provided callback."""
+        return await self._callback(request)
+
+    async def check_approval(self, approval_id: str) -> ApprovalResult:
+        """Default Phase B check: return rejected."""
+        return ApprovalResult(status="rejected", reason="Phase B not supported by callback handler")

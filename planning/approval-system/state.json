@@ -1,0 +1,87 @@
+{
+  "feature": "approval-system",
+  "created": "2026-03-01T00:00:00Z",
+  "updated": "2026-03-01T00:00:00Z",
+  "status": "completed",
+  "execution_order": [
+    "error-types",
+    "approval-core",
+    "executor-integration",
+    "public-exports",
+    "extension-point",
+    "integration-tests"
+  ],
+  "progress": {
+    "total_tasks": 6,
+    "completed": 6,
+    "in_progress": 0,
+    "pending": 0
+  },
+  "tasks": [
+    {
+      "id": "error-types",
+      "file": "tasks/error-types.md",
+      "title": "Approval error classes and error codes in errors.py",
+      "status": "completed",
+      "started_at": "2026-03-01T08:00:00Z",
+      "completed_at": "2026-03-01T08:30:00Z",
+      "assignee": null,
+      "commits": []
+    },
+    {
+      "id": "approval-core",
+      "file": "tasks/approval-core.md",
+      "title": "ApprovalHandler protocol, data types, and built-in handlers",
+      "status": "completed",
+      "started_at": "2026-03-01T08:30:00Z",
+      "completed_at": "2026-03-01T09:30:00Z",
+      "assignee": null,
+      "commits": []
+    },
+    {
+      "id": "executor-integration",
+      "file": "tasks/executor-integration.md",
+      "title": "Approval gate at Step 4.5 in call/call_async/stream",
+      "status": "completed",
+      "started_at": "2026-03-01T09:30:00Z",
+      "completed_at": "2026-03-01T12:30:00Z",
+      "assignee": null,
+      "commits": []
+    },
+    {
+      "id": "public-exports",
+      "file": "tasks/public-exports.md",
+      "title": "Export new types from __init__.py",
+      "status": "completed",
+      "started_at": "2026-03-01T12:30:00Z",
+      "completed_at": "2026-03-01T13:00:00Z",
+      "assignee": null,
+      "commits": []
+    },
+    {
+      "id": "extension-point",
+      "file": "tasks/extension-point.md",
+      "title": "approval_handler extension point in ExtensionManager",
+      "status": "completed",
+      "started_at": "2026-03-01T13:00:00Z",
+      "completed_at": "2026-03-01T14:00:00Z",
+      "assignee": null,
+      "commits": []
+    },
+    {
+      "id": "integration-tests",
+      "file": "tasks/integration-tests.md",
+      "title": "End-to-end tests through full executor pipeline",
+      "status": "completed",
+      "started_at": "2026-03-01T14:00:00Z",
+      "completed_at": "2026-03-01T16:00:00Z",
+      "assignee": null,
+      "commits": []
+    }
+  ],
+  "metadata": {
+    "source_doc": "docs/features/approval-system.md",
+    "created_by": "code-forge",
+    "version": "1.0"
+  }
+}
