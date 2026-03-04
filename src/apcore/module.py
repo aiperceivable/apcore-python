@@ -1,12 +1,36 @@
-"""Module abstract base class and related data types."""
+"""Module protocol and related data types."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-__all__ = ["ModuleAnnotations", "ModuleExample", "ValidationResult"]
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from apcore.context import Context
+
+__all__ = ["Module", "ModuleAnnotations", "ModuleExample", "ValidationResult"]
+
+
+@runtime_checkable
+class Module(Protocol):
+    """Protocol for apcore modules.
+
+    Any class with ``input_schema``, ``output_schema``, ``description``,
+    and an ``execute(inputs, context)`` method satisfies this protocol.
+    Inheriting from ``Module`` is optional but provides IDE autocompletion.
+
+    At runtime, ``@runtime_checkable`` only checks attribute existence.
+    Static type checkers (pyright) will verify the full signature.
+    """
+
+    input_schema: type[BaseModel]
+    output_schema: type[BaseModel]
+    description: str
+
+    def execute(self, inputs: dict[str, Any], context: Context) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,11 @@ Schema-driven module development framework for AI-perceivable interfaces.
 - **Async task management** -- Background module execution with status tracking, cancellation, and concurrency limiting
 - **W3C Trace Context** -- traceparent header injection/extraction for distributed tracing interop
 
+## Documentation
+
+For full documentation, including Quick Start guides for both Python and TypeScript, visit:
+**[https://aipartnerup.github.io/apcore/getting-started.html](https://aipartnerup.github.io/apcore/getting-started.html)**
+
 ## Requirements
 
 - Python >= 3.11

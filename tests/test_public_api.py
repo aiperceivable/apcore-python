@@ -37,6 +37,11 @@ class TestPublicAPIImports:
 
     # -- Module types --
 
+    def test_module_importable(self):
+        from apcore import Module
+
+        assert Module is not None
+
     def test_module_annotations_importable(self):
         from apcore import ModuleAnnotations
 
@@ -327,6 +332,7 @@ class TestPublicAPIAll:
         "AutoApproveHandler",
         "CallbackApprovalHandler",
         # Module types
+        "Module",
         "ModuleAnnotations",
         "ModuleExample",
         "ValidationResult",
@@ -399,7 +405,14 @@ class TestPublicAPIAll:
         "TaskInfo",
         # Bindings
         "BindingLoader",
+        # Schema
+        "SchemaLoader",
+        "SchemaValidator",
+        "SchemaExporter",
+        "RefResolver",
+        "to_strict_schema",
         # Utilities
+        "match_pattern",
         "redact_sensitive",
         "REDACTED_VALUE",
         # Observability

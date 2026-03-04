@@ -26,7 +26,7 @@ from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescri
 from apcore.executor import Executor, redact_sensitive, REDACTED_VALUE
 
 # Module types
-from apcore.module import ModuleAnnotations, ModuleExample, ValidationResult
+from apcore.module import Module, ModuleAnnotations, ModuleExample, ValidationResult
 
 # Config
 from apcore.config import Config
@@ -92,6 +92,18 @@ from apcore.async_task import AsyncTaskManager, TaskInfo, TaskStatus
 # Bindings
 from apcore.bindings import BindingLoader
 
+# Schema
+from apcore.schema import (
+    SchemaLoader as SchemaLoader,
+    SchemaValidator as SchemaValidator,
+    SchemaExporter as SchemaExporter,
+    RefResolver as RefResolver,
+    to_strict_schema as to_strict_schema,
+)
+
+# Utilities (pattern matching)
+from apcore.utils import match_pattern as match_pattern
+
 # Observability
 from apcore.observability import (
     ContextLogger,
@@ -109,7 +121,7 @@ from apcore.observability import (
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 __all__ = [
     # Core
@@ -128,6 +140,7 @@ __all__ = [
     "AutoApproveHandler",
     "CallbackApprovalHandler",
     # Module types
+    "Module",
     "ModuleAnnotations",
     "ModuleExample",
     "ValidationResult",
@@ -200,7 +213,14 @@ __all__ = [
     "TaskInfo",
     # Bindings
     "BindingLoader",
+    # Schema
+    "SchemaLoader",
+    "SchemaValidator",
+    "SchemaExporter",
+    "RefResolver",
+    "to_strict_schema",
     # Utilities
+    "match_pattern",
     "redact_sensitive",
     "REDACTED_VALUE",
     # Observability
