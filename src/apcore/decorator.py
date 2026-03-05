@@ -13,6 +13,7 @@ from pydantic.fields import FieldInfo
 from apcore._docstrings import parse_docstring
 from apcore.context import Context
 from apcore.errors import FuncMissingReturnTypeError, FuncMissingTypeHintError
+from apcore.module import ModuleExample
 
 
 def _has_explicit_field_description(annotation: Any) -> bool:
@@ -175,6 +176,7 @@ class FunctionModule:
         version: str = "1.0.0",
         annotations: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        examples: list[ModuleExample] | None = None,
         input_schema: type[BaseModel] | None = None,
         output_schema: type[BaseModel] | None = None,
     ) -> None:
@@ -202,6 +204,7 @@ class FunctionModule:
         self.version = version
         self.annotations = annotations
         self.metadata = metadata
+        self.examples = examples
 
         # Create execute closures — two separate defs required so that
         # inspect.iscoroutinefunction returns the correct value.
@@ -249,6 +252,7 @@ def module(
     tags: list[str] | None = None,
     version: str = "1.0.0",
     metadata: dict[str, Any] | None = None,
+    examples: list[ModuleExample] | None = None,
     registry: Any = None,
 ) -> Any:
     """Wrap a Python function as an apcore module.
@@ -267,6 +271,7 @@ def module(
             tags=tags,
             version=version,
             metadata=metadata,
+            examples=examples,
         )
         if registry is not None:
             registry.register(fm.module_id, fm)

@@ -440,6 +440,7 @@ class TestPublicAPIAll:
         "SpanExporter",
         "StdoutExporter",
         "InMemoryExporter",
+        "create_span",
         "OTLPExporter",
         # Trace Context
         "TraceContext",

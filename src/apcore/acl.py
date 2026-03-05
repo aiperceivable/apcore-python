@@ -85,6 +85,7 @@ class ACL:
         self._audit_logger: Callable[[AuditEntry], None] | None = audit_logger
         self._logger: logging.Logger = logging.getLogger(__name__)
         self._lock = threading.Lock()
+        self.debug: bool = False
 
     @classmethod
     def load(cls, yaml_path: str) -> ACL:

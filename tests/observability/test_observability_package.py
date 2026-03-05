@@ -80,6 +80,7 @@ class TestObservabilityPackageExports:
             "SpanExporter",
             "StdoutExporter",
             "TracingMiddleware",
+            "create_span",
         }
         assert set(obs.__all__) == expected
 

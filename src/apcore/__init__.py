@@ -129,6 +129,7 @@ from apcore.observability import (
     SpanExporter,
     StdoutExporter,
     TracingMiddleware,
+    create_span,
 )
 
 # Trace Context
@@ -258,6 +259,7 @@ __all__ = [
     "InMemoryExporter",
     "OTLPExporter",
     "SpanExporter",
+    "create_span",
     # Trace Context
     "TraceContext",
     "TraceParent",

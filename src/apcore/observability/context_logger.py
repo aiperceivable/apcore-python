@@ -28,14 +28,16 @@ class ContextLogger:
 
     def __init__(
         self,
-        name: str,
+        name: str = "apcore",
+        *,
+        format: str | None = None,
         output_format: str = "json",
         level: str = "info",
         redact_sensitive: bool = True,
         output: Any = None,
     ) -> None:
         self._name = name
-        self._output_format = output_format
+        self._output_format = format if format is not None else output_format
         self._level = level
         self._level_value = _LEVELS.get(level, 20)
         self._redact_sensitive = redact_sensitive

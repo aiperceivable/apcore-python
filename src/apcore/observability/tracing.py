@@ -32,6 +32,26 @@ class Span:
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
+def create_span(
+    *,
+    trace_id: str,
+    name: str,
+    start_time: float,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
+    attributes: dict[str, Any] | None = None,
+) -> Span:
+    """Factory function to create a Span with sensible defaults."""
+    return Span(
+        trace_id=trace_id,
+        name=name,
+        start_time=start_time,
+        span_id=span_id if span_id is not None else os.urandom(8).hex(),
+        parent_span_id=parent_span_id,
+        attributes=attributes if attributes is not None else {},
+    )
+
+
 @runtime_checkable
 class SpanExporter(Protocol):
     """Protocol for span export destinations."""
@@ -293,6 +313,7 @@ class TracingMiddleware(Middleware):
 
 __all__ = [
     "Span",
+    "create_span",
     "SpanExporter",
     "StdoutExporter",
     "InMemoryExporter",

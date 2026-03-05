@@ -23,6 +23,7 @@ from apcore.observability.tracing import (
     SpanExporter,
     StdoutExporter,
     TracingMiddleware,
+    create_span,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "SpanExporter",
     "StdoutExporter",
     "TracingMiddleware",
+    "create_span",
 ]
