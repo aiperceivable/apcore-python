@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ["match_pattern"]
+__all__ = ["match_pattern", "calculate_specificity"]
 
 
 def match_pattern(pattern: str, module_id: str) -> bool:
@@ -44,3 +44,39 @@ def match_pattern(pattern: str, module_id: str) -> bool:
             return False
 
     return True
+
+
+def calculate_specificity(pattern: str) -> int:
+    """Calculate the specificity score of an ACL pattern (Algorithm A10).
+
+    Higher scores indicate more specific patterns.  Scoring per segment:
+
+    - ``"*"`` (pure wildcard) → 0
+    - Segment containing ``"*"`` (partial wildcard) → +1
+    - Exact segment (no wildcard) → +2
+
+    Examples::
+
+        "*"                       → 0
+        "api.*"                   → 2  (exact "api" + wildcard "*")
+        "api.handler.*"           → 4
+        "api.handler.task_submit" → 6
+
+    Args:
+        pattern: An ACL pattern string.
+
+    Returns:
+        Non-negative integer specificity score.
+    """
+    if pattern == "*":
+        return 0
+
+    score = 0
+    for segment in pattern.split("."):
+        if segment == "*":
+            pass  # +0
+        elif "*" in segment:
+            score += 1
+        else:
+            score += 2
+    return score

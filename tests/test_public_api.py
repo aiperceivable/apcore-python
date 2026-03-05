@@ -386,6 +386,7 @@ class TestPublicAPIAll:
         # ACL
         "ACL",
         "ACLRule",
+        "AuditEntry",
         # Middleware
         "Middleware",
         "MiddlewareManager",
@@ -393,9 +394,13 @@ class TestPublicAPIAll:
         "AfterMiddleware",
         "LoggingMiddleware",
         "MiddlewareChainError",
+        "RetryConfig",
+        "RetryMiddleware",
         # Decorators
         "module",
         "FunctionModule",
+        # Docstring parsing
+        "parse_docstring",
         # Extensions
         "ExtensionManager",
         "ExtensionPoint",
@@ -413,8 +418,18 @@ class TestPublicAPIAll:
         "to_strict_schema",
         # Utilities
         "match_pattern",
+        "guard_call_chain",
+        "normalize_to_canonical_id",
+        "calculate_specificity",
+        "propagate_error",
         "redact_sensitive",
         "REDACTED_VALUE",
+        # Errors (new)
+        "ErrorCodeCollisionError",
+        "ErrorCodeRegistry",
+        # Version
+        "VersionIncompatibleError",
+        "negotiate_version",
         # Observability
         "TracingMiddleware",
         "ContextLogger",

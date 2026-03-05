@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,6 +39,9 @@ __all__ = [
     "ModuleExecuteError",
     "InternalError",
     "ErrorCodes",
+    "ErrorCodeCollisionError",
+    "ErrorCodeRegistry",
+    "FRAMEWORK_ERROR_CODE_PREFIXES",
 ]
 
 _UNSET: Any = object()
@@ -644,6 +648,8 @@ class ErrorCodes:
     APPROVAL_DENIED = "APPROVAL_DENIED"
     APPROVAL_TIMEOUT = "APPROVAL_TIMEOUT"
     APPROVAL_PENDING = "APPROVAL_PENDING"
+    VERSION_INCOMPATIBLE = "VERSION_INCOMPATIBLE"
+    ERROR_CODE_COLLISION = "ERROR_CODE_COLLISION"
     # Forward declarations for Level 2 Phase 2 features.
     # Exception classes will be added when the corresponding features are implemented.
     GENERAL_NOT_IMPLEMENTED = "GENERAL_NOT_IMPLEMENTED"
@@ -654,3 +660,135 @@ class ErrorCodes:
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError("ErrorCodes is immutable")
+
+
+# =============================================================================
+# Framework reserved error code prefixes (Algorithm A17)
+# =============================================================================
+
+FRAMEWORK_ERROR_CODE_PREFIXES: frozenset[str] = frozenset(
+    {
+        "MODULE_",
+        "SCHEMA_",
+        "ACL_",
+        "GENERAL_",
+        "CONFIG_",
+        "CIRCULAR_",
+        "DEPENDENCY_",
+        "CALL_",
+        "FUNC_",
+        "BINDING_",
+        "MIDDLEWARE_",
+        "APPROVAL_",
+        "VERSION_",
+        "ERROR_CODE_",
+    }
+)
+
+
+def _collect_framework_codes() -> frozenset[str]:
+    """Collect all error codes defined on ``ErrorCodes``."""
+    return frozenset(
+        value for name, value in vars(ErrorCodes).items() if not name.startswith("_") and isinstance(value, str)
+    )
+
+
+_FRAMEWORK_CODES: frozenset[str] = _collect_framework_codes()
+
+
+class ErrorCodeRegistry:
+    """Registry for custom module error codes with collision detection (Algorithm A17).
+
+    Detects conflicts between module custom error codes and framework reserved
+    codes, as well as between modules.
+
+    Thread-safe: all public methods are internally synchronized.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._module_codes: dict[str, frozenset[str]] = {}
+        self._all_codes: set[str] = set(_FRAMEWORK_CODES)
+
+    @property
+    def all_codes(self) -> frozenset[str]:
+        """Return all registered error codes (framework + module)."""
+        with self._lock:
+            return frozenset(self._all_codes)
+
+    def register(self, module_id: str, codes: set[str]) -> None:
+        """Register custom error codes for a module.
+
+        Args:
+            module_id: The module registering the codes.
+            codes: Set of error code strings to register.
+
+        Raises:
+            ErrorCodeCollisionError: If any code collides with a framework
+                code or a code already registered by another module.
+        """
+        if not codes:
+            return
+
+        with self._lock:
+            for code in codes:
+                # Check collision with framework reserved codes
+                if code in _FRAMEWORK_CODES:
+                    raise ErrorCodeCollisionError(
+                        code=code,
+                        module_id=module_id,
+                        conflict_source="framework",
+                    )
+                # Check collision with other modules
+                if code in self._all_codes:
+                    owner = self._find_owner(code)
+                    if owner != module_id:
+                        raise ErrorCodeCollisionError(
+                            code=code,
+                            module_id=module_id,
+                            conflict_source=owner or "unknown",
+                        )
+
+            # Also check prefix reservation
+            for code in codes:
+                for prefix in FRAMEWORK_ERROR_CODE_PREFIXES:
+                    if code.startswith(prefix):
+                        raise ErrorCodeCollisionError(
+                            code=code,
+                            module_id=module_id,
+                            conflict_source=f"reserved prefix '{prefix}'",
+                        )
+
+            self._module_codes[module_id] = frozenset(codes)
+            self._all_codes.update(codes)
+
+    def unregister(self, module_id: str) -> None:
+        """Remove all error codes registered by a module."""
+        with self._lock:
+            codes = self._module_codes.pop(module_id, frozenset())
+            self._all_codes -= codes
+
+    def _find_owner(self, code: str) -> str | None:
+        """Find which module owns a given code."""
+        for mid, codes in self._module_codes.items():
+            if code in codes:
+                return mid
+        return None
+
+
+class ErrorCodeCollisionError(ModuleError):
+    """Raised when a module error code collides with an existing code."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, code: str, module_id: str, conflict_source: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="ERROR_CODE_COLLISION",
+            message=(f"Error code '{code}' from module '{module_id}' " f"collides with {conflict_source}"),
+            details={
+                "error_code": code,
+                "module_id": module_id,
+                "conflict_source": conflict_source,
+            },
+            **kwargs,
+        )

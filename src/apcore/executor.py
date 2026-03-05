@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 import logging
 import threading
+import time
 from collections.abc import AsyncIterator
 from typing import Any, Callable
 
@@ -23,24 +24,43 @@ from apcore.errors import (
     ApprovalDeniedError,
     ApprovalPendingError,
     ApprovalTimeoutError,
-    CallDepthExceededError,
-    CallFrequencyExceededError,
-    CircularCallError,
     InvalidInputError,
     ModuleNotFoundError,
     ModuleTimeoutError,
     SchemaValidationError,
 )
+from apcore.utils.error_propagation import propagate_error
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
 from apcore.module import ModuleAnnotations, ValidationResult
 from apcore.registry import Registry
+from apcore.utils.call_chain import guard_call_chain
 
 __all__ = ["redact_sensitive", "REDACTED_VALUE", "Executor"]
 
 REDACTED_VALUE: str = "***REDACTED***"
 
 _logger = logging.getLogger(__name__)
+
+
+_MAX_MERGE_DEPTH = 32
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any], *, _depth: int = 0) -> None:
+    """Recursively merge *override* into *base* in-place.
+
+    Nested dicts are merged recursively; all other values (including lists)
+    are replaced by the override value. Recursion is capped at
+    ``_MAX_MERGE_DEPTH`` to guard against malicious or extremely nested
+    streaming chunks.
+    """
+    if _depth >= _MAX_MERGE_DEPTH:
+        return
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value, _depth=_depth + 1)
+        else:
+            base[key] = value
 
 
 def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str, Any]]:
@@ -283,6 +303,8 @@ class Executor:
         if context is None:
             ctx = Context.create(executor=self)
             ctx = ctx.child(module_id)
+            if self._global_timeout > 0:
+                ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
         else:
             ctx = context.child(module_id)
 
@@ -354,12 +376,15 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # Error handling for steps 6-9
+            # Error handling (A11): wrap and propagate
+            wrapped = propagate_error(exc, module_id, ctx)
             if executed_middlewares:
-                recovery = self._middleware_manager.execute_on_error(module_id, inputs, exc, ctx, executed_middlewares)
+                recovery = self._middleware_manager.execute_on_error(
+                    module_id, inputs, wrapped, ctx, executed_middlewares
+                )
                 if recovery is not None:
                     return recovery
-            raise
+            raise wrapped from exc
 
         # Step 10 -- Return
         return output
@@ -500,39 +525,16 @@ class Executor:
         self._handle_approval_result(result, module_id)
 
     def _check_safety(self, module_id: str, ctx: Context) -> None:
-        """Run call chain safety checks (step 2)."""
-        call_chain = ctx.call_chain
+        """Run call chain safety checks (step 2).
 
-        # Depth check
-        if len(call_chain) > self._max_call_depth:
-            raise CallDepthExceededError(
-                depth=len(call_chain),
-                max_depth=self._max_call_depth,
-                call_chain=list(call_chain),
-            )
-
-        # Circular detection (strict cycles of length >= 2)
-        # call_chain already includes module_id at the end (from child()),
-        # so check prior entries only.
-        prior_chain = call_chain[:-1]
-        if module_id in prior_chain:
-            last_idx = len(prior_chain) - 1 - prior_chain[::-1].index(module_id)
-            subsequence = prior_chain[last_idx + 1 :]
-            if len(subsequence) > 0:
-                raise CircularCallError(
-                    module_id=module_id,
-                    call_chain=list(call_chain),
-                )
-
-        # Frequency check
-        count = call_chain.count(module_id)
-        if count > self._max_module_repeat:
-            raise CallFrequencyExceededError(
-                module_id=module_id,
-                count=count,
-                max_repeat=self._max_module_repeat,
-                call_chain=list(call_chain),
-            )
+        Delegates to the standalone ``guard_call_chain`` algorithm (A20).
+        """
+        guard_call_chain(
+            module_id,
+            ctx.call_chain,
+            max_call_depth=self._max_call_depth,
+            max_module_repeat=self._max_module_repeat,
+        )
 
     def _is_async_module(self, module_id: str, module: Any) -> bool:
         """Check if a module's execute method is async, with caching."""
@@ -543,14 +545,34 @@ class Executor:
             self._async_cache[module_id] = is_async
             return is_async
 
+    #: Grace period (ms) for cooperative cancellation before giving up.
+    _GRACE_PERIOD_MS: int = 5000
+
     def _execute_with_timeout(
         self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context
     ) -> dict[str, Any]:
-        """Execute module with timeout enforcement (sync path)."""
+        """Execute module with timeout enforcement (Algorithm A22, sync path).
+
+        Steps:
+        1. If timeout_ms == 0 → execute without timeout.
+        2. Run module in thread with timeout.
+        3. On timeout → send cooperative cancel via CancelToken.
+        4. Wait grace period (5s) for module to respond to cancel.
+        5. If still alive → log warning (Python cannot force-kill threads).
+        6. Raise ModuleTimeoutError.
+        """
         timeout_ms = self._default_timeout
 
         if timeout_ms < 0:
             raise InvalidInputError(message=f"Negative timeout: {timeout_ms}ms")
+
+        # Global deadline enforcement (dual-timeout model)
+        if ctx._global_deadline is not None:
+            remaining_ms = max(0, (ctx._global_deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                raise ModuleTimeoutError(module_id=module_id, timeout_ms=self._global_timeout)
+            if timeout_ms == 0 or remaining_ms < timeout_ms:
+                timeout_ms = int(remaining_ms)
 
         # Async module in sync context: bridge to async
         if self._is_async_module(module_id, module):
@@ -574,6 +596,27 @@ class Executor:
         thread.join(timeout=timeout_ms / 1000.0)
 
         if thread.is_alive():
+            # Step 3: Cooperative cancellation via CancelToken
+            cancel_token = getattr(ctx, "cancel_token", None)
+            if cancel_token is not None:
+                cancel_token.cancel()
+                # Step 4: Wait grace period
+                thread.join(timeout=self._GRACE_PERIOD_MS / 1000.0)
+                if not thread.is_alive():
+                    # Module responded to cancellation
+                    if "error" in exception_holder:
+                        raise exception_holder["error"]
+                    if "output" in result_holder:
+                        return result_holder["output"]
+
+            # Step 5: Thread still alive — cannot force-kill in Python
+            if thread.is_alive():
+                _logger.warning(
+                    "Module '%s' timeout after %dms + %dms grace period; " "thread cannot be force-killed in Python",
+                    module_id,
+                    timeout_ms,
+                    self._GRACE_PERIOD_MS,
+                )
             raise ModuleTimeoutError(module_id=module_id, timeout_ms=timeout_ms)
 
         if "error" in exception_holder:
@@ -656,6 +699,8 @@ class Executor:
         if context is None:
             ctx = Context.create(executor=self)
             ctx = ctx.child(module_id)
+            if self._global_timeout > 0:
+                ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
         else:
             ctx = context.child(module_id)
 
@@ -728,14 +773,15 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # Error handling for steps 6-9
+            # Error handling (A11): wrap and propagate
+            wrapped = propagate_error(exc, module_id, ctx)
             if executed_middlewares:
                 recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, inputs, exc, ctx, executed_middlewares
+                    module_id, inputs, wrapped, ctx, executed_middlewares
                 )
                 if recovery is not None:
                     return recovery
-            raise
+            raise wrapped from exc
 
         # Step 10 -- Return
         return output
@@ -768,6 +814,8 @@ class Executor:
         if context is None:
             ctx = Context.create(executor=self)
             ctx = ctx.child(module_id)
+            if self._global_timeout > 0:
+                ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
         else:
             ctx = context.child(module_id)
 
@@ -842,10 +890,10 @@ class Executor:
 
                 yield output
             else:
-                # Streaming path: iterate module.stream(), accumulate via shallow merge
+                # Streaming path: iterate module.stream(), accumulate via deep merge
                 accumulated: dict[str, Any] = {}
                 async for chunk in module.stream(effective_inputs, ctx):
-                    accumulated = {**accumulated, **chunk}
+                    _deep_merge(accumulated, chunk)
                     yield chunk
 
                 # Step 8 -- Output Validation on accumulated result
@@ -866,19 +914,20 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # Error handling with middleware recovery
+            # Error handling (A11): wrap and propagate
+            wrapped = propagate_error(exc, module_id, ctx)
             if executed_middlewares:
                 recovery = await self._middleware_manager.execute_on_error_async(
                     module_id,
                     effective_inputs,
-                    exc,
+                    wrapped,
                     ctx,
                     executed_middlewares,
                 )
                 if recovery is not None:
                     yield recovery
                     return
-            raise
+            raise wrapped from exc
 
     async def _execute_async(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> dict[str, Any]:
         """Execute module asynchronously with timeout."""
@@ -886,6 +935,14 @@ class Executor:
 
         if timeout_ms < 0:
             raise InvalidInputError(message=f"Negative timeout: {timeout_ms}ms")
+
+        # Global deadline enforcement (dual-timeout model)
+        if ctx._global_deadline is not None:
+            remaining_ms = max(0, (ctx._global_deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                raise ModuleTimeoutError(module_id=module_id, timeout_ms=self._global_timeout)
+            if timeout_ms == 0 or remaining_ms < timeout_ms:
+                timeout_ms = int(remaining_ms)
 
         timeout_s = timeout_ms / 1000.0 if timeout_ms > 0 else None
         is_async = self._is_async_module(module_id, module)

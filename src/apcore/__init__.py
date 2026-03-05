@@ -51,6 +51,8 @@ from apcore.errors import (
     CircularDependencyError,
     ConfigError,
     ConfigNotFoundError,
+    ErrorCodeCollisionError,
+    ErrorCodeRegistry,
     ErrorCodes,
     FuncMissingReturnTypeError,
     FuncMissingTypeHintError,
@@ -68,7 +70,7 @@ from apcore.errors import (
 )
 
 # ACL
-from apcore.acl import ACL, ACLRule
+from apcore.acl import ACL, ACLRule, AuditEntry
 
 # Middleware
 from apcore.middleware import (
@@ -78,10 +80,13 @@ from apcore.middleware import (
     Middleware,
     MiddlewareChainError,
     MiddlewareManager,
+    RetryConfig,
+    RetryMiddleware,
 )
 
 # Decorators
 from apcore.decorator import FunctionModule, module
+from apcore._docstrings import parse_docstring as parse_docstring
 
 # Extensions
 from apcore.extensions import ExtensionManager, ExtensionPoint
@@ -101,8 +106,16 @@ from apcore.schema import (
     to_strict_schema as to_strict_schema,
 )
 
-# Utilities (pattern matching)
+# Version negotiation (A14)
+from apcore.version import VersionIncompatibleError as VersionIncompatibleError
+from apcore.version import negotiate_version as negotiate_version
+
+# Utilities
 from apcore.utils import match_pattern as match_pattern
+from apcore.utils.call_chain import guard_call_chain as guard_call_chain
+from apcore.utils.error_propagation import propagate_error as propagate_error
+from apcore.utils.normalize import normalize_to_canonical_id as normalize_to_canonical_id
+from apcore.utils.pattern import calculate_specificity as calculate_specificity
 
 # Observability
 from apcore.observability import (
@@ -121,7 +134,7 @@ from apcore.observability import (
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 __all__ = [
     # Core
@@ -179,6 +192,8 @@ __all__ = [
     "CircularDependencyError",
     "ConfigError",
     "ConfigNotFoundError",
+    "ErrorCodeCollisionError",
+    "ErrorCodeRegistry",
     "FuncMissingReturnTypeError",
     "FuncMissingTypeHintError",
     "InternalError",
@@ -194,6 +209,7 @@ __all__ = [
     # ACL
     "ACL",
     "ACLRule",
+    "AuditEntry",
     # Middleware
     "Middleware",
     "MiddlewareManager",
@@ -201,9 +217,13 @@ __all__ = [
     "AfterMiddleware",
     "LoggingMiddleware",
     "MiddlewareChainError",
+    "RetryConfig",
+    "RetryMiddleware",
     # Decorators
     "module",
     "FunctionModule",
+    # Docstring parsing
+    "parse_docstring",
     # Extensions
     "ExtensionManager",
     "ExtensionPoint",
@@ -221,6 +241,10 @@ __all__ = [
     "to_strict_schema",
     # Utilities
     "match_pattern",
+    "guard_call_chain",
+    "normalize_to_canonical_id",
+    "calculate_specificity",
+    "propagate_error",
     "redact_sensitive",
     "REDACTED_VALUE",
     # Observability
@@ -237,4 +261,7 @@ __all__ = [
     # Trace Context
     "TraceContext",
     "TraceParent",
+    # Version
+    "VersionIncompatibleError",
+    "negotiate_version",
 ]

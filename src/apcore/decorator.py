@@ -5,15 +5,29 @@ from __future__ import annotations
 import inspect
 import re
 import typing
-from typing import Any, Callable, get_origin
+from typing import Annotated, Any, Callable, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic.fields import FieldInfo
 
+from apcore._docstrings import parse_docstring
 from apcore.context import Context
 from apcore.errors import FuncMissingReturnTypeError, FuncMissingTypeHintError
 
 
-def generate_input_model(func: Any) -> type[BaseModel]:
+def _has_explicit_field_description(annotation: Any) -> bool:
+    """Check if an annotation already includes a Pydantic Field with description."""
+    if get_origin(annotation) is Annotated:
+        for arg in get_args(annotation)[1:]:
+            if isinstance(arg, FieldInfo) and arg.description is not None:
+                return True
+    return False
+
+
+def generate_input_model(
+    func: Any,
+    param_descs: dict[str, str] | None = None,
+) -> type[BaseModel]:
     """Convert a function's parameter signature into a dynamic Pydantic BaseModel.
 
     Skips self/cls, *args, **kwargs, and Context-typed parameters.
@@ -29,6 +43,9 @@ def generate_input_model(func: Any) -> type[BaseModel]:
             function_name=func.__name__,
             parameter_name=missing_name,
         ) from exc
+
+    if param_descs is None:
+        _, _, param_descs = parse_docstring(func)
 
     sig = inspect.signature(func)
     field_dict: dict[str, Any] = {}
@@ -58,6 +75,11 @@ def generate_input_model(func: Any) -> type[BaseModel]:
         # Skip Context-typed parameters
         if annotation is Context:
             continue
+
+        # Inject docstring description if no explicit Field(description=...) exists
+        desc = param_descs.get(param_name)
+        if desc and not _has_explicit_field_description(annotation):
+            annotation = Annotated[annotation, Field(description=desc)]
 
         # Build (type, default) tuple
         if param.default is not inspect.Parameter.empty:
@@ -158,7 +180,11 @@ class FunctionModule:
     ) -> None:
         self._func = func
         self.module_id = module_id
-        self.input_schema = input_schema if input_schema is not None else generate_input_model(func)
+
+        # Parse docstring once for reuse by input model and documentation
+        doc_desc, doc_body, param_descs = parse_docstring(func)
+
+        self.input_schema = input_schema if input_schema is not None else generate_input_model(func, param_descs)
         self.output_schema = output_schema if output_schema is not None else generate_output_model(func)
 
         has_context, context_param_name = _has_context_param(func)
@@ -166,12 +192,12 @@ class FunctionModule:
         # Description priority chain
         if description is not None:
             self.description = description
-        elif func.__doc__:
-            self.description = func.__doc__.strip().split("\n")[0].strip()
+        elif doc_desc is not None:
+            self.description = doc_desc
         else:
             self.description = f"Module {func.__name__}"
 
-        self.documentation = documentation
+        self.documentation = documentation if documentation is not None else doc_body
         self.tags = tags
         self.version = version
         self.annotations = annotations

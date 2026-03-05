@@ -19,6 +19,8 @@ _logger = logging.getLogger(__name__)
 class MiddlewareChainError(ModuleError):
     """Raised when a middleware's before() fails. Carries context for error recovery."""
 
+    _default_retryable = False
+
     def __init__(self, original: Exception, executed_middlewares: list[Middleware]) -> None:
         super().__init__(
             code="MIDDLEWARE_CHAIN_ERROR",

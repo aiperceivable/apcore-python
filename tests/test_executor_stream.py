@@ -143,7 +143,7 @@ class TestExecutorStream:
         assert len(chunks) == 2
         assert log == ["before", "after"]
 
-    async def test_accumulates_via_shallow_merge(self) -> None:
+    async def test_accumulates_disjoint_keys(self) -> None:
         mod = DisjointKeyModule()
 
         after_output: dict[str, Any] = {}
@@ -171,3 +171,42 @@ class TestExecutorStream:
         assert chunks[1] == {"b": "val_b"}
         # After-middleware receives the merged result
         assert after_output == {"a": "val_a", "b": "val_b"}
+
+    async def test_deep_merge_preserves_nested_keys(self) -> None:
+        """Chunks with overlapping nested dicts should merge recursively."""
+
+        class NestedStreamModule:
+            def __init__(self) -> None:
+                self.input_schema = None
+                self.output_schema = None
+
+            def execute(self, inputs: dict[str, Any], context: Context) -> dict[str, Any]:
+                return {"user": {"name": "Alice", "age": 30}}
+
+            async def stream(self, inputs: dict[str, Any], context: Context) -> AsyncIterator[dict[str, Any]]:
+                yield {"user": {"name": "Alice", "email": "alice@example.com"}}
+                yield {"user": {"age": 30}}
+
+        after_output: dict[str, Any] = {}
+
+        class CaptureAfter(Middleware):
+            def after(
+                self,
+                module_id: str,
+                inputs: dict[str, Any],
+                output: dict[str, Any],
+                context: Context,
+            ) -> dict[str, Any] | None:
+                nonlocal after_output
+                after_output = output
+                return None
+
+        ex = _make_executor(module=NestedStreamModule(), module_id="nested", middlewares=[CaptureAfter()])
+
+        chunks: list[dict[str, Any]] = []
+        async for chunk in ex.stream("nested", {}):
+            chunks.append(chunk)
+
+        assert len(chunks) == 2
+        # Deep merge: name + email from chunk 1, age from chunk 2 — all preserved
+        assert after_output == {"user": {"name": "Alice", "email": "alice@example.com", "age": 30}}

@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+from apcore.registry.conflicts import ConflictResult, detect_id_conflicts
 from apcore.registry.dependencies import resolve_dependencies
 from apcore.registry.entry_point import resolve_entry_point, snake_to_pascal
 from apcore.registry.metadata import load_id_map, load_metadata
@@ -21,10 +22,12 @@ from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescri
 from apcore.registry.validation import validate_module
 
 __all__ = [
+    "ConflictResult",
     "DependencyInfo",
     "DiscoveredModule",
     "ModuleDescriptor",
     "Registry",
+    "detect_id_conflicts",
     "load_id_map",
     "load_metadata",
     "resolve_dependencies",

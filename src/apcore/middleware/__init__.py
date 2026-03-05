@@ -4,6 +4,7 @@ from apcore.middleware.adapters import AfterMiddleware, BeforeMiddleware
 from apcore.middleware.base import Middleware
 from apcore.middleware.logging import LoggingMiddleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
+from apcore.middleware.retry import RetryConfig, RetryMiddleware
 
 __all__ = [
     "Middleware",
@@ -12,4 +13,6 @@ __all__ = [
     "MiddlewareManager",
     "MiddlewareChainError",
     "LoggingMiddleware",
+    "RetryConfig",
+    "RetryMiddleware",
 ]

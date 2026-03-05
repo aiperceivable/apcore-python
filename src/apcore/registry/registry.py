@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, runtime_checkable
 
@@ -12,6 +13,7 @@ from apcore.errors import (
     InvalidInputError,
     ModuleNotFoundError,
 )
+from apcore.registry.conflicts import detect_id_conflicts
 from apcore.registry.dependencies import resolve_dependencies
 from apcore.registry.entry_point import resolve_entry_point
 from apcore.registry.metadata import (
@@ -119,6 +121,7 @@ class Registry:
         # Internal state
         self._modules: dict[str, Any] = {}
         self._module_meta: dict[str, dict[str, Any]] = {}
+        self._lowercase_map: dict[str, str] = {}
         self._callbacks: dict[str, list[Callable[..., Any]]] = {
             REGISTRY_EVENTS["REGISTER"]: [],
             REGISTRY_EVENTS["UNREGISTER"]: [],
@@ -129,6 +132,11 @@ class Registry:
         self._config = config
         self._custom_discoverer: Discoverer | None = None
         self._custom_validator: ModuleValidator | None = None
+
+        # Safe hot-reload state (F09 / Algorithm A21)
+        self._ref_counts: dict[str, int] = {}
+        self._draining: set[str] = set()
+        self._drain_events: dict[str, threading.Event] = {}
 
         # Load ID map if provided
         if id_map_path is not None:
@@ -293,10 +301,29 @@ class Registry:
         known_ids = {mod_id for mod_id, _ in modules_with_deps}
         load_order = resolve_dependencies(modules_with_deps, known_ids=known_ids)
 
+        # Step 7.5: Batch ID conflict detection (A03)
+        batch_ids: set[str] = set()
+        for mod_id in load_order:
+            conflict = detect_id_conflicts(
+                new_id=mod_id,
+                existing_ids=batch_ids | set(self._modules.keys()),
+                reserved_words=RESERVED_WORDS,
+                lowercase_map=self._lowercase_map,
+            )
+            if conflict is not None:
+                if conflict.severity == "error":
+                    logger.warning("Skipping module '%s': %s", mod_id, conflict.message)
+                    valid_classes.pop(mod_id, None)
+                else:
+                    logger.warning("ID conflict: %s", conflict.message)
+            batch_ids.add(mod_id)
+
         # Step 8: Instantiate and register in dependency order
         registered_count = 0
         for mod_id in load_order:
-            cls = valid_classes[mod_id]
+            cls = valid_classes.get(mod_id)
+            if cls is None:
+                continue
             meta = raw_metadata.get(mod_id, {})
             try:
                 module = cls()
@@ -309,6 +336,7 @@ class Registry:
             with self._lock:
                 self._modules[mod_id] = module
                 self._module_meta[mod_id] = merged_meta
+                self._lowercase_map[mod_id.lower()] = mod_id
 
             # Call on_load if available
             if hasattr(module, "on_load") and callable(module.on_load):
@@ -319,6 +347,7 @@ class Registry:
                     with self._lock:
                         self._modules.pop(mod_id, None)
                         self._module_meta.pop(mod_id, None)
+                        self._lowercase_map.pop(mod_id.lower(), None)
                     continue
 
             self._trigger_event("register", mod_id, module)
@@ -359,15 +388,21 @@ class Registry:
         if len(module_id) > MAX_MODULE_ID_LENGTH:
             raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
 
-        parts = module_id.split(".")
-        for part in parts:
-            if part in RESERVED_WORDS:
-                raise InvalidInputError(f"Module ID contains reserved word: '{part}'")
-
         with self._lock:
-            if module_id in self._modules:
-                raise InvalidInputError(message=f"Module already exists: {module_id}")
+            conflict = detect_id_conflicts(
+                new_id=module_id,
+                existing_ids=set(self._modules.keys()),
+                reserved_words=RESERVED_WORDS,
+                lowercase_map=self._lowercase_map,
+            )
+            if conflict is not None:
+                if conflict.severity == "error":
+                    raise InvalidInputError(message=conflict.message)
+                else:
+                    logger.warning("ID conflict: %s", conflict.message)
+
             self._modules[module_id] = module
+            self._lowercase_map[module_id.lower()] = module_id
 
         # Call on_load if available
         if hasattr(module, "on_load") and callable(module.on_load):
@@ -391,6 +426,7 @@ class Registry:
             module = self._modules.pop(module_id)
             self._module_meta.pop(module_id, None)
             self._schema_cache.pop(module_id, None)
+            self._lowercase_map.pop(module_id.lower(), None)
 
         # Call on_unload if available
         if hasattr(module, "on_unload") and callable(module.on_unload):
@@ -478,6 +514,14 @@ class Registry:
 
         input_schema_cls = getattr(module, "input_schema", None) or getattr(cls, "input_schema", None)
         output_schema_cls = getattr(module, "output_schema", None) or getattr(cls, "output_schema", None)
+
+        # Ensure deferred annotations are resolved (from __future__ import annotations)
+        for schema_cls in (input_schema_cls, output_schema_cls):
+            if schema_cls is not None and hasattr(schema_cls, "model_rebuild"):
+                try:
+                    schema_cls.model_rebuild()
+                except Exception:
+                    pass
 
         input_json = input_schema_cls.model_json_schema() if input_schema_cls else {}
         output_json = output_schema_cls.model_json_schema() if output_schema_cls else {}
@@ -569,6 +613,97 @@ class Registry:
                     module_id,
                     e,
                 )
+
+    # ----- Safe Hot-Reload (F09 / Algorithm A21) -----
+
+    @contextmanager
+    def acquire(self, module_id: str) -> Iterator[Any]:
+        """Context manager to track in-flight executions for safe hot-reload.
+
+        Increments the reference count for the module on entry and decrements
+        it on exit.  If the module is draining (marked for unload), raises
+        ``ModuleNotFoundError`` to prevent new executions.
+
+        Yields:
+            The module instance.
+
+        Raises:
+            ModuleNotFoundError: If the module is currently draining.
+        """
+        with self._lock:
+            if module_id in self._draining:
+                raise ModuleNotFoundError(module_id=module_id)
+            if module_id not in self._modules:
+                raise ModuleNotFoundError(module_id=module_id)
+            self._ref_counts[module_id] = self._ref_counts.get(module_id, 0) + 1
+            module = self._modules[module_id]
+        try:
+            yield module
+        finally:
+            with self._lock:
+                count = self._ref_counts.get(module_id, 1) - 1
+                self._ref_counts[module_id] = count
+                if count <= 0:
+                    self._ref_counts.pop(module_id, None)
+                    event = self._drain_events.get(module_id)
+                    if event:
+                        event.set()
+
+    def is_draining(self, module_id: str) -> bool:
+        """Check whether a module is marked for unload (draining).
+
+        Returns:
+            True if the module is currently draining, False otherwise.
+        """
+        with self._lock:
+            return module_id in self._draining
+
+    def safe_unregister(self, module_id: str, *, timeout_ms: int = 5000) -> bool:
+        """Safely unregister a module with cooperative wait for in-flight executions.
+
+        Marks the module as *draining* so that no new ``acquire()`` calls are
+        accepted, then waits up to ``timeout_ms`` milliseconds for in-flight
+        executions to finish.  If they do not finish in time the module is
+        force-unloaded and a warning is logged.
+
+        Args:
+            module_id: The ID of the module to unregister.
+            timeout_ms: Maximum time to wait for in-flight executions (milliseconds).
+
+        Returns:
+            True if the module was cleanly shut down (no in-flight executions
+            remaining), False if it was force-unloaded after timeout.
+        """
+        with self._lock:
+            if module_id not in self._modules:
+                return False
+            self._draining.add(module_id)
+            ref_count = self._ref_counts.get(module_id, 0)
+            if ref_count > 0:
+                event = threading.Event()
+                self._drain_events[module_id] = event
+            else:
+                event = None
+
+        clean = True
+        if event is not None:
+            if not event.wait(timeout=timeout_ms / 1000.0):
+                logger.warning(
+                    "Force-unloading module %s after %dms timeout (%d in-flight executions)",
+                    module_id,
+                    timeout_ms,
+                    self._ref_counts.get(module_id, 0),
+                )
+                clean = False
+
+        # Perform actual unregistration
+        with self._lock:
+            self._draining.discard(module_id)
+            self._drain_events.pop(module_id, None)
+            self._ref_counts.pop(module_id, None)
+
+        self.unregister(module_id)
+        return clean
 
     # ----- Hot Reload -----
 

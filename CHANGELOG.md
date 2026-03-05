@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-05
+
+### Added
+
+#### Executor Enhancements
+- **Dual-timeout model** — Global deadline enforcement (`executor.global_timeout`) alongside per-module timeout. The shorter of the two is applied, preventing nested call chains from exceeding the global budget.
+- **Cooperative cancellation** — On module timeout, the executor sends `CancelToken.cancel()` and waits a 5-second grace period before raising `ModuleTimeoutError`. Modules that check `cancel_token` can clean up gracefully.
+- **Error propagation (Algorithm A11)** — All execution paths (sync, async, stream) now wrap exceptions via `propagate_error()`, ensuring middleware always receives `ModuleError` instances with trace context.
+- **Deep merge for streaming** — Streaming chunk accumulation uses recursive deep merge (depth-capped at 32) instead of shallow merge, correctly handling nested response structures.
+
+#### Error System
+- **ErrorCodeRegistry** — Custom module error codes are validated against framework prefixes and other modules to prevent collisions. Raises `ErrorCodeCollisionError` on conflict.
+- **VersionIncompatibleError** — New error class for SDK/config version mismatches with `negotiate_version()` utility.
+- **MiddlewareChainError** — Now explicitly `_default_retryable = False` per PROTOCOL_SPEC §8.6.
+
+#### Utilities
+- **`guard_call_chain()`** — Standalone Algorithm A20 implementation for call chain safety checks (depth, circular, frequency). Executor delegates to this utility.
+- **`propagate_error()`** — Standalone Algorithm A11 implementation for error wrapping and trace context attachment.
+- **`normalize_to_canonical_id()`** — Cross-language module ID normalization (Python snake_case, Go PascalCase, etc.).
+- **`calculate_specificity()`** — ACL pattern specificity scoring for deterministic rule ordering.
+- **`parse_docstring()`** — Docstring parser for extracting parameter descriptions from function docstrings.
+
+#### ACL Enhancements
+- **Audit logging** — `ACL` constructor accepts optional `audit_logger` callback. All access decisions emit `AuditEntry` with timestamp, caller/target IDs, matched rule, identity, and trace context.
+- **Condition-based rules** — ACL rules support `conditions` for identity type, role, and call depth filtering.
+
+#### Config System
+- **Full validation** — `Config.validate()` checks schema structure, value types, and range constraints.
+- **Hot reload** — `Config.reload()` re-reads the YAML source and re-validates.
+- **Environment overrides** — `APCORE_*` environment variables override config values (e.g., `APCORE_EXECUTOR_DEFAULT_TIMEOUT=5000`).
+- **`Config.from_defaults()`** — Factory method for default configuration.
+
+#### Middleware
+- **RetryMiddleware** — Configurable retry with exponential/fixed backoff, jitter, and max delay. Only retries errors marked `retryable=True`.
+
+#### Registry Enhancements
+- **ID conflict detection** — Registry detects and prevents registration of conflicting module IDs.
+- **Safe unregister** — `safe_unregister()` with drain timeout for graceful module removal.
+
+#### Context
+- **Generic `services` typing** — `Context[T]` supports typed dependency injection via the `services` field.
+
+#### Testing
+- **Conformance test suite** — JSON fixture-driven tests for error codes, call chain safety, ACL evaluation, pattern matching, specificity, ID normalization, and version negotiation.
+- **New unit tests** — 17 new test files covering all added features.
+
+### Changed
+
+#### Executor Internals
+- `_check_safety()` now delegates to standalone `guard_call_chain()` instead of inline logic.
+- Error handling wraps exceptions with `propagate_error()` and re-raises with `raise wrapped from exc`.
+- Global deadline set on root call only, propagated to child contexts via `Context._global_deadline`.
+
+#### Public API
+- Expanded `__all__` in `apcore.__init__` with new exports: `RetryMiddleware`, `RetryConfig`, `ErrorCodeRegistry`, `ErrorCodeCollisionError`, `VersionIncompatibleError`, `negotiate_version`, `guard_call_chain`, `propagate_error`, `normalize_to_canonical_id`, `calculate_specificity`, `AuditEntry`, `parse_docstring`.
+
 ## [0.7.0] - 2026-03-01
 
 ### Added
@@ -300,6 +356,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.8.0]: https://github.com/aipartnerup/apcore-python/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/aipartnerup/apcore-python/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/aipartnerup/apcore-python/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aipartnerup/apcore-python/compare/v0.4.0...v0.5.0

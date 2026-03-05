@@ -17,6 +17,7 @@ from apcore.errors import (
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
+    ModuleExecuteError,
     ModuleNotFoundError,
     ModuleTimeoutError,
     SchemaValidationError,
@@ -364,7 +365,7 @@ class TestCallErrorHandling:
                 return None
 
         ex = _make_executor(module=mod, middlewares=[ErrorHandler()])
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(ModuleExecuteError, match="boom"):
             ex.call("test.module", {"name": "Alice"})
         assert len(on_error_calls) == 1
 
@@ -401,7 +402,7 @@ class TestCallErrorHandling:
                 return None
 
         ex = _make_executor(module=mod, middlewares=[NoRecovery()])
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(ModuleExecuteError, match="boom"):
             ex.call("test.module", {"name": "Alice"})
 
     def test_middleware_chain_error(self) -> None:
@@ -424,7 +425,7 @@ class TestCallErrorHandling:
                 return None
 
         ex = _make_executor(module=mod, middlewares=[FailBefore()])
-        with pytest.raises(RuntimeError, match="before failed"):
+        with pytest.raises(ModuleExecuteError, match="before failed"):
             ex.call("test.module", {"name": "Alice"})
         assert len(on_error_calls) == 1
 
@@ -577,6 +578,29 @@ class TestTimeout:
         config = Config(data={"executor": {"default_timeout": -100}})
         ex = _make_executor(module=QuickModule(), config=config)
         with pytest.raises(InvalidInputError):
+            ex.call("test.module", {})
+
+    def test_timeout_cooperative_cancel(self) -> None:
+        """Module that checks cancel_token should exit gracefully during grace period."""
+
+        class CooperativeModule:
+            input_schema = None
+            output_schema = None
+
+            def execute(self, inputs: dict[str, Any], context: Context) -> dict[str, Any]:
+                cancel_token = getattr(context, "cancel_token", None)
+                # Simulate long work with periodic cancel check
+                for _ in range(100):
+                    if cancel_token and cancel_token.is_cancelled:
+                        return {"result": "cancelled_gracefully"}
+                    time.sleep(0.05)
+                return {"result": "completed"}
+
+        config = Config(data={"executor": {"default_timeout": 100}})  # 100ms timeout
+        ex = _make_executor(module=CooperativeModule(), config=config)
+        # Module should timeout but the CancelToken should be set
+        # The module will check cancel_token during grace period and return
+        with pytest.raises(ModuleTimeoutError):
             ex.call("test.module", {})
 
 

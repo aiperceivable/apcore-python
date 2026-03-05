@@ -14,6 +14,7 @@ from apcore.errors import (
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
+    ModuleExecuteError,
     ModuleTimeoutError,
 )
 from apcore.executor import Executor
@@ -163,7 +164,7 @@ class TestMiddlewareErrorRecovery:
                 return None
 
         ex = Executor(registry=mock_registry, middlewares=[NoRecoveryMiddleware()])
-        with pytest.raises(RuntimeError, match="module execution failed"):
+        with pytest.raises(ModuleExecuteError, match="module execution failed"):
             ex.call("test.failing_module", {})
 
 

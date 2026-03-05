@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from apcore.errors import (
+    ModuleExecuteError,
     ModuleNotFoundError,
     SchemaValidationError,
 )
@@ -41,7 +42,7 @@ class TestErrorPropagation:
             registry=int_registry,
             middlewares=[TrackingMiddleware("A"), TrackingMiddleware("B")],
         )
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ModuleExecuteError):
             executor.call("failing", {})
         assert log == ["B", "A"]
 

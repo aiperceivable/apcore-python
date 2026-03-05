@@ -184,7 +184,7 @@ class TestRegister:
         """Registering same ID twice raises InvalidInputError."""
         reg = Registry()
         reg.register("test.module", _ValidModule())
-        with pytest.raises(InvalidInputError, match="already exists"):
+        with pytest.raises(InvalidInputError, match="already registered"):
             reg.register("test.module", _ValidModuleB())
 
     def test_register_calls_on_load(self) -> None:

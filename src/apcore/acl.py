@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Callable
 
 import yaml
 
@@ -18,7 +19,7 @@ from apcore.context import Context
 from apcore.errors import ACLRuleError, ConfigNotFoundError
 from apcore.utils.pattern import match_pattern
 
-__all__ = ["ACLRule", "ACL"]
+__all__ = ["ACLRule", "AuditEntry", "ACL"]
 
 
 @dataclass
@@ -36,6 +37,23 @@ class ACLRule:
     conditions: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class AuditEntry:
+    """Structured record of an ACL check decision."""
+
+    timestamp: str  # ISO 8601
+    caller_id: str
+    target_id: str
+    decision: str  # "allow" or "deny"
+    reason: str  # "rule_match", "default_effect", "no_rules"
+    matched_rule: str | None = None  # Rule description (immutable snapshot)
+    matched_rule_index: int | None = None
+    identity_type: str | None = None
+    roles: tuple[str, ...] = field(default_factory=tuple)
+    call_depth: int | None = None
+    trace_id: str | None = None
+
+
 class ACL:
     """Access Control List with pattern-based rules and first-match-wins evaluation.
 
@@ -46,17 +64,25 @@ class ACL:
         remove_rule, reload) are safe to call concurrently.
     """
 
-    def __init__(self, rules: list[ACLRule], default_effect: str = "deny") -> None:
+    def __init__(
+        self,
+        rules: list[ACLRule],
+        default_effect: str = "deny",
+        *,
+        audit_logger: Callable[[AuditEntry], None] | None = None,
+    ) -> None:
         """Initialize ACL with ordered rules and a default effect.
 
         Args:
             rules: Ordered list of ACL rules (first match wins).
             default_effect: Effect when no rule matches ('allow' or 'deny').
+            audit_logger: Optional callback invoked with an AuditEntry for
+                every check() call. Useful for structured audit trails.
         """
         self._rules: list[ACLRule] = list(rules)
         self._default_effect: str = default_effect
         self._yaml_path: str | None = None
-        self.debug: bool = False
+        self._audit_logger: Callable[[AuditEntry], None] | None = audit_logger
         self._logger: logging.Logger = logging.getLogger(__name__)
         self._lock = threading.Lock()
 
@@ -151,8 +177,9 @@ class ACL:
         with self._lock:
             rules = list(self._rules)
             default_effect = self._default_effect
+            audit_logger = self._audit_logger
 
-        for rule in rules:
+        for idx, rule in enumerate(rules):
             if self._matches_rule(rule, effective_caller, target_id, context):
                 decision = rule.effect == "allow"
                 self._logger.debug(
@@ -162,6 +189,17 @@ class ACL:
                     "allow" if decision else "deny",
                     rule.description or "(no description)",
                 )
+                if audit_logger is not None:
+                    entry = self._build_audit_entry(
+                        caller_id=effective_caller,
+                        target_id=target_id,
+                        decision="allow" if decision else "deny",
+                        reason="rule_match",
+                        matched_rule=rule,
+                        matched_rule_index=idx,
+                        context=context,
+                    )
+                    audit_logger(entry)
                 return decision
 
         default_decision = default_effect == "allow"
@@ -171,7 +209,57 @@ class ACL:
             target_id,
             "allow" if default_decision else "deny",
         )
+        if audit_logger is not None:
+            reason = "no_rules" if not rules else "default_effect"
+            entry = self._build_audit_entry(
+                caller_id=effective_caller,
+                target_id=target_id,
+                decision="allow" if default_decision else "deny",
+                reason=reason,
+                matched_rule=None,
+                matched_rule_index=None,
+                context=context,
+            )
+            audit_logger(entry)
         return default_decision
+
+    def _build_audit_entry(
+        self,
+        *,
+        caller_id: str,
+        target_id: str,
+        decision: str,
+        reason: str,
+        matched_rule: ACLRule | None,
+        matched_rule_index: int | None,
+        context: Context | None,
+    ) -> AuditEntry:
+        """Build an AuditEntry, extracting optional fields from context."""
+        identity_type: str | None = None
+        roles: tuple[str, ...] = ()
+        call_depth: int | None = None
+        trace_id: str | None = None
+
+        if context is not None:
+            trace_id = context.trace_id
+            call_depth = len(context.call_chain)
+            if context.identity is not None:
+                identity_type = context.identity.type
+                roles = tuple(context.identity.roles)
+
+        return AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            caller_id=caller_id,
+            target_id=target_id,
+            decision=decision,
+            reason=reason,
+            matched_rule=matched_rule.description if matched_rule is not None else None,
+            matched_rule_index=matched_rule_index,
+            identity_type=identity_type,
+            roles=roles,
+            call_depth=call_depth,
+            trace_id=trace_id,
+        )
 
     def _match_pattern(self, pattern: str, value: str, context: Context | None = None) -> bool:
         """Match a single pattern against a value, with special pattern handling.

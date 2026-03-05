@@ -30,6 +30,14 @@ def get_schema(registry: Registry, module_id: str) -> dict[str, Any] | None:
     if module is None:
         return None
 
+    # Ensure deferred annotations are resolved (from __future__ import annotations)
+    for schema_cls in (module.input_schema, module.output_schema):
+        if schema_cls is not None and hasattr(schema_cls, "model_rebuild"):
+            try:
+                schema_cls.model_rebuild()
+            except Exception:
+                pass
+
     input_schema_dict = module.input_schema.model_json_schema()
     output_schema_dict = module.output_schema.model_json_schema()
 
