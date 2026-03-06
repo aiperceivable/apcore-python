@@ -780,53 +780,73 @@ class Registry:
             self._observer.join()
             self._observer = None
 
+    def _inline_unregister(self, mid: str) -> Any:
+        """Remove a module from internal maps (caller must hold self._lock).
+
+        Returns the removed module instance, or None if not found.
+        """
+        module = self._modules.pop(mid, None)
+        self._module_meta.pop(mid, None)
+        self._schema_cache.pop(mid, None)
+        self._lowercase_map.pop(mid.lower(), None)
+        return module
+
     def _handle_file_change(self, path: str) -> None:
         """Handle a file modification or creation event."""
         import importlib.util
         import os
 
-        # Try to find which module this file belongs to
-        module_id = self._path_to_module_id(path)
-        if module_id and self.has(module_id):
-            # Reload: unregister old, re-discover
-            old_module = self.get(module_id)
-            if old_module and hasattr(old_module, "on_unload"):
-                try:
-                    old_module.on_unload()
-                except Exception:
-                    pass
-            self.unregister(module_id)
+        with self._lock:
+            # Try to find which module this file belongs to
+            module_id = self._path_to_module_id(path)
+            if module_id and module_id in self._modules:
+                old_module = self._modules.get(module_id)
+                if old_module and hasattr(old_module, "on_unload"):
+                    try:
+                        old_module.on_unload()
+                    except Exception as e:
+                        logger.warning("on_unload() failed for module '%s' during hot reload: %s", module_id, e)
+                self._inline_unregister(module_id)
+                self._trigger_event("unregister", module_id, old_module)
 
-        # Try to re-import and register
-        try:
-            spec = importlib.util.spec_from_file_location("_hot_reload", path)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                # Find module class (look for execute method)
-                for attr_name in dir(mod):
-                    attr = getattr(mod, attr_name)
-                    if isinstance(attr, type) and hasattr(attr, "execute"):
-                        instance = attr()
-                        new_id = module_id or os.path.splitext(os.path.basename(path))[0]
-                        if self.has(new_id):
-                            self.unregister(new_id)
-                        self.register(new_id, instance)
-                        break
-        except Exception as e:
-            logger.warning("Hot reload failed for %s: %s", path, e)
+            # Try to re-import and register (inside lock to prevent concurrent state corruption)
+            try:
+                spec = importlib.util.spec_from_file_location("_hot_reload", path)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    # Find module class (look for execute method)
+                    for attr_name in dir(mod):
+                        attr = getattr(mod, attr_name)
+                        if isinstance(attr, type) and hasattr(attr, "execute"):
+                            instance = attr()
+                            new_id = module_id or os.path.splitext(os.path.basename(path))[0]
+                            # Unregister existing if different from already-cleaned module_id
+                            if new_id in self._modules:
+                                old = self._inline_unregister(new_id)
+                                if old is not None:
+                                    self._trigger_event("unregister", new_id, old)
+                            # Register new
+                            self._modules[new_id] = instance
+                            self._lowercase_map[new_id.lower()] = new_id
+                            self._trigger_event("register", new_id, instance)
+                            break
+            except Exception as e:
+                logger.warning("Hot reload failed for %s: %s", path, e)
 
     def _handle_file_deletion(self, path: str) -> None:
         """Handle a file deletion event."""
-        module_id = self._path_to_module_id(path)
-        if module_id and self.has(module_id):
-            module = self.get(module_id)
-            if module and hasattr(module, "on_unload"):
-                try:
-                    module.on_unload()
-                except Exception:
-                    pass
-            self.unregister(module_id)
+        with self._lock:
+            module_id = self._path_to_module_id(path)
+            if module_id and module_id in self._modules:
+                module = self._modules.get(module_id)
+                if module and hasattr(module, "on_unload"):
+                    try:
+                        module.on_unload()
+                    except Exception as e:
+                        logger.warning("on_unload() failed for module '%s' during hot reload: %s", module_id, e)
+                self._inline_unregister(module_id)
+                self._trigger_event("unregister", module_id, module)
 
     def _path_to_module_id(self, path: str) -> str | None:
         """Map a file path to a module ID if known."""

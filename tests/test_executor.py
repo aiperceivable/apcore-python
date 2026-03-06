@@ -17,6 +17,7 @@ from apcore.errors import (
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
+    InvalidInputError,
     ModuleExecuteError,
     ModuleNotFoundError,
     ModuleTimeoutError,
@@ -437,9 +438,9 @@ class TestCallEdgeCases:
     """Tests for call() edge cases."""
 
     def test_empty_module_id(self) -> None:
-        """module_id='' raises ModuleNotFoundError."""
+        """module_id='' raises InvalidInputError."""
         ex = _make_executor()
-        with pytest.raises(ModuleNotFoundError):
+        with pytest.raises(InvalidInputError):
             ex.call("", {"name": "Alice"})
 
     def test_none_inputs_treated_as_empty(self) -> None:

@@ -324,10 +324,9 @@ class Config:
         """
         with self._lock:
             yaml_path = self._yaml_path
-        if yaml_path is None:
-            raise ConfigError(message="Cannot reload: Config was not loaded from a YAML file")
-        reloaded = Config.load(yaml_path)
-        with self._lock:
+            if yaml_path is None:
+                raise ConfigError(message="Cannot reload: Config was not loaded from a YAML file")
+            reloaded = Config.load(yaml_path)
             self._data = reloaded._data
 
     # ------------------------------------------------------------------

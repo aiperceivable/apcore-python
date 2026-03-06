@@ -33,7 +33,7 @@ from apcore.utils.error_propagation import propagate_error
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
 from apcore.module import ModuleAnnotations, ValidationResult
-from apcore.registry import Registry
+from apcore.registry import MODULE_ID_PATTERN, Registry
 from apcore.utils.call_chain import guard_call_chain
 
 __all__ = ["redact_sensitive", "REDACTED_VALUE", "Executor"]
@@ -296,6 +296,8 @@ class Executor:
         Returns:
             The module output dict, possibly modified by middleware.
         """
+        self._validate_module_id(module_id)
+
         if inputs is None:
             inputs = {}
 
@@ -360,7 +362,7 @@ class Executor:
             # Step 7 -- Execute with timeout
             output = self._execute_with_timeout(module, module_id, inputs, ctx)
 
-            # Step 8 -- Output Validation
+            # Step 8 -- Output Validation and Redaction
             if hasattr(module, "output_schema") and module.output_schema is not None:
                 try:
                     module.output_schema.model_validate(output)
@@ -369,6 +371,8 @@ class Executor:
                         message="Output validation failed",
                         errors=_convert_validation_errors(e),
                     ) from e
+
+                ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
             # Step 9 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
@@ -405,7 +409,9 @@ class Executor:
 
         Raises:
             ModuleNotFoundError: If the module is not found.
+            InvalidInputError: If module_id format is invalid.
         """
+        self._validate_module_id(module_id)
         module = self._registry.get(module_id)
         if module is None:
             raise ModuleNotFoundError(module_id=module_id)
@@ -523,6 +529,14 @@ class Executor:
 
         self._emit_approval_event(result, module_id, ctx)
         self._handle_approval_result(result, module_id)
+
+    @staticmethod
+    def _validate_module_id(module_id: str) -> None:
+        """Validate module_id format at public entry points."""
+        if not module_id or not MODULE_ID_PATTERN.match(module_id):
+            raise InvalidInputError(
+                message=f"Invalid module ID: '{module_id}'. Must match pattern: {MODULE_ID_PATTERN.pattern}"
+            )
 
     def _check_safety(self, module_id: str, ctx: Context) -> None:
         """Run call chain safety checks (step 2).
@@ -692,6 +706,8 @@ class Executor:
         Returns:
             The module output dict, possibly modified by middleware.
         """
+        self._validate_module_id(module_id)
+
         if inputs is None:
             inputs = {}
 
@@ -757,7 +773,7 @@ class Executor:
             # Step 7 -- Execute (async)
             output = await self._execute_async(module, module_id, inputs, ctx)
 
-            # Step 8 -- Output Validation
+            # Step 8 -- Output Validation and Redaction
             if hasattr(module, "output_schema") and module.output_schema is not None:
                 try:
                     module.output_schema.model_validate(output)
@@ -766,6 +782,8 @@ class Executor:
                         message="Output validation failed",
                         errors=_convert_validation_errors(e),
                     ) from e
+
+                ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
             # Step 9 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
@@ -808,6 +826,8 @@ class Executor:
         Yields:
             Dict chunks from the module's stream() or a single call_async() result.
         """
+        self._validate_module_id(module_id)
+
         effective_inputs: dict[str, Any] = dict(inputs) if inputs is not None else {}
 
         # Step 1 -- Context
@@ -875,7 +895,7 @@ class Executor:
                 # Fallback: delegate to _execute_async, yield single chunk
                 output = await self._execute_async(module, module_id, effective_inputs, ctx)
 
-                # Step 8 -- Output Validation
+                # Step 8 -- Output Validation and Redaction
                 if hasattr(module, "output_schema") and module.output_schema is not None:
                     try:
                         module.output_schema.model_validate(output)
@@ -884,6 +904,8 @@ class Executor:
                             message="Output validation failed",
                             errors=_convert_validation_errors(e),
                         ) from e
+
+                    ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
                 # Step 9 -- Middleware After (async-aware)
                 output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)
@@ -896,7 +918,7 @@ class Executor:
                     _deep_merge(accumulated, chunk)
                     yield chunk
 
-                # Step 8 -- Output Validation on accumulated result
+                # Step 8 -- Output Validation and Redaction on accumulated result
                 if hasattr(module, "output_schema") and module.output_schema is not None:
                     try:
                         module.output_schema.model_validate(accumulated)
@@ -905,6 +927,10 @@ class Executor:
                             message="Output validation failed",
                             errors=_convert_validation_errors(e),
                         ) from e
+
+                    ctx.data["_redacted_output"] = redact_sensitive(
+                        accumulated, module.output_schema.model_json_schema()
+                    )
 
                 # Step 9 -- Middleware After on accumulated result (async-aware)
                 accumulated = await self._middleware_manager.execute_after_async(
