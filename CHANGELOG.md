@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Public API
 - Expanded `__all__` in `apcore.__init__` with new exports: `RetryMiddleware`, `RetryConfig`, `ErrorCodeRegistry`, `ErrorCodeCollisionError`, `VersionIncompatibleError`, `negotiate_version`, `guard_call_chain`, `propagate_error`, `normalize_to_canonical_id`, `calculate_specificity`, `AuditEntry`, `parse_docstring`.
 
+## [0.7.1] - 2026-03-04
+
+### Added
+
+#### Public API Extensions
+- **Module Protocol** — Introduced `Module` protocol in `apcore.module` for standardized module typing.
+- **Schema System** — Exposed schema APIs (`SchemaLoader`, `SchemaValidator`, `SchemaExporter`, `RefResolver`, `to_strict_schema`) to the top-level `apcore` exports.
+- **Utilities** — Exposed `match_pattern` utility to the top-level `apcore` exports.
+
 ## [0.7.0] - 2026-03-01
 
 ### Added
