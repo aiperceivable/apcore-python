@@ -336,6 +336,8 @@ class TestPublicAPIAll:
         "ModuleAnnotations",
         "ModuleExample",
         "ValidationResult",
+        "PreflightCheckResult",
+        "PreflightResult",
         # Registry types
         "ModuleDescriptor",
         "DiscoveredModule",

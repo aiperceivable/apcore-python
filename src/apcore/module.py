@@ -11,7 +11,14 @@ if TYPE_CHECKING:
 
     from apcore.context import Context
 
-__all__ = ["Module", "ModuleAnnotations", "ModuleExample", "ValidationResult"]
+__all__ = [
+    "Module",
+    "ModuleAnnotations",
+    "ModuleExample",
+    "PreflightCheckResult",
+    "PreflightResult",
+    "ValidationResult",
+]
 
 
 @runtime_checkable
@@ -82,3 +89,41 @@ class ValidationResult:
 
     valid: bool
     errors: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PreflightCheckResult:
+    """Result of a single preflight check.
+
+    Attributes:
+        check: Check name ("module_id", "module_lookup", "call_chain", "acl", "approval", "schema").
+        passed: Whether this check passed.
+        error: Error details when passed is False; None when passed is True.
+    """
+
+    check: str
+    passed: bool
+    error: dict[str, Any] | None = None
+
+
+@dataclass
+class PreflightResult:
+    """Result of Executor.validate() preflight check.
+
+    Duck-type compatible with ValidationResult: has ``valid`` and ``errors``
+    properties so existing consumers continue to work.
+
+    Attributes:
+        valid: True only if all checks passed.
+        checks: Per-step check results.
+        requires_approval: True if the module has requires_approval annotation.
+    """
+
+    valid: bool
+    checks: list[PreflightCheckResult] = field(default_factory=list)
+    requires_approval: bool = False
+
+    @property
+    def errors(self) -> list[dict[str, Any]]:
+        """All failed check errors, compatible with ValidationResult.errors."""
+        return [c.error for c in self.checks if not c.passed and c.error is not None]

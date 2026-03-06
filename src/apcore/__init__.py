@@ -26,7 +26,14 @@ from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescri
 from apcore.executor import Executor, redact_sensitive, REDACTED_VALUE
 
 # Module types
-from apcore.module import Module, ModuleAnnotations, ModuleExample, ValidationResult
+from apcore.module import (
+    Module,
+    ModuleAnnotations,
+    ModuleExample,
+    PreflightCheckResult,
+    PreflightResult,
+    ValidationResult,
+)
 
 # Config
 from apcore.config import Config
@@ -135,7 +142,7 @@ from apcore.observability import (
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     # Core
@@ -158,6 +165,8 @@ __all__ = [
     "ModuleAnnotations",
     "ModuleExample",
     "ValidationResult",
+    "PreflightCheckResult",
+    "PreflightResult",
     # Registry types
     "ModuleDescriptor",
     "DiscoveredModule",

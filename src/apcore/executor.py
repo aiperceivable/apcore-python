@@ -25,6 +25,7 @@ from apcore.errors import (
     ApprovalPendingError,
     ApprovalTimeoutError,
     InvalidInputError,
+    ModuleError,
     ModuleNotFoundError,
     ModuleTimeoutError,
     SchemaValidationError,
@@ -32,7 +33,7 @@ from apcore.errors import (
 from apcore.utils.error_propagation import propagate_error
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
-from apcore.module import ModuleAnnotations, ValidationResult
+from apcore.module import ModuleAnnotations, PreflightCheckResult, PreflightResult
 from apcore.registry import MODULE_ID_PATTERN, Registry
 from apcore.utils.call_chain import guard_call_chain
 
@@ -155,9 +156,9 @@ def _redact_secret_prefix(data: dict[str, Any]) -> None:
 class Executor:
     """Central execution engine that orchestrates the module call pipeline.
 
-    The Executor implements a 10-step synchronous flow: context creation,
-    call chain safety checks, module lookup, ACL enforcement, input validation
-    with redaction, middleware before chain, module execution, output validation,
+    The Executor implements an 11-step flow: context creation, safety checks,
+    module lookup, ACL enforcement, approval gate, input validation with
+    redaction, middleware before chain, module execution, output validation,
     middleware after chain, and result return.
     """
 
@@ -176,7 +177,7 @@ class Executor:
             middlewares: Optional list of middleware instances to register.
             acl: Optional ACL for access control enforcement.
             config: Optional configuration for timeout/depth settings.
-            approval_handler: Optional approval handler for Step 4.5 gate.
+            approval_handler: Optional approval handler for Step 5 gate.
         """
         self._registry = registry
         self._middleware_manager = MiddlewareManager()
@@ -254,7 +255,7 @@ class Executor:
         self._acl = acl
 
     def set_approval_handler(self, handler: ApprovalHandler) -> None:
-        """Set the approval handler for Step 4.5 gate.
+        """Set the approval handler for Step 5 gate.
 
         Args:
             handler: The ApprovalHandler instance to use for approval enforcement.
@@ -286,7 +287,7 @@ class Executor:
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
     ) -> dict[str, Any]:
-        """Execute a module through the 10-step pipeline.
+        """Execute a module through the 11-step pipeline.
 
         Args:
             module_id: The module to execute.
@@ -324,10 +325,10 @@ class Executor:
             if not allowed:
                 raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
 
-        # Step 4.5 -- Approval Gate
+        # Step 5 -- Approval Gate
         self._check_approval_sync(module, module_id, inputs, ctx)
 
-        # Step 5 -- Input Validation and Redaction
+        # Step 6 -- Input Validation and Redaction
         if hasattr(module, "input_schema") and module.input_schema is not None:
             try:
                 module.input_schema.model_validate(inputs)
@@ -342,7 +343,7 @@ class Executor:
         executed_middlewares: list[Middleware] = []
 
         try:
-            # Step 6 -- Middleware Before
+            # Step 7 -- Middleware Before
             try:
                 inputs, executed_middlewares = self._middleware_manager.execute_before(module_id, inputs, ctx)
             except MiddlewareChainError as mce:
@@ -359,10 +360,10 @@ class Executor:
             if ctx.cancel_token is not None:
                 ctx.cancel_token.check()
 
-            # Step 7 -- Execute with timeout
+            # Step 8 -- Execute with timeout
             output = self._execute_with_timeout(module, module_id, inputs, ctx)
 
-            # Step 8 -- Output Validation and Redaction
+            # Step 9 -- Output Validation and Redaction
             if hasattr(module, "output_schema") and module.output_schema is not None:
                 try:
                     module.output_schema.model_validate(output)
@@ -374,7 +375,7 @@ class Executor:
 
                 ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
-            # Step 9 -- Middleware After
+            # Step 10 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
 
         except ExecutionCancelledError:
@@ -390,40 +391,107 @@ class Executor:
                     return recovery
             raise wrapped from exc
 
-        # Step 10 -- Return
+        # Step 11 -- Return
         return output
 
     def validate(
         self,
         module_id: str,
-        inputs: dict[str, Any],
-    ) -> ValidationResult:
-        """Validate inputs against a module's schema without execution.
+        inputs: dict[str, Any] | None = None,
+        context: Context | None = None,
+    ) -> PreflightResult:
+        """Non-destructive preflight check through Steps 1-6 without execution.
+
+        Runs context creation, safety checks, module lookup, ACL enforcement,
+        approval detection (report only), and input schema validation.
+        All check failures are collected rather than thrown.
 
         Args:
             module_id: The module to validate against.
-            inputs: Input data to validate.
+            inputs: Input data to validate. None is treated as {}.
+            context: Optional context for call-chain checks.
 
         Returns:
-            ValidationResult with valid=True or valid=False with errors.
-
-        Raises:
-            ModuleNotFoundError: If the module is not found.
-            InvalidInputError: If module_id format is invalid.
+            PreflightResult with per-check status. Duck-type compatible
+            with the old ValidationResult (.valid and .errors).
         """
-        self._validate_module_id(module_id)
+        if inputs is None:
+            inputs = {}
+
+        checks: list[PreflightCheckResult] = []
+        requires_approval = False
+
+        # Check 1: module_id format
+        try:
+            self._validate_module_id(module_id)
+            checks.append(PreflightCheckResult(check="module_id", passed=True))
+        except InvalidInputError as e:
+            checks.append(PreflightCheckResult(check="module_id", passed=False, error=e.to_dict()))
+            return PreflightResult(valid=False, checks=checks)
+
+        # Check 2: module lookup
         module = self._registry.get(module_id)
         if module is None:
-            raise ModuleNotFoundError(module_id=module_id)
+            checks.append(
+                PreflightCheckResult(
+                    check="module_lookup",
+                    passed=False,
+                    error={"code": "MODULE_NOT_FOUND", "message": f"Module not found: {module_id}"},
+                )
+            )
+            return PreflightResult(valid=False, checks=checks)
+        checks.append(PreflightCheckResult(check="module_lookup", passed=True))
 
-        if not hasattr(module, "input_schema") or module.input_schema is None:
-            return ValidationResult(valid=True, errors=[])
-
+        # Check 3: call chain safety
+        if context is not None:
+            ctx = context.child(module_id)
+        else:
+            ctx = Context.create(executor=self).child(module_id)
         try:
-            module.input_schema.model_validate(inputs)
-            return ValidationResult(valid=True, errors=[])
-        except pydantic.ValidationError as e:
-            return ValidationResult(valid=False, errors=_convert_validation_errors(e))
+            self._check_safety(module_id, ctx)
+            checks.append(PreflightCheckResult(check="call_chain", passed=True))
+        except ModuleError as e:
+            checks.append(PreflightCheckResult(check="call_chain", passed=False, error=e.to_dict()))
+
+        # Check 4: ACL
+        if self._acl is not None:
+            allowed = self._acl.check(ctx.caller_id, module_id, ctx)
+            if not allowed:
+                checks.append(
+                    PreflightCheckResult(
+                        check="acl",
+                        passed=False,
+                        error={"code": "ACL_DENIED", "message": f"Access denied: {ctx.caller_id} -> {module_id}"},
+                    )
+                )
+            else:
+                checks.append(PreflightCheckResult(check="acl", passed=True))
+        else:
+            checks.append(PreflightCheckResult(check="acl", passed=True))
+
+        # Check 5: approval detection (report only, no handler invocation)
+        if self._needs_approval(module):
+            requires_approval = True
+        checks.append(PreflightCheckResult(check="approval", passed=True))
+
+        # Check 6: input schema validation
+        if hasattr(module, "input_schema") and module.input_schema is not None:
+            try:
+                module.input_schema.model_validate(inputs)
+                checks.append(PreflightCheckResult(check="schema", passed=True))
+            except pydantic.ValidationError as e:
+                checks.append(
+                    PreflightCheckResult(
+                        check="schema",
+                        passed=False,
+                        error={"code": "SCHEMA_VALIDATION_ERROR", "errors": _convert_validation_errors(e)},
+                    )
+                )
+        else:
+            checks.append(PreflightCheckResult(check="schema", passed=True))
+
+        valid = all(c.passed for c in checks)
+        return PreflightResult(valid=valid, checks=checks, requires_approval=requires_approval)
 
     def _needs_approval(self, module: Any) -> bool:
         """Check if a module requires approval, handling both dict and dataclass annotations."""
@@ -494,7 +562,7 @@ class Executor:
             )
 
     def _check_approval_sync(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> None:
-        """Step 4.5: Approval gate (sync path). Bridges to async handler."""
+        """Step 5: Approval gate (sync path). Bridges to async handler."""
         if self._approval_handler is None:
             return
         if not self._needs_approval(module):
@@ -513,7 +581,7 @@ class Executor:
         self._handle_approval_result(result, module_id)
 
     async def _check_approval_async(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> None:
-        """Step 4.5: Approval gate (async path)."""
+        """Step 5: Approval gate (async path)."""
         if self._approval_handler is None:
             return
         if not self._needs_approval(module):
@@ -734,10 +802,10 @@ class Executor:
             if not allowed:
                 raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
 
-        # Step 4.5 -- Approval Gate
+        # Step 5 -- Approval Gate
         await self._check_approval_async(module, module_id, inputs, ctx)
 
-        # Step 5 -- Input Validation and Redaction
+        # Step 6 -- Input Validation and Redaction
         if hasattr(module, "input_schema") and module.input_schema is not None:
             try:
                 module.input_schema.model_validate(inputs)
@@ -751,7 +819,7 @@ class Executor:
         executed_middlewares: list[Middleware] = []
 
         try:
-            # Step 6 -- Middleware Before (async-aware)
+            # Step 7 -- Middleware Before (async-aware)
             try:
                 inputs, executed_middlewares = await self._middleware_manager.execute_before_async(
                     module_id, inputs, ctx
@@ -770,10 +838,10 @@ class Executor:
             if ctx.cancel_token is not None:
                 ctx.cancel_token.check()
 
-            # Step 7 -- Execute (async)
+            # Step 8 -- Execute (async)
             output = await self._execute_async(module, module_id, inputs, ctx)
 
-            # Step 8 -- Output Validation and Redaction
+            # Step 9 -- Output Validation and Redaction
             if hasattr(module, "output_schema") and module.output_schema is not None:
                 try:
                     module.output_schema.model_validate(output)
@@ -785,7 +853,7 @@ class Executor:
 
                 ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
-            # Step 9 -- Middleware After (async-aware)
+            # Step 10 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
 
         except ExecutionCancelledError:
@@ -801,7 +869,7 @@ class Executor:
                     return recovery
             raise wrapped from exc
 
-        # Step 10 -- Return
+        # Step 11 -- Return
         return output
 
     async def stream(
@@ -853,10 +921,10 @@ class Executor:
             if not allowed:
                 raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
 
-        # Step 4.5 -- Approval Gate
+        # Step 5 -- Approval Gate
         await self._check_approval_async(module, module_id, effective_inputs, ctx)
 
-        # Step 5 -- Input Validation and Redaction
+        # Step 6 -- Input Validation and Redaction
         if hasattr(module, "input_schema") and module.input_schema is not None:
             try:
                 module.input_schema.model_validate(effective_inputs)
@@ -870,7 +938,7 @@ class Executor:
         executed_middlewares: list[Middleware] = []
 
         try:
-            # Step 6 -- Middleware Before (async-aware)
+            # Step 7 -- Middleware Before (async-aware)
             try:
                 effective_inputs, executed_middlewares = await self._middleware_manager.execute_before_async(
                     module_id, effective_inputs, ctx
@@ -890,12 +958,12 @@ class Executor:
             if ctx.cancel_token is not None:
                 ctx.cancel_token.check()
 
-            # Step 7 -- Stream or fallback
+            # Step 8 -- Stream or fallback
             if not hasattr(module, "stream") or module.stream is None:
                 # Fallback: delegate to _execute_async, yield single chunk
                 output = await self._execute_async(module, module_id, effective_inputs, ctx)
 
-                # Step 8 -- Output Validation and Redaction
+                # Step 9 -- Output Validation and Redaction
                 if hasattr(module, "output_schema") and module.output_schema is not None:
                     try:
                         module.output_schema.model_validate(output)
@@ -907,7 +975,7 @@ class Executor:
 
                     ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
-                # Step 9 -- Middleware After (async-aware)
+                # Step 10 -- Middleware After (async-aware)
                 output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)
 
                 yield output
@@ -918,7 +986,7 @@ class Executor:
                     _deep_merge(accumulated, chunk)
                     yield chunk
 
-                # Step 8 -- Output Validation and Redaction on accumulated result
+                # Step 9 -- Output Validation and Redaction on accumulated result
                 if hasattr(module, "output_schema") and module.output_schema is not None:
                     try:
                         module.output_schema.model_validate(accumulated)
@@ -932,7 +1000,7 @@ class Executor:
                         accumulated, module.output_schema.model_json_schema()
                     )
 
-                # Step 9 -- Middleware After on accumulated result (async-aware)
+                # Step 10 -- Middleware After on accumulated result (async-aware)
                 accumulated = await self._middleware_manager.execute_after_async(
                     module_id, effective_inputs, accumulated, ctx
                 )

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-06
+
+### Added
+
+#### Enhanced Executor.validate() Preflight
+- **`PreflightCheckResult`** — New frozen dataclass representing a single preflight check result with `check`, `passed`, and `error` fields.
+- **`PreflightResult`** — New dataclass returned by `Executor.validate()`, containing per-check results and `requires_approval` flag. Duck-type compatible with `ValidationResult` via `.valid` and `.errors` properties.
+- **Full 6-check preflight** — `validate()` now runs Steps 1–6 of the pipeline (module_id format, module lookup, call chain safety, ACL, approval detection, schema validation) without executing module code or middleware.
+
+### Changed
+
+#### Executor Pipeline
+- **Step renumbering** — Approval Gate renumbered from Step 4.5 to Step 5; all subsequent steps shifted +1 (now 11 clean steps).
+- **`validate()` return type** — Changed from `ValidationResult` to `PreflightResult`. Backward compatible: `.valid` and `.errors` still work identically for existing consumers (e.g., apcore-mcp router).
+- **`validate()` signature** — Added optional `context` parameter for call-chain checks; `inputs` now defaults to `{}`.
+
+#### Public API
+- Exported `PreflightCheckResult` and `PreflightResult` from `apcore` top-level package.
+
 ## [0.8.0] - 2026-03-05
 
 ### Added
@@ -365,6 +384,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.9.0]: https://github.com/aipartnerup/apcore-python/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/aipartnerup/apcore-python/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/aipartnerup/apcore-python/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/aipartnerup/apcore-python/compare/v0.5.0...v0.6.0

@@ -459,7 +459,7 @@ class TestValidate:
     """Tests for the validate() method."""
 
     def test_valid_inputs(self) -> None:
-        """validate() returns ValidationResult(valid=True) for valid inputs."""
+        """validate() returns PreflightResult(valid=True) for valid inputs."""
         mod = MockModule()
         ex = _make_executor(module=mod)
         result = ex.validate("test.module", {"name": "Alice", "age": 30})
@@ -467,7 +467,7 @@ class TestValidate:
         assert result.errors == []
 
     def test_invalid_inputs(self) -> None:
-        """validate() returns ValidationResult(valid=False) for invalid inputs."""
+        """validate() returns PreflightResult(valid=False) for invalid inputs."""
         mod = MockModule()
         ex = _make_executor(module=mod)
         result = ex.validate("test.module", {"age": "not_a_number"})
@@ -475,17 +475,27 @@ class TestValidate:
         assert len(result.errors) > 0
 
     def test_module_not_found(self) -> None:
-        """validate() raises ModuleNotFoundError for unknown module."""
+        """validate() returns PreflightResult with module_lookup failure for unknown module."""
         ex = _make_executor()
-        with pytest.raises(ModuleNotFoundError):
-            ex.validate("unknown.module", {})
+        result = ex.validate("unknown.module", {})
+        assert result.valid is False
+        assert any(e.get("code") == "MODULE_NOT_FOUND" for e in result.errors)
 
-    def test_skips_pipeline(self) -> None:
-        """validate() does NOT run ACL, middleware, or execution."""
+    def test_acl_check(self) -> None:
+        """validate() checks ACL and reports denial without executing."""
         mod = MockModule()
         acl = ACL(rules=[], default_effect="deny")
         ex = _make_executor(module=mod, acl=acl)
         result = ex.validate("test.module", {"name": "Alice"})
+        assert result.valid is False
+        assert any(e.get("code") == "ACL_DENIED" for e in result.errors)
+        assert len(mod.execute_calls) == 0
+
+    def test_skips_execution(self) -> None:
+        """validate() does NOT run middleware or execution."""
+        mod = MockModule()
+        ex = _make_executor(module=mod)
+        result = ex.validate("test.module", {"name": "Alice", "age": 30})
         assert result.valid is True
         assert len(mod.execute_calls) == 0
 
