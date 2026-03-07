@@ -11,7 +11,7 @@ Schema-driven module development framework for AI-perceivable interfaces.
 ## Features
 
 - **Schema-driven modules** -- Define input/output contracts using Pydantic models with automatic validation
-- **10-step execution pipeline** -- Context creation, safety checks, ACL enforcement, validation, middleware chains, and execution with timeout support
+- **11-step execution pipeline** -- Context creation, safety checks, ACL enforcement, approval gate, validation, middleware chains, and execution with timeout support
 - **`@module` decorator** -- Turn plain functions into fully schema-aware modules with zero boilerplate
 - **YAML bindings** -- Register modules declaratively without modifying source code
 - **Access control (ACL)** -- Pattern-based, first-match-wins rules with wildcard support
@@ -19,7 +19,7 @@ Schema-driven module development framework for AI-perceivable interfaces.
 - **Observability** -- Tracing (spans), metrics collection, and structured context logging
 - **Async support** -- Seamless sync and async module execution
 - **Safety guards** -- Call depth limits, circular call detection, frequency throttling
-- **Approval system** -- Pluggable approval gate (Step 4.5) with sync/async handlers, Phase B resume, and audit events
+- **Approval system** -- Pluggable approval gate (Step 5) with sync/async handlers, Phase B resume, and audit events
 - **Extension points** -- Unified extension management for discoverers, middleware, ACL, approval handlers, span exporters, and module validators
 - **Async task management** -- Background module execution with status tracking, cancellation, and concurrency limiting
 - **W3C Trace Context** -- traceparent header injection/extraction for distributed tracing interop
@@ -47,21 +47,47 @@ pip install -e ".[dev]"
 
 ## Quick Start
 
-### Define a module with the decorator
+### Simple usage (Global Client)
+
+For simple scripts or prototypes, you can use the global `apcore` functions:
 
 ```python
-from apcore import module
+import apcore
 
-@module(description="Add two integers", tags=["math"])
+@apcore.module(id="math.add", description="Add two integers")
 def add(a: int, b: int) -> int:
     return a + b
+
+# Directly call it
+result = apcore.call("math.add", {"a": 10, "b": 5})
+print(result)  # {'result': 15}
 ```
 
-### Define a module with a class
+### Simplified Client (Recommended)
+
+The `APCore` client provides a unified entry point that manages everything for you:
+
+```python
+from apcore import APCore
+
+client = APCore()
+
+@client.module(id="math.add", description="Add two integers")
+def add(a: int, b: int) -> int:
+    return a + b
+
+# Call the module
+result = client.call("math.add", {"a": 10, "b": 5})
+print(result)  # {'result': 15}
+```
+
+### Advanced: Define a module with a class
 
 ```python
 from pydantic import BaseModel
-from apcore import Context
+from apcore import Context, APCore
+
+client = APCore()
 
 class GreetInput(BaseModel):
     name: str
@@ -76,18 +102,9 @@ class GreetModule:
 
     def execute(self, inputs: dict, context: Context) -> dict:
         return {"message": f"Hello, {inputs['name']}!"}
-```
 
-### Register and execute
-
-```python
-from apcore import Registry, Executor
-
-registry = Registry()
-registry.register("greet", GreetModule())
-
-executor = Executor(registry=registry)
-result = executor.call("greet", {"name": "Alice"})
+client.register("greet", GreetModule())
+result = client.call("greet", {"name": "Alice"})
 # {"message": "Hello, Alice!"}
 ```
 
@@ -96,9 +113,10 @@ result = executor.call("greet", {"name": "Alice"})
 ```python
 from apcore import LoggingMiddleware, TracingMiddleware
 
-executor.use(LoggingMiddleware())
-executor.use(TracingMiddleware())
+client.use(LoggingMiddleware())
+client.use(TracingMiddleware())
 ```
+
 
 ### Access control
 

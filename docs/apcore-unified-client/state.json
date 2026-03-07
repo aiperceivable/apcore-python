@@ -1,0 +1,58 @@
+{
+  "feature": "apcore-unified-client",
+  "status": "completed",
+  "project_root": "/Users/tercelyi/Workspace/aipartnerup/apcore-python",
+  "test_command": "cd /Users/tercelyi/Workspace/aipartnerup/apcore-python && python -m pytest tests/test_client.py -v",
+  "lint_command": "cd /Users/tercelyi/Workspace/aipartnerup/apcore-python && python -m ruff check --fix src/apcore/client.py tests/test_client.py",
+  "created_at": "2026-03-07",
+  "completed_at": "2026-03-07",
+  "results": {
+    "tests_total": 27,
+    "tests_passed": 27,
+    "coverage_client_py": "100%",
+    "full_suite_passed": 1558,
+    "full_suite_failed": 0,
+    "lint_clean": true
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Fix @client.module() decorator return value",
+      "status": "completed",
+      "priority": "P0",
+      "files": ["src/apcore/client.py"]
+    },
+    {
+      "id": "T2",
+      "title": "Add comprehensive decorator tests",
+      "status": "completed",
+      "priority": "P0",
+      "depends_on": ["T1"],
+      "files": ["tests/test_client.py"]
+    },
+    {
+      "id": "T3",
+      "title": "Add construction and core method tests",
+      "status": "completed",
+      "priority": "P0",
+      "depends_on": ["T1"],
+      "files": ["tests/test_client.py"]
+    },
+    {
+      "id": "T4",
+      "title": "Add discover() and list_modules() methods",
+      "status": "completed",
+      "priority": "P1",
+      "depends_on": ["T3"],
+      "files": ["src/apcore/client.py", "src/apcore/__init__.py", "tests/test_client.py"]
+    },
+    {
+      "id": "T5",
+      "title": "Verify coverage >= 90% and lint clean",
+      "status": "completed",
+      "priority": "P0",
+      "depends_on": ["T1", "T2", "T3", "T4"],
+      "files": []
+    }
+  ]
+}

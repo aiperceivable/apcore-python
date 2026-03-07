@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-03-07
+
+### Added
+
+#### APCore Unified Client
+- **`APCore.stream()`** — Stream module output chunk by chunk via the unified client.
+- **`APCore.validate()`** — Non-destructive preflight check via the unified client.
+- **`APCore.describe()`** — Get module description info (for AI/LLM use).
+- **`APCore.use_before()`** — Add before function middleware via the unified client.
+- **`APCore.use_after()`** — Add after function middleware via the unified client.
+- **`APCore.remove()`** — Remove middleware by identity via the unified client.
+
+#### Global Entry Points (`apcore.*`)
+- **`apcore.stream()`** — Global convenience for streaming module calls.
+- **`apcore.validate()`** — Global convenience for preflight validation.
+- **`apcore.register()`** — Global convenience for direct module registration.
+- **`apcore.describe()`** — Global convenience for module description.
+- **`apcore.use()`** — Global convenience for adding middleware.
+- **`apcore.use_before()`** — Global convenience for adding before middleware.
+- **`apcore.use_after()`** — Global convenience for adding after middleware.
+- **`apcore.remove()`** — Global convenience for removing middleware.
+
+#### Error Hierarchy
+- **`FeatureNotImplementedError`** — New error class for `GENERAL_NOT_IMPLEMENTED` code (renamed from `NotImplementedError` to avoid Python stdlib clash).
+- **`DependencyNotFoundError`** — New error class for `DEPENDENCY_NOT_FOUND` code.
+
+### Changed
+- APCore client and `apcore.*` global functions now provide full feature parity with `Executor`.
+
+---
+
 ## [0.9.0] - 2026-03-06
 
 ### Added
@@ -384,6 +415,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.10.0]: https://github.com/aipartnerup/apcore-python/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/aipartnerup/apcore-python/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/aipartnerup/apcore-python/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/aipartnerup/apcore-python/compare/v0.6.0...v0.7.0
