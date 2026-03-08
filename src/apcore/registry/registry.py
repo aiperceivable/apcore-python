@@ -25,6 +25,7 @@ from apcore.registry.metadata import (
 from apcore.registry.scanner import scan_extensions, scan_multi_root
 from apcore.registry.types import DependencyInfo, ModuleDescriptor
 from apcore.registry.validation import validate_module
+from apcore.registry.version import VersionedStore
 
 if TYPE_CHECKING:
     from apcore.config import Config
@@ -122,6 +123,9 @@ class Registry:
         self._modules: dict[str, Any] = {}
         self._module_meta: dict[str, dict[str, Any]] = {}
         self._lowercase_map: dict[str, str] = {}
+        # Versioned storage for multi-version module support (F18)
+        self._versioned_modules: VersionedStore[Any] = VersionedStore()
+        self._versioned_meta: VersionedStore[dict[str, Any]] = VersionedStore()
         self._callbacks: dict[str, list[Callable[..., Any]]] = {
             REGISTRY_EVENTS["REGISTER"]: [],
             REGISTRY_EVENTS["UNREGISTER"]: [],
@@ -365,15 +369,23 @@ class Registry:
 
     # ----- Manual Registration -----
 
-    def register(self, module_id: str, module: Any) -> None:
+    def register(
+        self,
+        module_id: str,
+        module: Any,
+        version: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Manually register a module instance.
 
         Args:
             module_id: Unique identifier for the module.
             module: Module instance to register.
+            version: Optional semver version string for versioned registration.
+            metadata: Optional metadata dict (may include x-compatible-versions, x-deprecation).
 
         Raises:
-            InvalidInputError: If module_id is already registered.
+            InvalidInputError: If module_id is already registered (non-versioned).
             RuntimeError: If module.on_load() fails (propagated).
         """
         if not module_id:
@@ -388,20 +400,39 @@ class Registry:
         if len(module_id) > MAX_MODULE_ID_LENGTH:
             raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
 
-        with self._lock:
-            conflict = detect_id_conflicts(
-                new_id=module_id,
-                existing_ids=set(self._modules.keys()),
-                reserved_words=RESERVED_WORDS,
-                lowercase_map=self._lowercase_map,
-            )
-            if conflict is not None:
-                if conflict.severity == "error":
-                    raise InvalidInputError(message=conflict.message)
-                else:
-                    logger.warning("ID conflict: %s", conflict.message)
+        effective_version = version or getattr(module, "version", None) or "0.0.0"
 
-            self._modules[module_id] = module
+        is_versioned = version is not None
+
+        with self._lock:
+            # For explicit versioned registration, skip conflict check when
+            # the module_id already exists (we allow multiple versions).
+            # For non-versioned registration, preserve original conflict detection.
+            if is_versioned and self._versioned_modules.has(module_id):
+                # Multi-version: allow adding another version
+                pass
+            else:
+                conflict = detect_id_conflicts(
+                    new_id=module_id,
+                    existing_ids=set(self._modules.keys()),
+                    reserved_words=RESERVED_WORDS,
+                    lowercase_map=self._lowercase_map,
+                )
+                if conflict is not None:
+                    if conflict.severity == "error":
+                        raise InvalidInputError(message=conflict.message)
+                    else:
+                        logger.warning("ID conflict: %s", conflict.message)
+
+            # Store in versioned store
+            self._versioned_modules.add(module_id, effective_version, module)
+            if metadata:
+                self._versioned_meta.add(module_id, effective_version, metadata)
+
+            # Always point the primary map to the latest version
+            latest = self._versioned_modules.get_latest(module_id)
+            if latest is not None:
+                self._modules[module_id] = latest
             self._lowercase_map[module_id.lower()] = module_id
 
         # Call on_load if available
@@ -410,7 +441,10 @@ class Registry:
                 module.on_load()
             except Exception:
                 with self._lock:
-                    self._modules.pop(module_id, None)
+                    self._versioned_modules.remove(module_id, effective_version)
+                    self._versioned_meta.remove(module_id, effective_version)
+                    if not self._versioned_modules.has(module_id):
+                        self._modules.pop(module_id, None)
                 raise
 
         self._trigger_event("register", module_id, module)
@@ -427,6 +461,8 @@ class Registry:
             self._module_meta.pop(module_id, None)
             self._schema_cache.pop(module_id, None)
             self._lowercase_map.pop(module_id.lower(), None)
+            self._versioned_modules.remove_all(module_id)
+            self._versioned_meta.remove_all(module_id)
 
         # Call on_unload if available
         if hasattr(module, "on_unload") and callable(module.on_unload):
@@ -440,8 +476,11 @@ class Registry:
 
     # ----- Query Methods -----
 
-    def get(self, module_id: str) -> Any:
-        """Look up a module by ID. Returns None if not found.
+    def get(self, module_id: str, version_hint: str | None = None) -> Any:
+        """Look up a module by ID and optional version hint. Returns None if not found.
+
+        If version_hint is provided, resolves to the best matching version.
+        If no hint, returns the latest version.
 
         Raises:
             ModuleNotFoundError: If module_id is empty string.
@@ -449,6 +488,13 @@ class Registry:
         if module_id == "":
             raise ModuleNotFoundError(module_id="")
         with self._lock:
+            if version_hint is not None:
+                return self._versioned_modules.resolve(module_id, version_hint)
+            # No hint: return latest from versioned store if available,
+            # otherwise fall back to primary map
+            latest = self._versioned_modules.get_latest(module_id)
+            if latest is not None:
+                return latest
             return self._modules.get(module_id)
 
     def has(self, module_id: str) -> bool:
@@ -457,7 +503,7 @@ class Registry:
             return module_id in self._modules
 
     def list(self, tags: list[str] | None = None, prefix: str | None = None) -> list[str]:
-        """Return sorted list of registered module IDs, optionally filtered."""
+        """Return sorted list of unique registered module IDs, optionally filtered."""
         with self._lock:
             snapshot = dict(self._modules)
             meta_snapshot = dict(self._module_meta)
@@ -502,20 +548,30 @@ class Registry:
         with self._lock:
             return sorted(self._modules.keys())
 
-    def get_definition(self, module_id: str) -> ModuleDescriptor | None:
-        """Get a ModuleDescriptor for a registered module. Returns None if not found."""
+    def get_definition(self, module_id: str, version_hint: str | None = None) -> ModuleDescriptor | None:
+        """Get a ModuleDescriptor for a registered module. Returns None if not found.
+
+        Args:
+            module_id: The module ID.
+            version_hint: Optional version hint for selecting a specific version.
+        """
+        module = self.get(module_id, version_hint=version_hint)
+        if module is None:
+            return None
+
         with self._lock:
-            module = self._modules.get(module_id)
-            if module is None:
-                return None
             meta = dict(self._module_meta.get(module_id, {}))
+            # Resolve versioned metadata
+            version_str = getattr(module, "version", None) or "0.0.0"
+            versioned_meta = self._versioned_meta.get(module_id, version_str)
+            if versioned_meta:
+                meta["metadata"] = {**meta.get("metadata", {}), **versioned_meta}
 
         cls = type(module)
 
         input_schema_cls = getattr(module, "input_schema", None) or getattr(cls, "input_schema", None)
         output_schema_cls = getattr(module, "output_schema", None) or getattr(cls, "output_schema", None)
 
-        # Ensure deferred annotations are resolved (from __future__ import annotations)
         for schema_cls in (input_schema_cls, output_schema_cls):
             if schema_cls is not None and hasattr(schema_cls, "model_rebuild"):
                 try:
@@ -525,6 +581,13 @@ class Registry:
 
         input_json = input_schema_cls.model_json_schema() if input_schema_cls else {}
         output_json = output_schema_cls.model_json_schema() if output_schema_cls else {}
+
+        effective_metadata = meta.get("metadata", {})
+
+        # Log deprecation warning if x-deprecation is present
+        deprecation = effective_metadata.get("x-deprecation")
+        if deprecation:
+            self._log_deprecation_warning(module_id, version_str, deprecation)
 
         return ModuleDescriptor(
             module_id=module_id,
@@ -537,8 +600,20 @@ class Registry:
             tags=list(meta.get("tags") or getattr(module, "tags", None) or []),
             annotations=getattr(module, "annotations", None),
             examples=list(getattr(module, "examples", []) or []),
-            metadata=meta.get("metadata", {}),
+            metadata=effective_metadata,
         )
+
+    def _log_deprecation_warning(self, module_id: str, version: str, deprecation: dict[str, Any]) -> None:
+        """Log a deprecation warning for a module version."""
+        deprecated_since = deprecation.get("deprecated_since", "unknown")
+        sunset_version = deprecation.get("sunset_version", "unknown")
+        migration_guide = deprecation.get("migration_guide", "")
+        msg = (
+            f"Module '{module_id}' v{version} is deprecated " f"(since {deprecated_since}, sunset in {sunset_version})."
+        )
+        if migration_guide:
+            msg += f" Migration: {migration_guide}"
+        logger.warning(msg)
 
     def describe(self, module_id: str) -> str:
         """Return a human-readable description of a module.
@@ -858,6 +933,23 @@ class Registry:
             if mid.endswith(basename) or mid == basename:
                 return mid
         return None
+
+    # ----- Public accessors for internal state -----
+
+    def get_module_metadata(self, module_id: str) -> dict[str, Any]:
+        """Return metadata dict for a module, or empty dict if not found."""
+        with self._lock:
+            return dict(self._module_meta.get(module_id, {}))
+
+    def register_internal(self, module_id: str, module: Any) -> None:
+        """Register a module bypassing reserved word validation.
+
+        Used by sys modules that use the reserved 'system.' prefix.
+        """
+        with self._lock:
+            self._modules[module_id] = module
+            self._lowercase_map[module_id.lower()] = module_id
+        self._trigger_event("register", module_id, module)
 
     # ----- Cache -----
 

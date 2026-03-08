@@ -1,0 +1,276 @@
+"""system.health sys modules -- summary and single-module health."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from apcore.config import Config
+from apcore.errors import InvalidInputError, ModuleNotFoundError
+from apcore.module import ModuleAnnotations
+from apcore.observability.error_history import ErrorHistory
+from apcore.observability.metrics import MetricsCollector
+from apcore.registry.registry import Registry
+
+__all__ = ["HealthSummaryModule", "HealthModuleModule", "classify_health_status"]
+
+# Default thresholds for status classification.
+_DEFAULT_HEALTHY_THRESHOLD = 0.01  # < 1% error rate
+_DEFAULT_DEGRADED_THRESHOLD = 0.10  # < 10% error rate
+
+
+def classify_health_status(
+    error_rate: float,
+    total_calls: int,
+    healthy_threshold: float = _DEFAULT_HEALTHY_THRESHOLD,
+    degraded_threshold: float = _DEFAULT_DEGRADED_THRESHOLD,
+) -> str:
+    """Classify a module's health status based on error rate and call count.
+
+    Args:
+        error_rate: Error rate as a float (0.0-1.0).
+        total_calls: Total number of calls.
+        healthy_threshold: Error rate below which status is "healthy" (default 1%).
+        degraded_threshold: Error rate below which status is "degraded" (default 10%).
+
+    Returns:
+        ``"unknown"`` if no calls, ``"healthy"``, ``"degraded"``, or ``"error"``.
+    """
+    if total_calls == 0:
+        return "unknown"
+    if error_rate < healthy_threshold:
+        return "healthy"
+    if error_rate < degraded_threshold:
+        return "degraded"
+    return "error"
+
+
+def _get_call_counts(metrics: MetricsCollector, module_id: str) -> tuple[int, int]:
+    """Return (total_calls, error_calls) for a module from metrics."""
+    snapshot = metrics.snapshot()
+    counters = snapshot.get("counters", {})
+    success_key = (
+        "apcore_module_calls_total",
+        (("module_id", module_id), ("status", "success")),
+    )
+    error_key = (
+        "apcore_module_calls_total",
+        (("module_id", module_id), ("status", "error")),
+    )
+    success_calls: int = counters.get(success_key, 0)
+    error_calls: int = counters.get(error_key, 0)
+    return success_calls + error_calls, error_calls
+
+
+class HealthSummaryModule:
+    """Aggregated health overview of all registered modules."""
+
+    description = "Aggregated health overview of all registered modules"
+    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+
+    def __init__(
+        self,
+        registry: Registry,
+        metrics_collector: MetricsCollector,
+        error_history: ErrorHistory,
+        config: Config | None = None,
+    ) -> None:
+        self._registry = registry
+        self._metrics = metrics_collector
+        self._error_history = error_history
+        self._config = config
+
+    def execute(self, inputs: dict[str, Any], context: Any) -> dict[str, Any]:
+        """Produce an aggregated health summary of all registered modules."""
+        healthy_threshold = float(inputs.get("error_rate_threshold", _DEFAULT_HEALTHY_THRESHOLD))
+        degraded_threshold = healthy_threshold * 10.0
+        include_healthy: bool = inputs.get("include_healthy", True)
+
+        project_name = self._get_project_name()
+        module_ids = self._registry.list()
+
+        modules_output: list[dict[str, Any]] = []
+        counts = {"healthy": 0, "degraded": 0, "error": 0, "unknown": 0}
+
+        for mid in module_ids:
+            total_calls, error_calls = self._get_call_counts(mid)
+            error_rate = self._compute_error_rate(total_calls, error_calls)
+            status = classify_health_status(error_rate, total_calls, healthy_threshold, degraded_threshold)
+            counts[status] += 1
+
+            if not include_healthy and status == "healthy":
+                continue
+
+            top_error = self._get_top_error(mid)
+            modules_output.append(
+                {
+                    "module_id": mid,
+                    "status": status,
+                    "error_rate": error_rate,
+                    "top_error": top_error,
+                }
+            )
+
+        return {
+            "project": {"name": project_name},
+            "summary": {
+                "total_modules": len(module_ids),
+                **counts,
+            },
+            "modules": modules_output,
+        }
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _get_project_name(self) -> str:
+        """Extract project name from config."""
+        if self._config is not None:
+            name = self._config.get("project.name")
+            if name:
+                return str(name)
+        return "apcore"
+
+    def _get_call_counts(self, module_id: str) -> tuple[int, int]:
+        """Return (total_calls, error_calls) for a module from metrics."""
+        return _get_call_counts(self._metrics, module_id)
+
+    @staticmethod
+    def _compute_error_rate(total: int, errors: int) -> float:
+        """Compute error rate; 0.0 when no calls."""
+        if total == 0:
+            return 0.0
+        return errors / total
+
+    def _get_top_error(self, module_id: str) -> dict[str, Any] | None:
+        """Get the most frequent error for a module from ErrorHistory."""
+        entries = self._error_history.get(module_id)
+        if not entries:
+            return None
+        top = max(entries, key=lambda e: e.count)
+        return {
+            "code": top.code,
+            "message": top.message,
+            "ai_guidance": top.ai_guidance,
+            "count": top.count,
+        }
+
+
+# ------------------------------------------------------------------
+# system.health.module
+# ------------------------------------------------------------------
+
+
+class HealthModuleModule:
+    """Detailed health information for a single module."""
+
+    description = "Detailed health information for a single module"
+    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+
+    def __init__(
+        self,
+        registry: Registry,
+        metrics_collector: MetricsCollector,
+        error_history: ErrorHistory,
+    ) -> None:
+        self._registry = registry
+        self._metrics = metrics_collector
+        self._error_history = error_history
+
+    def execute(self, inputs: dict[str, Any], context: Any) -> dict[str, Any]:
+        """Return detailed health info for the specified module."""
+        module_id = inputs.get("module_id")
+        if not module_id:
+            raise InvalidInputError(message="module_id is required")
+
+        if not self._registry.has(module_id):
+            raise ModuleNotFoundError(module_id=module_id)
+
+        error_limit: int = inputs.get("error_limit", 10)
+
+        total_calls, error_count = self._get_call_counts(module_id)
+        error_rate = error_count / total_calls if total_calls > 0 else 0.0
+        status = classify_health_status(error_rate, total_calls)
+        avg_latency_ms, p99_latency_ms = self._get_latency(module_id)
+        recent_errors = self._get_recent_errors(module_id, error_limit)
+
+        return {
+            "module_id": module_id,
+            "status": status,
+            "total_calls": total_calls,
+            "error_count": error_count,
+            "error_rate": error_rate,
+            "avg_latency_ms": avg_latency_ms,
+            "p99_latency_ms": p99_latency_ms,
+            "recent_errors": recent_errors,
+        }
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _get_call_counts(self, module_id: str) -> tuple[int, int]:
+        """Return (total_calls, error_calls) for a module from metrics."""
+        return _get_call_counts(self._metrics, module_id)
+
+    def _get_latency(self, module_id: str) -> tuple[float, float]:
+        """Return (avg_latency_ms, p99_latency_ms) from histogram data."""
+        snapshot = self._metrics.snapshot()
+        histograms = snapshot.get("histograms", {})
+        sums = histograms.get("sums", {})
+        counts = histograms.get("counts", {})
+        buckets = histograms.get("buckets", {})
+
+        labels_key = (("module_id", module_id),)
+        hist_name = "apcore_module_duration_seconds"
+
+        total_sum: float = sums.get((hist_name, labels_key), 0.0)
+        total_count: int = counts.get((hist_name, labels_key), 0)
+
+        avg_ms = (total_sum / total_count * 1000.0) if total_count > 0 else 0.0
+        p99_ms = self._estimate_p99(hist_name, labels_key, buckets, total_count)
+
+        return avg_ms, p99_ms
+
+    @staticmethod
+    def _estimate_p99(
+        hist_name: str,
+        labels_key: tuple[tuple[str, str], ...],
+        buckets: dict[tuple[str, tuple[tuple[str, str], ...], float], int],
+        total_count: int,
+    ) -> float:
+        """Estimate p99 latency in ms from histogram buckets."""
+        if total_count == 0:
+            return 0.0
+
+        target = total_count * 0.99
+
+        # Collect finite bucket boundaries and sort them
+        bucket_bounds: list[float] = sorted(
+            b for (name, lk, b) in buckets if name == hist_name and lk == labels_key and b != float("inf")
+        )
+
+        for bound in bucket_bounds:
+            count = buckets.get((hist_name, labels_key, bound), 0)
+            if count >= target:
+                return bound * 1000.0
+
+        # Fall back to last finite bucket or 0
+        if bucket_bounds:
+            return bucket_bounds[-1] * 1000.0
+        return 0.0
+
+    def _get_recent_errors(self, module_id: str, limit: int) -> list[dict[str, Any]]:
+        """Return recent errors formatted as dicts."""
+        entries = self._error_history.get(module_id, limit=limit)
+        return [
+            {
+                "code": e.code,
+                "message": e.message,
+                "ai_guidance": e.ai_guidance,
+                "count": e.count,
+                "first_occurred": e.first_occurred,
+                "last_occurred": e.last_occurred,
+            }
+            for e in entries
+        ]

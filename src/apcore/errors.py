@@ -17,6 +17,7 @@ __all__ = [
     "ApprovalTimeoutError",
     "ApprovalPendingError",
     "ModuleNotFoundError",
+    "ModuleDisabledError",
     "ModuleTimeoutError",
     "SchemaValidationError",
     "SchemaNotFoundError",
@@ -37,6 +38,7 @@ __all__ = [
     "CircularDependencyError",
     "ModuleLoadError",
     "ModuleExecuteError",
+    "ReloadFailedError",
     "InternalError",
     "ErrorCodes",
     "ErrorCodeCollisionError",
@@ -260,6 +262,20 @@ class ModuleNotFoundError(ModuleError):
         super().__init__(
             code="MODULE_NOT_FOUND",
             message=f"Module not found: {module_id}",
+            details={"module_id": module_id},
+            **kwargs,
+        )
+
+
+class ModuleDisabledError(ModuleError):
+    """Raised when a disabled module is called."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, module_id: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="MODULE_DISABLED",
+            message=f"Module '{module_id}' is disabled",
             details={"module_id": module_id},
             **kwargs,
         )
@@ -581,6 +597,20 @@ class ModuleLoadError(ModuleError):
         )
 
 
+class ReloadFailedError(ModuleError):
+    """Raised when module hot-reload fails during re-discover or re-register."""
+
+    _default_retryable: bool | None = True
+
+    def __init__(self, module_id: str, reason: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="RELOAD_FAILED",
+            message=f"Failed to reload module '{module_id}': {reason}",
+            details={"module_id": module_id, "reason": reason},
+            **kwargs,
+        )
+
+
 class ModuleExecuteError(ModuleError):
     """Raised when module execution fails with an unhandled error."""
 
@@ -652,9 +682,11 @@ class ErrorCodes:
     ACL_RULE_ERROR = "ACL_RULE_ERROR"
     ACL_DENIED = "ACL_DENIED"
     MODULE_NOT_FOUND = "MODULE_NOT_FOUND"
+    MODULE_DISABLED = "MODULE_DISABLED"
     MODULE_TIMEOUT = "MODULE_TIMEOUT"
     MODULE_LOAD_ERROR = "MODULE_LOAD_ERROR"
     MODULE_EXECUTE_ERROR = "MODULE_EXECUTE_ERROR"
+    RELOAD_FAILED = "RELOAD_FAILED"
     SCHEMA_VALIDATION_ERROR = "SCHEMA_VALIDATION_ERROR"
     SCHEMA_NOT_FOUND = "SCHEMA_NOT_FOUND"
     SCHEMA_PARSE_ERROR = "SCHEMA_PARSE_ERROR"

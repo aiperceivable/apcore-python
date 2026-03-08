@@ -286,6 +286,7 @@ class Executor:
         module_id: str,
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
+        version_hint: str | None = None,
     ) -> dict[str, Any]:
         """Execute a module through the 11-step pipeline.
 
@@ -293,6 +294,7 @@ class Executor:
             module_id: The module to execute.
             inputs: Input data dict. None is treated as {}.
             context: Optional execution context. Auto-created if None.
+            version_hint: Optional semver hint for version negotiation.
 
         Returns:
             The module output dict, possibly modified by middleware.
@@ -314,8 +316,8 @@ class Executor:
         # Step 2 -- Safety Checks
         self._check_safety(module_id, ctx)
 
-        # Step 3 -- Lookup
-        module = self._registry.get(module_id)
+        # Step 3 -- Lookup (with version negotiation)
+        module = self._registry.get(module_id, version_hint=version_hint)
         if module is None:
             raise ModuleNotFoundError(module_id=module_id)
 
@@ -763,6 +765,7 @@ class Executor:
         module_id: str,
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
+        version_hint: str | None = None,
     ) -> dict[str, Any]:
         """Async counterpart to call(). Supports async modules natively.
 
@@ -770,6 +773,7 @@ class Executor:
             module_id: The module to execute.
             inputs: Input data dict. None is treated as {}.
             context: Optional execution context. Auto-created if None.
+            version_hint: Optional semver hint for version negotiation.
 
         Returns:
             The module output dict, possibly modified by middleware.
@@ -792,7 +796,7 @@ class Executor:
         self._check_safety(module_id, ctx)
 
         # Step 3 -- Lookup
-        module = self._registry.get(module_id)
+        module = self._registry.get(module_id, version_hint=version_hint)
         if module is None:
             raise ModuleNotFoundError(module_id=module_id)
 
@@ -877,6 +881,7 @@ class Executor:
         module_id: str,
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
+        version_hint: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Async generator that streams module output chunks.
 
@@ -890,6 +895,7 @@ class Executor:
             module_id: The module to execute.
             inputs: Input data dict. None is treated as {}.
             context: Optional execution context. Auto-created if None.
+            version_hint: Optional semver hint for version negotiation.
 
         Yields:
             Dict chunks from the module's stream() or a single call_async() result.
@@ -911,7 +917,7 @@ class Executor:
         self._check_safety(module_id, ctx)
 
         # Step 3 -- Lookup
-        module = self._registry.get(module_id)
+        module = self._registry.get(module_id, version_hint=version_hint)
         if module is None:
             raise ModuleNotFoundError(module_id=module_id)
 

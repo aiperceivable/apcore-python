@@ -1,0 +1,190 @@
+"""PlatformNotifyMiddleware -- threshold sensor with hysteresis (PRD F8)."""
+
+from __future__ import annotations
+
+import threading
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any
+
+from apcore.events.emitter import ApCoreEvent, EventEmitter
+from apcore.middleware.base import Context, Middleware
+from apcore.observability.metrics import MetricsCollector
+
+
+class PlatformNotifyMiddleware(Middleware):
+    """Monitors error rates and latency, emits threshold events with hysteresis.
+
+    Emits ``error_threshold_exceeded`` when a module's error rate crosses the
+    configured threshold, ``latency_threshold_exceeded`` when p99 latency
+    exceeds the limit, and ``module_health_changed`` when a previously alerted
+    module recovers below ``threshold * 0.5``.
+
+    Hysteresis prevents repeated alerts until recovery is observed.
+    """
+
+    def __init__(
+        self,
+        event_emitter: EventEmitter,
+        metrics_collector: MetricsCollector | None = None,
+        error_rate_threshold: float = 0.1,
+        latency_p99_threshold_ms: float = 5000.0,
+    ) -> None:
+        self._emitter = event_emitter
+        self._metrics_collector = metrics_collector
+        self._error_rate_threshold = error_rate_threshold
+        self._latency_p99_threshold_ms = latency_p99_threshold_ms
+        self._alert_lock = threading.Lock()
+        self._alerted: dict[str, set[str]] = defaultdict(set)
+
+    # ------------------------------------------------------------------
+    # Middleware hooks
+    # ------------------------------------------------------------------
+
+    def before(self, module_id: str, inputs: dict[str, Any], context: Context) -> dict[str, Any] | None:
+        """No-op before hook."""
+        return None
+
+    def after(
+        self,
+        module_id: str,
+        inputs: dict[str, Any],
+        output: dict[str, Any],
+        context: Context,
+    ) -> dict[str, Any] | None:
+        """Check latency threshold and error-rate recovery after execution."""
+        self._check_latency_threshold(module_id)
+        self._check_error_recovery(module_id)
+        return None
+
+    def on_error(
+        self,
+        module_id: str,
+        inputs: dict[str, Any],
+        error: Exception,
+        context: Context,
+    ) -> dict[str, Any] | None:
+        """Check error rate threshold on error."""
+        self._check_error_rate_threshold(module_id)
+        return None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _compute_error_rate(self, module_id: str) -> float:
+        """Compute the error rate for a module from MetricsCollector counters."""
+        if self._metrics_collector is None:
+            return 0.0
+        snap = self._metrics_collector.snapshot()
+        counters = snap.get("counters", {})
+        total = 0
+        errors = 0
+        for (name, labels_tuple), count in counters.items():
+            if name != "apcore_module_calls_total":
+                continue
+            labels = dict(labels_tuple)
+            if labels.get("module_id") == module_id:
+                total += count
+                if labels.get("status") == "error":
+                    errors += count
+        if total == 0:
+            return 0.0
+        return errors / total
+
+    def _estimate_p99_ms(self, module_id: str) -> float:
+        """Estimate the p99 latency in milliseconds from histogram buckets."""
+        if self._metrics_collector is None:
+            return 0.0
+        snap = self._metrics_collector.snapshot()
+        histograms = snap.get("histograms", {})
+        bucket_data = histograms.get("buckets", {})
+        counts = histograms.get("counts", {})
+
+        # Find the total observation count for this module
+        total_key = None
+        total_count = 0
+        for (name, labels_tuple), count in counts.items():
+            if name != "apcore_module_duration_seconds":
+                continue
+            labels = dict(labels_tuple)
+            if labels.get("module_id") == module_id:
+                total_key = labels_tuple
+                total_count = count
+                break
+
+        if total_count == 0 or total_key is None:
+            return 0.0
+
+        p99_target = total_count * 0.99
+
+        # Walk buckets in ascending order to find the p99 bucket boundary
+        buckets_for_module: list[tuple[float, int]] = []
+        for (name, labels_tuple, boundary), count in bucket_data.items():
+            if name != "apcore_module_duration_seconds":
+                continue
+            if labels_tuple != total_key:
+                continue
+            buckets_for_module.append((boundary, count))
+
+        buckets_for_module.sort(key=lambda x: x[0])
+
+        for boundary, cumulative_count in buckets_for_module:
+            if cumulative_count >= p99_target:
+                # Convert seconds to ms
+                return boundary * 1000.0
+
+        return 0.0
+
+    def _check_error_rate_threshold(self, module_id: str) -> None:
+        """Emit error_threshold_exceeded if rate is above threshold (with hysteresis)."""
+        error_rate = self._compute_error_rate(module_id)
+        with self._alert_lock:
+            if error_rate >= self._error_rate_threshold and "error_rate" not in self._alerted[module_id]:
+                self._emitter.emit(
+                    ApCoreEvent(
+                        event_type="error_threshold_exceeded",
+                        module_id=module_id,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        severity="warning",
+                        data={"error_rate": error_rate, "threshold": self._error_rate_threshold},
+                    )
+                )
+                self._alerted[module_id].add("error_rate")
+
+    def _check_latency_threshold(self, module_id: str) -> None:
+        """Emit latency_threshold_exceeded if p99 is above threshold (with hysteresis)."""
+        p99_ms = self._estimate_p99_ms(module_id)
+        with self._alert_lock:
+            if p99_ms >= self._latency_p99_threshold_ms and "latency" not in self._alerted[module_id]:
+                self._emitter.emit(
+                    ApCoreEvent(
+                        event_type="latency_threshold_exceeded",
+                        module_id=module_id,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        severity="warning",
+                        data={"p99_ms": p99_ms, "threshold_ms": self._latency_p99_threshold_ms},
+                    )
+                )
+                self._alerted[module_id].add("latency")
+
+    def _check_error_recovery(self, module_id: str) -> None:
+        """Emit module_health_changed if error rate dropped below threshold * 0.5."""
+        error_rate = self._compute_error_rate(module_id)
+        with self._alert_lock:
+            if "error_rate" not in self._alerted.get(module_id, set()):
+                return
+            if error_rate < self._error_rate_threshold * 0.5:
+                self._emitter.emit(
+                    ApCoreEvent(
+                        event_type="module_health_changed",
+                        module_id=module_id,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        severity="info",
+                        data={"status": "recovered", "error_rate": error_rate},
+                    )
+                )
+                self._alerted[module_id].discard("error_rate")
+
+
+__all__ = ["PlatformNotifyMiddleware"]

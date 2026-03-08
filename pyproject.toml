@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apcore"
-version = "0.10.0"
+version = "0.11.0"
 description = "Schema-driven module development framework for AI-perceivable interfaces"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,9 +47,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://aipartnerup.com"
 Documentation = "https://github.com/aipartnerup/apcore"
-Repository = "https://github.com/aipartnerup/apcore"
-Issues = "https://github.com/aipartnerup/apcore/issues"
-Changelog = "https://github.com/aipartnerup/apcore/blob/main/CHANGELOG.md"
+Repository = "https://github.com/aipartnerup/apcore-python"
+Issues = "https://github.com/aipartnerup/apcore-python/issues"
+Changelog = "https://github.com/aipartnerup/apcore-python/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

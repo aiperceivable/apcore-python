@@ -8,9 +8,11 @@ import pytest
 from pydantic import BaseModel
 
 from apcore.client import APCore
+from apcore.config import Config
 from apcore.context import Context
 from apcore.decorator import FunctionModule
 from apcore.errors import ModuleNotFoundError
+from apcore.events.emitter import ApCoreEvent
 from apcore.executor import Executor
 from apcore.middleware import Middleware
 from apcore.registry import Registry
@@ -343,6 +345,238 @@ class TestGlobalConvenience:
 
         assert hasattr(apcore, "discover")
         assert callable(apcore.discover)
+
+
+# ---------------------------------------------------------------------------
+# T5: Events convenience tests
+# ---------------------------------------------------------------------------
+
+
+def _sys_config() -> Config:
+    """Create a Config with sys_modules and events enabled."""
+    return Config(
+        {
+            "sys_modules": {
+                "enabled": True,
+                "events": {"enabled": True},
+            },
+        }
+    )
+
+
+class TestEvents:
+    def test_events_none_without_config(self) -> None:
+        client = APCore()
+        assert client.events is None
+
+    def test_events_none_without_sys_modules_enabled(self) -> None:
+        config = Config({"sys_modules": {"enabled": False}})
+        client = APCore(config=config)
+        assert client.events is None
+
+    def test_events_available_with_config(self) -> None:
+        client = APCore(config=_sys_config())
+        assert client.events is not None
+
+    def test_on_raises_without_events(self) -> None:
+        client = APCore()
+        with pytest.raises(RuntimeError, match="Events are not enabled"):
+            client.on("test_event", lambda e: None)
+
+    def test_off_raises_without_events(self) -> None:
+        client = APCore()
+        with pytest.raises(RuntimeError, match="Events are not enabled"):
+            client.off(object())  # type: ignore[arg-type]
+
+    def test_on_subscribes_and_fires(self) -> None:
+        client = APCore(config=_sys_config())
+        received: list[ApCoreEvent] = []
+
+        sub = client.on("my_event", lambda e: received.append(e))
+        assert sub is not None
+
+        event = ApCoreEvent(
+            event_type="my_event",
+            module_id=None,
+            timestamp="2026-01-01T00:00:00Z",
+            severity="info",
+            data={"key": "value"},
+        )
+        assert client.events is not None
+        client.events.emit(event)
+        client.events.flush()
+
+        assert len(received) == 1
+        assert received[0].data == {"key": "value"}
+
+    def test_on_filters_by_event_type(self) -> None:
+        client = APCore(config=_sys_config())
+        received: list[ApCoreEvent] = []
+
+        client.on("target", lambda e: received.append(e))
+
+        assert client.events is not None
+        client.events.emit(
+            ApCoreEvent(
+                event_type="other",
+                module_id=None,
+                timestamp="t",
+                severity="info",
+                data={},
+            )
+        )
+        client.events.emit(
+            ApCoreEvent(
+                event_type="target",
+                module_id=None,
+                timestamp="t",
+                severity="info",
+                data={"hit": True},
+            )
+        )
+        client.events.flush()
+
+        assert len(received) == 1
+        assert received[0].data == {"hit": True}
+
+    def test_on_with_async_handler(self) -> None:
+        client = APCore(config=_sys_config())
+        received: list[ApCoreEvent] = []
+
+        async def handler(e: ApCoreEvent) -> None:
+            received.append(e)
+
+        client.on("async_ev", handler)
+
+        assert client.events is not None
+        client.events.emit(
+            ApCoreEvent(
+                event_type="async_ev",
+                module_id=None,
+                timestamp="t",
+                severity="info",
+                data={"async": True},
+            )
+        )
+        client.events.flush()
+
+        assert len(received) == 1
+        assert received[0].data == {"async": True}
+
+    def test_off_unsubscribes(self) -> None:
+        client = APCore(config=_sys_config())
+        received: list[ApCoreEvent] = []
+
+        sub = client.on("ev", lambda e: received.append(e))
+        client.off(sub)
+
+        assert client.events is not None
+        client.events.emit(
+            ApCoreEvent(
+                event_type="ev",
+                module_id=None,
+                timestamp="t",
+                severity="info",
+                data={},
+            )
+        )
+        client.events.flush()
+
+        assert len(received) == 0
+
+
+# ---------------------------------------------------------------------------
+# T5: Enable/Disable convenience tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnableDisable:
+    def _make_client_with_module(self) -> APCore:
+        """Create a client with sys_modules enabled and a test module registered."""
+        client = APCore(config=_sys_config())
+
+        @client.module(id="math.add")
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        return client
+
+    def test_disable_returns_success(self) -> None:
+        client = self._make_client_with_module()
+        result = client.disable("math.add")
+        assert result["success"] is True
+        assert result["enabled"] is False
+        assert result["module_id"] == "math.add"
+
+    def test_enable_returns_success(self) -> None:
+        client = self._make_client_with_module()
+        client.disable("math.add")
+        result = client.enable("math.add")
+        assert result["success"] is True
+        assert result["enabled"] is True
+
+    def test_disable_nonexistent_raises(self) -> None:
+        client = APCore(config=_sys_config())
+        with pytest.raises(ModuleNotFoundError):
+            client.disable("nonexistent.module")
+
+    def test_custom_reason(self) -> None:
+        client = self._make_client_with_module()
+        result = client.disable("math.add", reason="Maintenance window")
+        assert result["success"] is True
+
+    def test_disable_without_sys_modules_raises_runtime_error(self) -> None:
+        """disable() should raise RuntimeError, not ModuleNotFoundError, when sys_modules not configured."""
+        client = APCore()
+
+        @client.module(id="math.add")
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        with pytest.raises(RuntimeError, match="sys_modules"):
+            client.disable("math.add")
+
+    def test_enable_without_sys_modules_raises_runtime_error(self) -> None:
+        """enable() should raise RuntimeError, not ModuleNotFoundError, when sys_modules not configured."""
+        client = APCore()
+
+        @client.module(id="math.add")
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        with pytest.raises(RuntimeError, match="sys_modules"):
+            client.enable("math.add")
+
+
+# ---------------------------------------------------------------------------
+# T5: Global convenience for events/toggle
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalEventsConvenience:
+    def test_global_on_exists(self) -> None:
+        import apcore
+
+        assert hasattr(apcore, "on")
+        assert callable(apcore.on)
+
+    def test_global_off_exists(self) -> None:
+        import apcore
+
+        assert hasattr(apcore, "off")
+        assert callable(apcore.off)
+
+    def test_global_disable_exists(self) -> None:
+        import apcore
+
+        assert hasattr(apcore, "disable")
+        assert callable(apcore.disable)
+
+    def test_global_enable_exists(self) -> None:
+        import apcore
+
+        assert hasattr(apcore, "enable")
+        assert callable(apcore.enable)
 
 
 # ---------------------------------------------------------------------------

@@ -71,11 +71,13 @@ from apcore.errors import (
     FuncMissingTypeHintError,
     InternalError,
     InvalidInputError,
+    ModuleDisabledError,
     ModuleError,
     ModuleExecuteError,
     ModuleLoadError,
     ModuleNotFoundError,
     ModuleTimeoutError,
+    ReloadFailedError,
     SchemaCircularRefError,
     SchemaNotFoundError,
     SchemaParseError,
@@ -112,7 +114,9 @@ from apcore.bindings import BindingLoader
 
 # Schema
 from apcore.schema import (
+    ExportProfile as ExportProfile,
     SchemaLoader as SchemaLoader,
+    SchemaStrategy as SchemaStrategy,
     SchemaValidator as SchemaValidator,
     SchemaExporter as SchemaExporter,
     RefResolver as RefResolver,
@@ -144,6 +148,9 @@ from apcore.observability import (
     TracingMiddleware,
     create_span,
 )
+
+# Events
+from apcore.events import ApCoreEvent, EventEmitter, EventSubscriber
 
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
@@ -258,7 +265,27 @@ def list_modules(tags: list[str] | None = None, prefix: str | None = None) -> li
     return _default_client.list_modules(tags=tags, prefix=prefix)
 
 
-__version__ = "0.10.0"
+def on(event_type: str, handler: Any) -> EventSubscriber:
+    """Global convenience for _default_client.on()."""
+    return _default_client.on(event_type, handler)
+
+
+def off(subscriber: EventSubscriber) -> None:
+    """Global convenience for _default_client.off()."""
+    _default_client.off(subscriber)
+
+
+def disable(module_id: str, reason: str = "Disabled via APCore client") -> dict[str, Any]:
+    """Global convenience for _default_client.disable()."""
+    return _default_client.disable(module_id, reason)
+
+
+def enable(module_id: str, reason: str = "Enabled via APCore client") -> dict[str, Any]:
+    """Global convenience for _default_client.enable()."""
+    return _default_client.enable(module_id, reason)
+
+
+__version__ = "0.11.0"
 
 __all__ = [
     # Core
@@ -282,6 +309,10 @@ __all__ = [
     "remove",
     "discover",
     "list_modules",
+    "on",
+    "off",
+    "disable",
+    "enable",
     # Approval
     "ApprovalHandler",
     "ApprovalRequest",
@@ -339,9 +370,11 @@ __all__ = [
     "FuncMissingTypeHintError",
     "InternalError",
     "InvalidInputError",
+    "ModuleDisabledError",
     "ModuleExecuteError",
     "ModuleLoadError",
     "ModuleNotFoundError",
+    "ReloadFailedError",
     "ModuleTimeoutError",
     "SchemaCircularRefError",
     "SchemaNotFoundError",
@@ -375,6 +408,8 @@ __all__ = [
     # Bindings
     "BindingLoader",
     # Schema
+    "SchemaStrategy",
+    "ExportProfile",
     "SchemaLoader",
     "SchemaValidator",
     "SchemaExporter",
@@ -400,6 +435,10 @@ __all__ = [
     "OTLPExporter",
     "SpanExporter",
     "create_span",
+    # Events
+    "ApCoreEvent",
+    "EventEmitter",
+    "EventSubscriber",
     # Trace Context
     "TraceContext",
     "TraceParent",

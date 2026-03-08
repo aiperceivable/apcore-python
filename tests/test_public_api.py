@@ -462,6 +462,21 @@ class TestPublicAPIAll:
         # Trace Context
         "TraceContext",
         "TraceParent",
+        # Events
+        "EventEmitter",
+        "EventSubscriber",
+        "ApCoreEvent",
+        "on",
+        "off",
+        # Toggle
+        "disable",
+        "enable",
+        # Schema enums
+        "SchemaStrategy",
+        "ExportProfile",
+        # Additional errors
+        "ModuleDisabledError",
+        "ReloadFailedError",
     }
 
     def test_all_contains_all_expected_names(self):

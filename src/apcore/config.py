@@ -60,6 +60,22 @@ _CONSTRAINTS: dict[str, tuple[Any, str]] = {
         lambda v: isinstance(v, int) and v >= 1,
         "must be a positive integer",
     ),
+    "sys_modules.error_history.max_entries_per_module": (
+        lambda v: isinstance(v, int) and v >= 1,
+        "must be a positive integer",
+    ),
+    "sys_modules.error_history.max_total_entries": (
+        lambda v: isinstance(v, int) and v >= 1,
+        "must be a positive integer",
+    ),
+    "sys_modules.events.thresholds.error_rate": (
+        lambda v: isinstance(v, (int, float)) and 0.0 <= v <= 1.0,
+        "must be a number in [0.0, 1.0]",
+    ),
+    "sys_modules.events.thresholds.latency_p99_ms": (
+        lambda v: isinstance(v, (int, float)) and v > 0,
+        "must be a positive number",
+    ),
 }
 
 #: Default configuration values.
@@ -73,7 +89,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     "schema": {
         "root": "./schemas",
-        "strategy": "yaml_first",
+        "strategy": "native_first",
         "max_ref_depth": 32,
     },
     "acl": {
@@ -97,6 +113,23 @@ _DEFAULTS: dict[str, Any] = {
     },
     "project": {
         "name": "apcore",
+        "source_repo": None,
+        "source_root": "",
+    },
+    "sys_modules": {
+        "enabled": False,
+        "error_history": {
+            "max_entries_per_module": 50,
+            "max_total_entries": 1000,
+        },
+        "events": {
+            "enabled": False,
+            "thresholds": {
+                "error_rate": 0.1,
+                "latency_p99_ms": 5000.0,
+            },
+            "subscribers": [],
+        },
     },
 }
 

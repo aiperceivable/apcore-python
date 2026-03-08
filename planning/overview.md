@@ -3,13 +3,13 @@
 ## Overall Progress
 
 ```
-[>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>] 48/48 tasks (100%)
+[>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>          ] 48/69 tasks (70%)
 ```
 
 | Status | Count |
 |--------|-------|
 | Completed | 8 modules |
-| In Progress | 0 modules |
+| In Progress | 1 module |
 | Pending | 0 modules |
 
 ## Module Overview
@@ -24,6 +24,7 @@
 | 6 | [observability](./observability/) | Distributed tracing, metrics collection, and structured logging middleware | completed | 7/7 |
 | 7 | [decorator-bindings](./decorator-bindings/) | @module decorator for code-first and BindingLoader for YAML-driven module registration | completed | 6/6 |
 | 8 | [approval-system](./approval-system/) | Runtime approval gate at Step 4.5 with ApprovalHandler protocol and Phase A/B flows | completed | 6/6 |
+| 9 | [sys-modules](./sys-modules/) | System modules for AI self-evolution: health sensing, event push, control plane, usage analytics (20 PRD features) | pending | 0/21 |
 
 ## Module Dependencies
 

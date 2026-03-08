@@ -121,8 +121,9 @@ client.use(TracingMiddleware())
 ### Access control
 
 ```python
-from apcore import ACL, ACLRule
+from apcore import ACL, ACLRule, Executor, Registry
 
+registry = Registry()
 acl = ACL(rules=[
     ACLRule(callers=["admin.*"], targets=["*"], effect="allow", description="Admins can call anything"),
     ACLRule(callers=["*"], targets=["admin.*"], effect="deny", description="Others cannot call admin modules"),

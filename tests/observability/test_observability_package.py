@@ -71,6 +71,8 @@ class TestObservabilityPackageExports:
 
         expected = {
             "ContextLogger",
+            "ErrorEntry",
+            "ErrorHistory",
             "InMemoryExporter",
             "MetricsCollector",
             "MetricsMiddleware",

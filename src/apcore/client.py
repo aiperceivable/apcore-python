@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Callable as CallableABC
 from typing import Any, Callable
 
 from apcore.config import Config
 from apcore.context import Context
 from apcore.decorator import module as decorator_module
+from apcore.events.emitter import ApCoreEvent, EventEmitter, EventSubscriber
 from apcore.executor import Executor
 from apcore.module import PreflightResult
+from apcore.observability.metrics import MetricsCollector
 from apcore.registry import Registry
 
 
@@ -25,6 +28,7 @@ class APCore:
         registry: Registry | None = None,
         executor: Executor | None = None,
         config: Config | None = None,
+        metrics_collector: MetricsCollector | None = None,
     ) -> None:
         """Initialize the APCore client.
 
@@ -32,10 +36,39 @@ class APCore:
             registry: Optional Registry instance. Creates a new one if None.
             executor: Optional Executor instance. Creates a new one if None.
             config: Optional Config instance.
+            metrics_collector: Optional MetricsCollector for observability.
+                               Auto-created when sys_modules are enabled and none is provided.
         """
         self.registry = registry or Registry()
         self.config = config
         self.executor = executor or Executor(registry=self.registry, config=config)
+
+        # Auto-register sys.* modules and middleware from config
+        self._sys_modules_context: dict[str, Any] = {}
+        if self.config is not None:
+            from apcore.sys_modules.registration import register_sys_modules
+
+            # Auto-create MetricsCollector when sys_modules are enabled
+            if metrics_collector is None and self.config.get("sys_modules.enabled", False):
+                metrics_collector = MetricsCollector()
+            self.metrics_collector = metrics_collector
+
+            try:
+                self._sys_modules_context = register_sys_modules(
+                    registry=self.registry,
+                    executor=self.executor,
+                    config=self.config,
+                    metrics_collector=self.metrics_collector,
+                )
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Failed to register sys modules",
+                    exc_info=True,
+                )
+        else:
+            self.metrics_collector = metrics_collector
 
     def module(
         self,
@@ -86,6 +119,7 @@ class APCore:
         module_id: str,
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
+        version_hint: str | None = None,
     ) -> dict[str, Any]:
         """Execute a module call.
 
@@ -93,17 +127,19 @@ class APCore:
             module_id: The ID of the module to call.
             inputs: Input arguments for the module.
             context: Optional execution context.
+            version_hint: Optional semver hint for version negotiation.
 
         Returns:
             The module output.
         """
-        return self.executor.call(module_id, inputs, context)
+        return self.executor.call(module_id, inputs, context, version_hint=version_hint)
 
     async def call_async(
         self,
         module_id: str,
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
+        version_hint: str | None = None,
     ) -> dict[str, Any]:
         """Execute an asynchronous module call.
 
@@ -111,17 +147,19 @@ class APCore:
             module_id: The ID of the module to call.
             inputs: Input arguments for the module.
             context: Optional execution context.
+            version_hint: Optional semver hint for version negotiation.
 
         Returns:
             The module output.
         """
-        return await self.executor.call_async(module_id, inputs, context)
+        return await self.executor.call_async(module_id, inputs, context, version_hint=version_hint)
 
     async def stream(
         self,
         module_id: str,
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
+        version_hint: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream module output chunk by chunk.
 
@@ -129,11 +167,12 @@ class APCore:
             module_id: The ID of the module to stream.
             inputs: Input arguments for the module.
             context: Optional execution context.
+            version_hint: Optional semver hint for version negotiation.
 
         Yields:
             Dict chunks from the module's stream() or a single call result.
         """
-        async for chunk in self.executor.stream(module_id, inputs, context):
+        async for chunk in self.executor.stream(module_id, inputs, context, version_hint=version_hint):
             yield chunk
 
     def validate(
@@ -207,3 +246,138 @@ class APCore:
             Sorted list of module ID strings.
         """
         return self.registry.list(tags=tags, prefix=prefix)
+
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
+
+    @property
+    def events(self) -> EventEmitter | None:
+        """Access the event emitter (available when sys_modules.events is enabled).
+
+        Returns:
+            The EventEmitter instance, or None if events are not configured.
+        """
+        return self._sys_modules_context.get("event_emitter")
+
+    def on(
+        self,
+        event_type: str,
+        handler: CallableABC[[ApCoreEvent], Any],
+    ) -> EventSubscriber:
+        """Subscribe to events of a specific type with a simple callback.
+
+        Creates a lightweight subscriber that filters by event_type and
+        calls the provided handler. Returns the subscriber for later
+        unsubscription via ``off()``.
+
+        Args:
+            event_type: Event type to listen for (e.g. "module_registered").
+            handler: Sync or async callable receiving an ApCoreEvent.
+
+        Returns:
+            The created EventSubscriber (for use with ``off()``).
+
+        Raises:
+            RuntimeError: If events are not enabled.
+        """
+        emitter = self.events
+        if emitter is None:
+            raise RuntimeError(
+                "Events are not enabled. Set sys_modules.enabled=true and " "sys_modules.events.enabled=true in config."
+            )
+        subscriber = _CallbackSubscriber(event_type=event_type, handler=handler)
+        emitter.subscribe(subscriber)
+        return subscriber
+
+    def off(self, subscriber: EventSubscriber) -> None:
+        """Unsubscribe a previously registered event subscriber.
+
+        Args:
+            subscriber: The subscriber returned by ``on()``.
+
+        Raises:
+            RuntimeError: If events are not enabled.
+        """
+        emitter = self.events
+        if emitter is None:
+            raise RuntimeError(
+                "Events are not enabled. Set sys_modules.enabled=true and " "sys_modules.events.enabled=true in config."
+            )
+        emitter.unsubscribe(subscriber)
+
+    # ------------------------------------------------------------------
+    # Module toggle (enable/disable)
+    # ------------------------------------------------------------------
+
+    def disable(self, module_id: str, reason: str = "Disabled via APCore client") -> dict[str, Any]:
+        """Disable a module without unloading it.
+
+        Convenience wrapper around ``system.control.toggle_feature``.
+
+        Args:
+            module_id: The module to disable.
+            reason: Audit reason for the change.
+
+        Returns:
+            Result dict with ``success``, ``module_id``, ``enabled``.
+
+        Raises:
+            RuntimeError: If sys_modules are not enabled in config.
+        """
+        self._require_sys_modules("disable")
+        return self.call(
+            "system.control.toggle_feature",
+            {"module_id": module_id, "enabled": False, "reason": reason},
+        )
+
+    def enable(self, module_id: str, reason: str = "Enabled via APCore client") -> dict[str, Any]:
+        """Re-enable a previously disabled module.
+
+        Convenience wrapper around ``system.control.toggle_feature``.
+
+        Args:
+            module_id: The module to enable.
+            reason: Audit reason for the change.
+
+        Returns:
+            Result dict with ``success``, ``module_id``, ``enabled``.
+
+        Raises:
+            RuntimeError: If sys_modules are not enabled in config.
+        """
+        self._require_sys_modules("enable")
+        return self.call(
+            "system.control.toggle_feature",
+            {"module_id": module_id, "enabled": True, "reason": reason},
+        )
+
+    def _require_sys_modules(self, method_name: str) -> None:
+        """Raise RuntimeError if sys_modules are not configured."""
+        if not self._sys_modules_context:
+            raise RuntimeError(
+                f"{method_name}() requires sys_modules to be enabled. "
+                "Pass a Config with sys_modules.enabled=true to APCore()."
+            )
+
+
+class _CallbackSubscriber:
+    """Lightweight EventSubscriber that filters by event_type and delegates to a callback."""
+
+    def __init__(
+        self,
+        event_type: str,
+        handler: CallableABC[[ApCoreEvent], Any],
+    ) -> None:
+        self.event_type = event_type
+        self._handler = handler
+        self._is_async = asyncio.iscoroutinefunction(handler)
+
+    async def on_event(self, event: ApCoreEvent) -> None:
+        """Deliver event to handler if event_type matches."""
+        if event.event_type != self.event_type:
+            return
+        if self._is_async:
+            await self._handler(event)  # type: ignore[misc]
+        else:
+            self._handler(event)

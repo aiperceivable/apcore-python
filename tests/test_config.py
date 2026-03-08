@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from apcore.config import Config
+from apcore.config import Config, _DEFAULTS
 from apcore.errors import ConfigError, ConfigNotFoundError
 
 
@@ -263,7 +263,7 @@ class TestConfigFromDefaults:
         config = Config.from_defaults()
         assert config.get("executor.default_timeout") == 30000
         assert config.get("executor.max_call_depth") == 32
-        assert config.get("schema.strategy") == "yaml_first"
+        assert config.get("schema.strategy") == "native_first"
 
     def test_env_applied(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("APCORE_EXECUTOR_DEFAULT__TIMEOUT", "7777")
@@ -292,3 +292,60 @@ class TestConfigData:
     def test_repr_without_yaml_path(self) -> None:
         config = Config(data={"a": 1})
         assert "keys" in repr(config)
+
+
+# ---------------------------------------------------------------------------
+# sys_modules and project source fields
+# ---------------------------------------------------------------------------
+
+
+class TestSysModulesConfig:
+    def test_config_sys_modules_enabled_default(self) -> None:
+        config = Config(data=dict(_DEFAULTS))
+        assert config.get("sys_modules.enabled") is False
+
+    def test_config_sys_modules_error_history_defaults(self) -> None:
+        config = Config(data=dict(_DEFAULTS))
+        assert config.get("sys_modules.error_history.max_entries_per_module") == 50
+        assert config.get("sys_modules.error_history.max_total_entries") == 1000
+
+    def test_config_sys_modules_events_defaults(self) -> None:
+        config = Config(data=dict(_DEFAULTS))
+        assert config.get("sys_modules.events.enabled") is False
+        assert config.get("sys_modules.events.thresholds.error_rate") == 0.1
+        assert config.get("sys_modules.events.thresholds.latency_p99_ms") == 5000.0
+        assert config.get("sys_modules.events.subscribers") == []
+
+    def test_config_project_source_repo_default(self) -> None:
+        config = Config(data=dict(_DEFAULTS))
+        assert config.get("project.source_repo") is None
+
+    def test_config_project_source_root_default(self) -> None:
+        config = Config(data=dict(_DEFAULTS))
+        assert config.get("project.source_root") == ""
+
+    def test_config_sys_modules_from_yaml(self, tmp_path: Path) -> None:
+        yaml_content = "sys_modules:\n  enabled: true\nversion: '0.8.0'\nextensions:\n  root: ./extensions\nschema:\n  root: ./schemas\nacl:\n  root: ./acl\n  default_effect: deny\nproject:\n  name: test"
+        config_file = tmp_path / "apcore.yaml"
+        config_file.write_text(yaml_content)
+        config = Config.load(str(config_file), validate=False)
+        assert config.get("sys_modules.enabled") is True
+
+    def test_config_sys_modules_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("APCORE_SYS__MODULES_ENABLED", "true")
+        config = Config.from_defaults()
+        assert config.get("sys_modules.enabled") is True
+
+    def test_config_project_source_repo_yaml(self, tmp_path: Path) -> None:
+        yaml_content = "project:\n  name: test\n  source_repo: 'https://github.com/org/repo'\nversion: '0.8.0'\nextensions:\n  root: ./extensions\nschema:\n  root: ./schemas\nacl:\n  root: ./acl\n  default_effect: deny"
+        config_file = tmp_path / "apcore.yaml"
+        config_file.write_text(yaml_content)
+        config = Config.load(str(config_file), validate=False)
+        assert config.get("project.source_repo") == "https://github.com/org/repo"
+
+    def test_config_project_source_root_yaml(self, tmp_path: Path) -> None:
+        yaml_content = "project:\n  name: test\n  source_root: 'src/modules'\nversion: '0.8.0'\nextensions:\n  root: ./extensions\nschema:\n  root: ./schemas\nacl:\n  root: ./acl\n  default_effect: deny"
+        config_file = tmp_path / "apcore.yaml"
+        config_file.write_text(yaml_content)
+        config = Config.load(str(config_file), validate=False)
+        assert config.get("project.source_root") == "src/modules"

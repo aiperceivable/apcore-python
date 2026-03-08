@@ -15,6 +15,7 @@ Recommended middleware registration order (outermost to innermost):
 """
 
 from apcore.observability.context_logger import ContextLogger, ObsLoggingMiddleware
+from apcore.observability.error_history import ErrorEntry, ErrorHistory
 from apcore.observability.metrics import MetricsCollector, MetricsMiddleware
 from apcore.observability.tracing import (
     InMemoryExporter,
@@ -28,6 +29,8 @@ from apcore.observability.tracing import (
 
 __all__ = [
     "ContextLogger",
+    "ErrorEntry",
+    "ErrorHistory",
     "InMemoryExporter",
     "MetricsCollector",
     "MetricsMiddleware",
