@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### System Modules — AI Bidirectional Introspection
+Built-in `system.*` modules that allow AI agents to query, monitor
+
+- **`system.health.summary`** — Aggregate health status across all registered modules (healthy/degraded/unhealthy classification based on error rate thresholds).
+- **`system.health.module`** — Per-module health detail including recent errors from `ErrorHistory`.
+- **`system.manifest.module`** — Single module introspection (schema, annotations, tags, source path).
+- **`system.manifest.full`** — Full registry manifest with filtering by tags/prefix.
+- **`system.usage.summary`** — Usage statistics across all modules (call counts, error rates, avg latency).
+- **`system.usage.module`** — Per-module usage detail with hourly trend data.
+- **`system.control.update_config`** — Runtime config hot-patching with constraint validation.
+- **`system.control.reload_module`** — Hot-reload a module from disk without restart.
+- **`system.control.toggle_feature`** — Enable/disable modules at runtime with reason tracking.
+- **`registerSysModules()`** — Auto-registration wiring for all system modules.
+
+#### Observability
+- **`ErrorHistory`** — Ring buffer tracking recent errors with deduplication and per-module querying.
+- **`ErrorHistoryMiddleware`** — Middleware that records `ModuleError` details into `ErrorHistory`.
+- **`UsageCollector`** — Per-module call counting, latency histograms, and hourly bucketed trend data.
+- **`PlatformNotifyMiddleware`** — Threshold-based sensor that emits events on error rate spikes.
+
+#### Event System
+- **`EventEmitter`** — Global event bus with async subscriber dispatch and thread-pool execution.
+- **`EventSubscriber`** protocol — Interface for event consumers.
+- **`ApCoreEvent`** — Frozen dataclass for typed events (module lifecycle, errors, config changes).
+- **`WebhookSubscriber`** — HTTP POST event delivery with retry.
+- **`A2ASubscriber`** — Agent-to-Agent protocol event bridge.
+
+#### APCore Unified Client
+- **`APCore.on()`** / **`APCore.off()`** — Event subscription management via the unified client.
+- **`APCore.disable()`** / **`APCore.enable()`** — Module toggle control via the unified client.
+- **`APCore.discover()`** / **`APCore.list_modules()`** — Discovery and listing via the unified client.
+
+#### Public API Exports
+- **`ModuleDisabledError`** — Error class for `MODULE_DISABLED` code, raised when a disabled module is called.
+- **`ReloadFailedError`** — Error class for `RELOAD_FAILED` code (retryable).
+- **`SchemaStrategy`** — Enum for schema resolution strategy (`yaml_first`, `native_first`, `yaml_only`).
+- **`ExportProfile`** — Enum for schema export profiles (`mcp`, `openai`, `anthropic`, `generic`).
+
+#### Registry
+- **Module toggle** — `Registry` now supports `disable()`/`enable()` with `ModuleDisabledError` enforcement and event emission.
+- **Version negotiation** — `negotiate_version()` for SDK/module version compatibility checking.
+
+### Fixed
+- README Access Control example now includes required `Executor` and `Registry` imports.
+- `pyproject.toml` repository/issues/changelog URLs now point to `apcore-python` (was incorrectly pointing to `apcore`).
+- CHANGELOG `[0.7.1]` compare link added (was missing from link references).
+
+---
+
+## [0.10.0] - 2026-03-07
+
+### Added
+
 #### APCore Unified Client
 - **`APCore.stream()`** — Stream module output chunk by chunk via the unified client.
 - **`APCore.validate()`** — Non-destructive preflight check via the unified client.
@@ -16,8 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`APCore.use_before()`** — Add before function middleware via the unified client.
 - **`APCore.use_after()`** — Add after function middleware via the unified client.
 - **`APCore.remove()`** — Remove middleware by identity via the unified client.
-- **`APCore.on()`** / **`APCore.off()`** — Event subscription management via the unified client.
-- **`APCore.disable()`** / **`APCore.enable()`** — Module toggle control via the unified client.
 
 #### Global Entry Points (`apcore.*`)
 - **`apcore.stream()`** — Global convenience for streaming module calls.
@@ -28,24 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`apcore.use_before()`** — Global convenience for adding before middleware.
 - **`apcore.use_after()`** — Global convenience for adding after middleware.
 - **`apcore.remove()`** — Global convenience for removing middleware.
-- **`apcore.on()`** / **`apcore.off()`** — Global convenience for event subscription.
-- **`apcore.disable()`** / **`apcore.enable()`** — Global convenience for module toggle.
-
-#### Public API Exports
-- **`ModuleDisabledError`** — Error class for `MODULE_DISABLED` code, raised when a disabled module is called.
-- **`ReloadFailedError`** — Error class for `RELOAD_FAILED` code (retryable).
-- **`SchemaStrategy`** — Enum for schema resolution strategy (`yaml_first`, `native_first`, `yaml_only`).
-- **`ExportProfile`** — Enum for schema export profiles (`mcp`, `openai`, `anthropic`, `generic`).
-- **`EventEmitter`**, **`EventSubscriber`**, **`ApCoreEvent`** — Event system types now exported from top-level package.
 
 #### Error Hierarchy
 - **`FeatureNotImplementedError`** — New error class for `GENERAL_NOT_IMPLEMENTED` code (renamed from `NotImplementedError` to avoid Python stdlib clash).
 - **`DependencyNotFoundError`** — New error class for `DEPENDENCY_NOT_FOUND` code.
-
-### Fixed
-- README Access Control example now includes required `Executor` and `Registry` imports.
-- `pyproject.toml` repository/issues/changelog URLs now point to `apcore-python` (was incorrectly pointing to `apcore`).
-- CHANGELOG `[0.7.1]` compare link added (was missing from link references).
 
 ### Changed
 - APCore client and `apcore.*` global functions now provide full feature parity with `Executor`.
@@ -431,6 +468,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.11.0]: https://github.com/aipartnerup/apcore-python/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/aipartnerup/apcore-python/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/aipartnerup/apcore-python/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/aipartnerup/apcore-python/compare/v0.7.1...v0.8.0
