@@ -6,7 +6,10 @@ import asyncio
 import logging
 from dataclasses import asdict
 
-import aiohttp
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None  # type: ignore[assignment]
 
 from apcore.events.emitter import ApCoreEvent
 
@@ -36,6 +39,9 @@ class WebhookSubscriber:
 
     async def on_event(self, event: ApCoreEvent) -> None:
         """Send the event as a JSON POST request to the configured URL."""
+        if aiohttp is None:
+            raise ImportError("aiohttp is required for WebhookSubscriber. Install with: pip install apcore[events]")
+
         payload = asdict(event)
         timeout = aiohttp.ClientTimeout(total=self._timeout_ms / 1000.0)
         merged_headers = {"Content-Type": "application/json", **self._headers}
@@ -113,6 +119,9 @@ class A2ASubscriber:
             headers["Authorization"] = f"Bearer {self._auth}"
         elif isinstance(self._auth, dict):
             headers.update(self._auth)
+
+        if aiohttp is None:
+            raise ImportError("aiohttp is required for A2ASubscriber. Install with: pip install apcore[events]")
 
         try:
             timeout = aiohttp.ClientTimeout(total=self._timeout_ms / 1000.0)

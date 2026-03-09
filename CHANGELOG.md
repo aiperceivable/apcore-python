@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.11.0] - 2026-03-08
 
 ### Added
+- **Full lifecycle integration tests** (`tests/integration/test_full_lifecycle.py`) — 8 tests covering the complete 11-step pipeline with all gates (ACL + Approval + Middleware + Schema validation) enabled simultaneously, nested module calls, shared `context.data`, error propagation, and ACL conditions.
 
 #### System Modules — AI Bidirectional Introspection
 Built-in `system.*` modules that allow AI agents to query, monitor
@@ -51,7 +52,13 @@ Built-in `system.*` modules that allow AI agents to query, monitor
 - **Module toggle** — `Registry` now supports `disable()`/`enable()` with `ModuleDisabledError` enforcement and event emission.
 - **Version negotiation** — `negotiate_version()` for SDK/module version compatibility checking.
 
+
+### Changed
+- **`WebhookSubscriber` / `A2ASubscriber`** now require optional dependency `aiohttp`. Install with `pip install apcore[events]`. Core SDK no longer fails to import when `aiohttp` is not installed.
+
 ### Fixed
+- **`aiohttp` hard import** in `events/subscribers.py` broke core SDK import when `aiohttp` was not installed. Changed to `try/except ImportError` guard with clear error message at runtime.
+- **`A2ASubscriber.on_event`** `ImportError` for missing `aiohttp` was silently swallowed by the broad `except Exception` block. Moved guard before the `try` block to surface the error correctly.
 - README Access Control example now includes required `Executor` and `Registry` imports.
 - `pyproject.toml` repository/issues/changelog URLs now point to `apcore-python` (was incorrectly pointing to `apcore`).
 - CHANGELOG `[0.7.1]` compare link added (was missing from link references).
