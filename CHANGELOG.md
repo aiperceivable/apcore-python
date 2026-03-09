@@ -22,7 +22,7 @@ Built-in `system.*` modules that allow AI agents to query, monitor
 - **`system.control.update_config`** — Runtime config hot-patching with constraint validation.
 - **`system.control.reload_module`** — Hot-reload a module from disk without restart.
 - **`system.control.toggle_feature`** — Enable/disable modules at runtime with reason tracking.
-- **`registerSysModules()`** — Auto-registration wiring for all system modules.
+- **`register_sys_modules()`** — Auto-registration wiring for all system modules.
 
 #### Observability
 - **`ErrorHistory`** — Ring buffer tracking recent errors with deduplication and per-module querying.
@@ -49,7 +49,7 @@ Built-in `system.*` modules that allow AI agents to query, monitor
 - **`ExportProfile`** — Enum for schema export profiles (`mcp`, `openai`, `anthropic`, `generic`).
 
 #### Registry
-- **Module toggle** — `Registry` now supports `disable()`/`enable()` with `ModuleDisabledError` enforcement and event emission.
+- **Module toggle** — APCore client now supports `disable()`/`enable()` for module toggling via `system.control.toggle_feature`, with `ModuleDisabledError` enforcement and event emission.
 - **Version negotiation** — `negotiate_version()` for SDK/module version compatibility checking.
 
 

@@ -4,6 +4,9 @@
 
 # apcore
 
+![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
+
 Schema-driven module development framework for AI-perceivable interfaces.
 
 **apcore** provides a unified task orchestration framework with strict type safety, access control, middleware pipelines, and built-in observability. It enables you to define modules with structured input/output schemas that are easily consumed by LLMs and other automated systems.
@@ -24,6 +27,19 @@ Schema-driven module development framework for AI-perceivable interfaces.
 - **Async task management** -- Background module execution with status tracking, cancellation, and concurrency limiting
 - **W3C Trace Context** -- traceparent header injection/extraction for distributed tracing interop
 
+## API Overview
+
+| Class | Description |
+|-------|-------------|
+| `APCore` | High-level client -- register modules, call, stream, validate |
+| `Registry` | Module storage -- discover, register, get, list, watch |
+| `Executor` | Execution engine -- call with middleware pipeline, ACL, approval |
+| `Context` | Request context -- trace ID, identity, call chain, cancel token |
+| `Config` | Configuration -- load from YAML, get/set values |
+| `ACL` | Access control -- rule-based caller/target authorization |
+| `Middleware` | Pipeline hooks -- before/after/on_error interception |
+| `EventEmitter` | Event system -- subscribe, emit, flush |
+
 ## Documentation
 
 For full documentation, including Quick Start guides for both Python and TypeScript, visit:
@@ -36,10 +52,10 @@ For full documentation, including Quick Start guides for both Python and TypeScr
 ## Installation
 
 ```bash
-pip install -e .
+pip install apcore
 ```
 
-For development:
+### Development
 
 ```bash
 pip install -e ".[dev]"
