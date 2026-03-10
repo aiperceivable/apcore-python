@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from apcore.errors import ModuleError
 
-class ExecutionCancelledError(Exception):
+
+class ExecutionCancelledError(ModuleError):
     """Raised when a module execution is cancelled via CancelToken."""
 
     def __init__(self, message: str = "Execution was cancelled") -> None:
-        super().__init__(message)
+        super().__init__(code="EXECUTION_CANCELLED", message=message)
 
 
 class CancelToken:

@@ -499,6 +499,49 @@ class TestValidate:
         assert result.valid is True
         assert len(mod.execute_calls) == 0
 
+    def test_preflight_with_warnings(self) -> None:
+        """validate() includes module_preflight check with warnings when preflight() returns warnings."""
+
+        class PreflightModule(MockModule):
+            def preflight(self, inputs: dict[str, Any], context: Any) -> list[str]:
+                return ["disk space low", "rate limit approaching"]
+
+        mod = PreflightModule()
+        ex = _make_executor(module=mod)
+        result = ex.validate("test.module", {"name": "Alice"})
+        assert result.valid is True
+        preflight_checks = [c for c in result.checks if c.check == "module_preflight"]
+        assert len(preflight_checks) == 1
+        assert preflight_checks[0].passed is True
+        assert preflight_checks[0].warnings == ["disk space low", "rate limit approaching"]
+
+    def test_no_preflight_method(self) -> None:
+        """validate() produces no module_preflight check when module lacks preflight()."""
+        mod = MockModule()
+        ex = _make_executor(module=mod)
+        result = ex.validate("test.module", {"name": "Alice"})
+        assert result.valid is True
+        preflight_checks = [c for c in result.checks if c.check == "module_preflight"]
+        assert len(preflight_checks) == 0
+
+    def test_preflight_exception_produces_warning(self) -> None:
+        """validate() gracefully handles preflight() raising an exception."""
+
+        class FailingPreflightModule(MockModule):
+            def preflight(self, inputs: dict[str, Any], context: Any) -> list[str]:
+                raise RuntimeError("connection refused")
+
+        mod = FailingPreflightModule()
+        ex = _make_executor(module=mod)
+        result = ex.validate("test.module", {"name": "Alice"})
+        assert result.valid is True
+        preflight_checks = [c for c in result.checks if c.check == "module_preflight"]
+        assert len(preflight_checks) == 1
+        assert preflight_checks[0].passed is True
+        assert len(preflight_checks[0].warnings) == 1
+        assert "RuntimeError" in preflight_checks[0].warnings[0]
+        assert "connection refused" in preflight_checks[0].warnings[0]
+
 
 # === Middleware Management Tests ===
 

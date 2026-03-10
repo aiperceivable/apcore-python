@@ -371,7 +371,7 @@ class TestSampling:
         ctx = Context.create()
         mw.before("mod.a", {"x": 1}, ctx)
         # Span was created on the stack
-        assert len(ctx.data["_tracing_spans"]) == 1
+        assert len(ctx.data["_apcore.mw.tracing.spans"]) == 1
         mw.after("mod.a", {"x": 1}, {"result": "ok"}, ctx)
         # But not exported
         assert len(exporter.get_spans()) == 0
@@ -444,7 +444,7 @@ class TestSampling:
         mw = TracingMiddleware(exporter=exporter, sampling_rate=0.0, sampling_strategy="proportional")
         ctx = Context.create()
         # Pre-set the sampling decision as if parent decided to sample
-        ctx.data["_tracing_sampled"] = True
+        ctx.data["_apcore.mw.tracing.sampled"] = True
         mw.before("mod.a", {}, ctx)
         mw.after("mod.a", {}, {"r": 1}, ctx)
         # Should export because parent decided to sample
@@ -460,7 +460,7 @@ class TestTracingMiddleware:
         mw = TracingMiddleware(exporter=exporter)
         ctx = Context.create()
         mw.before("mod.a", {"x": 1}, ctx)
-        spans = ctx.data["_tracing_spans"]
+        spans = ctx.data["_apcore.mw.tracing.spans"]
         assert len(spans) == 1
         assert spans[0].trace_id == ctx.trace_id
         assert spans[0].name == "apcore.module.execute"
@@ -473,7 +473,7 @@ class TestTracingMiddleware:
         mw.before("mod.a", {}, ctx)
         mw.after("mod.a", {}, {"result": "ok"}, ctx)
         # Stack should be empty
-        assert len(ctx.data["_tracing_spans"]) == 0
+        assert len(ctx.data["_apcore.mw.tracing.spans"]) == 0
         # Exported span
         spans = exporter.get_spans()
         assert len(spans) == 1
@@ -489,7 +489,7 @@ class TestTracingMiddleware:
         mw.before("mod.a", {}, ctx)
         result = mw.on_error("mod.a", {}, RuntimeError("fail"), ctx)
         assert result is None
-        assert len(ctx.data["_tracing_spans"]) == 0
+        assert len(ctx.data["_apcore.mw.tracing.spans"]) == 0
         spans = exporter.get_spans()
         assert len(spans) == 1
         assert spans[0].status == "error"
@@ -502,11 +502,11 @@ class TestTracingMiddleware:
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
         mw.before("mod.b", {}, ctx)
-        assert len(ctx.data["_tracing_spans"]) == 2
+        assert len(ctx.data["_apcore.mw.tracing.spans"]) == 2
         mw.after("mod.b", {}, {"r": 1}, ctx)
-        assert len(ctx.data["_tracing_spans"]) == 1
+        assert len(ctx.data["_apcore.mw.tracing.spans"]) == 1
         mw.after("mod.a", {}, {"r": 2}, ctx)
-        assert len(ctx.data["_tracing_spans"]) == 0
+        assert len(ctx.data["_apcore.mw.tracing.spans"]) == 0
         assert len(exporter.get_spans()) == 2
 
     def test_span_name_convention(self):
@@ -515,7 +515,7 @@ class TestTracingMiddleware:
         mw = TracingMiddleware(exporter=exporter)
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
-        span = ctx.data["_tracing_spans"][0]
+        span = ctx.data["_apcore.mw.tracing.spans"][0]
         assert span.name == "apcore.module.execute"
 
     def test_span_attributes_include_module_id_method_caller_id(self):
@@ -525,7 +525,7 @@ class TestTracingMiddleware:
         ctx = Context.create()
         ctx.caller_id = "test.caller"
         mw.before("mod.a", {}, ctx)
-        span = ctx.data["_tracing_spans"][0]
+        span = ctx.data["_apcore.mw.tracing.spans"][0]
         assert span.attributes["module_id"] == "mod.a"
         assert span.attributes["method"] == "execute"
         assert span.attributes["caller_id"] == "test.caller"
@@ -547,9 +547,9 @@ class TestTracingMiddleware:
         mw = TracingMiddleware(exporter=exporter)
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
-        parent_span_id = ctx.data["_tracing_spans"][0].span_id
+        parent_span_id = ctx.data["_apcore.mw.tracing.spans"][0].span_id
         mw.before("mod.b", {}, ctx)
-        child_span = ctx.data["_tracing_spans"][1]
+        child_span = ctx.data["_apcore.mw.tracing.spans"][1]
         assert child_span.parent_span_id == parent_span_id
 
     def test_end_to_end_with_in_memory_exporter(self):
@@ -642,12 +642,12 @@ class TestTracingMiddlewareEmptyStackGuard:
         assert len(exporter.get_spans()) == 0
 
     def test_after_with_no_tracing_spans_key(self, caplog: pytest.LogCaptureFixture) -> None:
-        """after() with no _tracing_spans key should log warning and return None."""
+        """after() with no _apcore.mw.tracing.spans key should log warning and return None."""
         exporter = InMemoryExporter()
         mw = TracingMiddleware(exporter=exporter)
         ctx = Context.create()
-        # Ensure no _tracing_spans key exists
-        assert "_tracing_spans" not in ctx.data
+        # Ensure no _apcore.mw.tracing.spans key exists
+        assert "_apcore.mw.tracing.spans" not in ctx.data
         with caplog.at_level(logging.WARNING):
             result = mw.after("mod.a", {}, {"r": 1}, ctx)
         assert result is None

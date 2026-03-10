@@ -96,14 +96,17 @@ class PreflightCheckResult:
     """Result of a single preflight check.
 
     Attributes:
-        check: Check name ("module_id", "module_lookup", "call_chain", "acl", "approval", "schema").
+        check: Check name ("module_id", "module_lookup", "call_chain", "acl",
+            "approval", "schema", "module_preflight").
         passed: Whether this check passed.
         error: Error details when passed is False; None when passed is True.
+        warnings: Non-fatal issues that do not prevent execution.
     """
 
     check: str
     passed: bool
     error: dict[str, Any] | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass

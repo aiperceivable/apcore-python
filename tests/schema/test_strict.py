@@ -229,3 +229,54 @@ class TestStripExtensions:
         assert "type" in node
         assert "description" in node
         assert "properties" in node
+
+    def test_strip_defaults_false_preserves_defaults(self) -> None:
+        """strip_defaults=False keeps default keys while still removing x-* keys."""
+        node: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "default": 10, "x-sensitive": True},
+                "name": {"type": "string", "x-llm-description": "Full name"},
+            },
+        }
+        _strip_extensions(node, strip_defaults=False)
+        # x-* keys removed
+        assert "x-sensitive" not in node["properties"]["count"]
+        assert "x-llm-description" not in node["properties"]["name"]
+        # default preserved
+        assert node["properties"]["count"]["default"] == 10
+
+    def test_strip_defaults_true_removes_defaults(self) -> None:
+        """strip_defaults=True (default) removes both x-* and default keys."""
+        node: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "default": 10, "x-sensitive": True},
+            },
+        }
+        _strip_extensions(node, strip_defaults=True)
+        assert "x-sensitive" not in node["properties"]["count"]
+        assert "default" not in node["properties"]["count"]
+
+    def test_strip_defaults_false_recursive(self) -> None:
+        """strip_defaults=False recursively preserves defaults in nested structures."""
+        node: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "retry": {"type": "integer", "default": 3, "x-internal": True},
+                    },
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "default": "untagged", "x-hint": "tag"},
+                },
+            },
+        }
+        _strip_extensions(node, strip_defaults=False)
+        assert node["properties"]["config"]["properties"]["retry"]["default"] == 3
+        assert "x-internal" not in node["properties"]["config"]["properties"]["retry"]
+        assert node["properties"]["tags"]["items"]["default"] == "untagged"
+        assert "x-hint" not in node["properties"]["tags"]["items"]

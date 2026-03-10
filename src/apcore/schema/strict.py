@@ -46,22 +46,32 @@ def _apply_llm_descriptions(node: Any) -> None:
                 _apply_llm_descriptions(defn)
 
 
-def _strip_extensions(node: Any) -> None:
-    """Remove all x-* keys and default keys recursively. Mutates in place."""
+def _strip_extensions(node: Any, *, strip_defaults: bool = True) -> None:
+    """Remove all x-* keys (and optionally default keys) recursively. Mutates in place.
+
+    Args:
+        node: JSON Schema node to process.
+        strip_defaults: If True (default), also remove ``default`` keys.
+            OpenAI strict mode requires this; Anthropic export does not.
+    """
     if not isinstance(node, dict):
         return
 
-    keys_to_remove = [k for k in node if (isinstance(k, str) and k.startswith("x-")) or k == "default"]
+    keys_to_remove = [
+        k
+        for k in node
+        if (isinstance(k, str) and k.startswith("x-")) or (strip_defaults and k == "default")
+    ]
     for k in keys_to_remove:
         del node[k]
 
     for value in node.values():
         if isinstance(value, dict):
-            _strip_extensions(value)
+            _strip_extensions(value, strip_defaults=strip_defaults)
         elif isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):
-                    _strip_extensions(item)
+                    _strip_extensions(item, strip_defaults=strip_defaults)
 
 
 def _convert_to_strict(node: Any) -> None:

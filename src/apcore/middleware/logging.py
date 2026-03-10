@@ -34,7 +34,7 @@ class LoggingMiddleware(Middleware):
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Context) -> None:
         """Record start time and log module call initiation with redacted inputs."""
-        context.data["_logging_mw_start"] = time.time()
+        context.data["_apcore.mw.logging.start_time"] = time.time()
 
         if self._log_inputs:
             redacted = getattr(context, "redacted_inputs", inputs)
@@ -58,7 +58,7 @@ class LoggingMiddleware(Middleware):
         context: Context,
     ) -> None:
         """Log module completion with duration and output."""
-        start_time = context.data.get("_logging_mw_start", time.time())
+        start_time = context.data.get("_apcore.mw.logging.start_time", time.time())
         duration_ms = (time.time() - start_time) * 1000
 
         if self._log_outputs:

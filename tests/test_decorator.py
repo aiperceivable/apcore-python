@@ -720,13 +720,14 @@ class TestFunctionModuleConstructor:
             documentation="Full docs",
             tags=["email"],
             version="2.0.0",
-            annotations={"timeout": 5000},
+            annotations={"readonly": True, "destructive": False},
             metadata={"author": "test"},
         )
         assert fm.documentation == "Full docs"
         assert fm.tags == ["email"]
         assert fm.version == "2.0.0"
-        assert fm.annotations == {"timeout": 5000}
+        assert fm.annotations.readonly is True
+        assert fm.annotations.destructive is False
         assert fm.metadata == {"author": "test"}
 
 

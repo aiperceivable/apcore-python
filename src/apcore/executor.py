@@ -375,7 +375,7 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
+                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
             # Step 10 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
@@ -492,6 +492,24 @@ class Executor:
         else:
             checks.append(PreflightCheckResult(check="schema", passed=True))
 
+        # Check 7: module-level preflight (optional)
+        if hasattr(module, "preflight") and callable(module.preflight):
+            try:
+                preflight_warnings = module.preflight(inputs, ctx)
+                if isinstance(preflight_warnings, list) and preflight_warnings:
+                    checks.append(PreflightCheckResult(
+                        check="module_preflight", passed=True, warnings=preflight_warnings,
+                    ))
+                else:
+                    checks.append(PreflightCheckResult(check="module_preflight", passed=True))
+            except Exception as exc:
+                # preflight() should not raise, but handle gracefully if it does
+                checks.append(PreflightCheckResult(
+                    check="module_preflight",
+                    passed=True,
+                    warnings=[f"preflight() raised {type(exc).__name__}: {exc}"],
+                ))
+
         valid = all(c.passed for c in checks)
         return PreflightResult(valid=valid, checks=checks, requires_approval=requires_approval)
 
@@ -550,7 +568,7 @@ class Executor:
             result.approved_by,
             result.reason,
         )
-        spans_stack: list[Any] = ctx.data.get("_tracing_spans", [])
+        spans_stack: list[Any] = ctx.data.get("_apcore.mw.tracing.spans", [])
         if spans_stack:
             spans_stack[-1].events.append(
                 {
@@ -855,7 +873,7 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
+                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
             # Step 10 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
@@ -979,7 +997,7 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    ctx.data["_redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
+                    ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
 
                 # Step 10 -- Middleware After (async-aware)
                 output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)
@@ -1002,7 +1020,7 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    ctx.data["_redacted_output"] = redact_sensitive(
+                    ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
                         accumulated, module.output_schema.model_json_schema()
                     )
 

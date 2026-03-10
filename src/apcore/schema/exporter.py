@@ -79,7 +79,7 @@ class SchemaExporter:
         """Export in Anthropic tool use format. Strips extensions but no strict mode."""
         schema = copy.deepcopy(schema_def.input_schema)
         _apply_llm_descriptions(schema)
-        _strip_extensions(schema)
+        _strip_extensions(schema, strip_defaults=False)
         result: dict[str, Any] = {
             "name": schema_def.module_id.replace(".", "_"),
             "description": schema_def.description,

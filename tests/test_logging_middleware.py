@@ -32,14 +32,14 @@ class TestBefore:
     """Tests for LoggingMiddleware.before()."""
 
     def test_stores_start_time_in_context_data(self) -> None:
-        """before() writes a float timestamp to context.data['_logging_mw_start']."""
+        """before() writes a float timestamp to context.data['_apcore.mw.logging.start_time']."""
         mw = LoggingMiddleware(logger=MagicMock())
         ctx = _make_context()
         now = time.time()
         mw.before("test.module", {"key": "val"}, ctx)
-        assert "_logging_mw_start" in ctx.data
-        assert isinstance(ctx.data["_logging_mw_start"], float)
-        assert abs(ctx.data["_logging_mw_start"] - now) < 1.0
+        assert "_apcore.mw.logging.start_time" in ctx.data
+        assert isinstance(ctx.data["_apcore.mw.logging.start_time"], float)
+        assert abs(ctx.data["_apcore.mw.logging.start_time"] - now) < 1.0
 
     def test_logs_info_with_trace_id_module_id_caller_id(self) -> None:
         """before() logs INFO with trace_id, module_id, caller_id."""
@@ -101,7 +101,7 @@ class TestAfter:
         mock_logger = MagicMock()
         mw = LoggingMiddleware(logger=mock_logger)
         ctx = _make_context()
-        ctx.data["_logging_mw_start"] = time.time() - 0.150  # 150ms ago
+        ctx.data["_apcore.mw.logging.start_time"] = time.time() - 0.150  # 150ms ago
         mw.after("test.module", {}, {"result": "ok"}, ctx)
 
         extra = mock_logger.info.call_args[1]["extra"]
@@ -112,7 +112,7 @@ class TestAfter:
         mock_logger = MagicMock()
         mw = LoggingMiddleware(logger=mock_logger)
         ctx = _make_context(trace_id="abc-123")
-        ctx.data["_logging_mw_start"] = time.time()
+        ctx.data["_apcore.mw.logging.start_time"] = time.time()
         output = {"result": "ok"}
         mw.after("test.module", {}, output, ctx)
 
@@ -132,7 +132,7 @@ class TestAfter:
         mock_logger = MagicMock()
         mw = LoggingMiddleware(logger=mock_logger, log_outputs=False)
         ctx = _make_context()
-        ctx.data["_logging_mw_start"] = time.time()
+        ctx.data["_apcore.mw.logging.start_time"] = time.time()
         mw.after("test.module", {}, {"result": "ok"}, ctx)
 
         mock_logger.info.assert_not_called()
@@ -142,7 +142,7 @@ class TestAfter:
         mock_logger = MagicMock()
         mw = LoggingMiddleware(logger=mock_logger)
         ctx = _make_context()
-        # No _logging_mw_start in ctx.data
+        # No _apcore.mw.logging.start_time in ctx.data
         mw.after("test.module", {}, {"result": "ok"}, ctx)
 
         extra = mock_logger.info.call_args[1]["extra"]
@@ -152,7 +152,7 @@ class TestAfter:
         """after() always returns None."""
         mw = LoggingMiddleware(logger=MagicMock())
         ctx = _make_context()
-        ctx.data["_logging_mw_start"] = time.time()
+        ctx.data["_apcore.mw.logging.start_time"] = time.time()
         result = mw.after("test.module", {}, {"result": "ok"}, ctx)
         assert result is None
 
@@ -236,8 +236,8 @@ class TestConcurrencyAndConfig:
         mw.before("mod.b", {}, ctx_b)
 
         # Start times should be independent
-        assert ctx_a.data["_logging_mw_start"] != ctx_b.data["_logging_mw_start"]
-        assert ctx_a.data["_logging_mw_start"] < ctx_b.data["_logging_mw_start"]
+        assert ctx_a.data["_apcore.mw.logging.start_time"] != ctx_b.data["_apcore.mw.logging.start_time"]
+        assert ctx_a.data["_apcore.mw.logging.start_time"] < ctx_b.data["_apcore.mw.logging.start_time"]
 
     def test_default_logger_name(self) -> None:
         """Default logger uses 'apcore.middleware.logging' name."""

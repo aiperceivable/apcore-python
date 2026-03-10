@@ -41,7 +41,7 @@ class TestRetryMiddlewareRetryable:
         result = mw.on_error("mod.a", inputs, error, ctx)
 
         assert result == {"x": 1}
-        assert ctx.data["_retry_count_mod.a"] == 1
+        assert ctx.data["_apcore.mw.retry.count.mod.a"] == 1
 
     def test_retry_returns_copy_of_inputs(self) -> None:
         """The returned dict is a copy, not the same object."""
@@ -97,16 +97,16 @@ class TestRetryMiddlewareMaxRetries:
 
         # First retry succeeds
         assert mw.on_error("mod.a", {"x": 1}, error, ctx) is not None
-        assert ctx.data["_retry_count_mod.a"] == 1
+        assert ctx.data["_apcore.mw.retry.count.mod.a"] == 1
 
         # Second retry succeeds
         assert mw.on_error("mod.a", {"x": 1}, error, ctx) is not None
-        assert ctx.data["_retry_count_mod.a"] == 2
+        assert ctx.data["_apcore.mw.retry.count.mod.a"] == 2
 
         # Third attempt: max exceeded
         assert mw.on_error("mod.a", {"x": 1}, error, ctx) is None
         # Count should not increment past max
-        assert ctx.data["_retry_count_mod.a"] == 2
+        assert ctx.data["_apcore.mw.retry.count.mod.a"] == 2
 
 
 class TestRetryMiddlewareDelayCalculation:
@@ -188,8 +188,8 @@ class TestRetryMiddlewareContextTracking:
         mw.on_error("mod.a", {"x": 1}, error, ctx)
         mw.on_error("mod.b", {"y": 2}, error, ctx)
 
-        assert ctx.data["_retry_count_mod.a"] == 1
-        assert ctx.data["_retry_count_mod.b"] == 1
+        assert ctx.data["_apcore.mw.retry.count.mod.a"] == 1
+        assert ctx.data["_apcore.mw.retry.count.mod.b"] == 1
 
     def test_retry_count_increments(self) -> None:
         """Retry count increments on each retry attempt."""
@@ -200,7 +200,7 @@ class TestRetryMiddlewareContextTracking:
         for i in range(3):
             mw.on_error("mod.a", {"x": 1}, error, ctx)
 
-        assert ctx.data["_retry_count_mod.a"] == 3
+        assert ctx.data["_apcore.mw.retry.count.mod.a"] == 3
 
     @patch("apcore.middleware.retry.time.sleep")
     def test_sleep_called_with_correct_delay(self, mock_sleep) -> None:  # type: ignore[no-untyped-def]

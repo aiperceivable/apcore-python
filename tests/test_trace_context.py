@@ -45,7 +45,7 @@ class TestTraceContextInject:
         from apcore.observability.tracing import Span
 
         span = Span(trace_id=ctx.trace_id, name="test", start_time=0.0, span_id="abcdef0123456789")
-        ctx.data["_tracing_spans"] = [span]
+        ctx.data["_apcore.mw.tracing.spans"] = [span]
 
         headers = TraceContext.inject(ctx)
         parts = headers["traceparent"].split("-")

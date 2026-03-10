@@ -39,7 +39,7 @@ class TraceContext:
         """
         trace_id_hex = context.trace_id.replace("-", "")
 
-        spans_stack = context.data.get("_tracing_spans")
+        spans_stack = context.data.get("_apcore.mw.tracing.spans")
         if spans_stack:
             parent_id = spans_stack[-1].span_id
         else:

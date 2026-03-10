@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
+import logging
 import re
 import typing
 from typing import Annotated, Any, Callable, get_args, get_origin
@@ -13,7 +15,9 @@ from pydantic.fields import FieldInfo
 from apcore._docstrings import parse_docstring
 from apcore.context import Context
 from apcore.errors import FuncMissingReturnTypeError, FuncMissingTypeHintError
-from apcore.module import ModuleExample
+from apcore.module import ModuleAnnotations, ModuleExample
+
+_logger = logging.getLogger(__name__)
 
 
 def _has_explicit_field_description(annotation: Any) -> bool:
@@ -202,7 +206,14 @@ class FunctionModule:
         self.documentation = documentation if documentation is not None else doc_body
         self.tags = tags
         self.version = version
-        self.annotations = annotations
+        if annotations is not None and isinstance(annotations, dict):
+            known_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
+            unknown = [k for k in annotations if k not in known_fields]
+            if unknown:
+                _logger.warning("Unknown annotation keys ignored for '%s': %s", module_id, unknown)
+            self.annotations = ModuleAnnotations(**{k: v for k, v in annotations.items() if k in known_fields})
+        else:
+            self.annotations = annotations
         self.metadata = metadata
         self.examples = examples
 

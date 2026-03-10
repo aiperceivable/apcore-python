@@ -216,6 +216,14 @@ class TestExportAnthropic:
         assert "input_schema" in result
         assert "inputSchema" not in result
 
+    def test_preserves_default_values(self) -> None:
+        """export_anthropic() preserves default values in the output schema."""
+        sd = _make_schema_def()
+        exporter = SchemaExporter()
+        result = exporter.export_anthropic(sd)
+        # The default schema has cc with default=[]
+        assert result["input_schema"]["properties"]["cc"]["default"] == []
+
 
 # ===== export() dispatch =====
 

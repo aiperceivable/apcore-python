@@ -35,7 +35,7 @@ class RetryMiddleware(Middleware):
     attempts or for non-retryable errors, it returns ``None`` so the error propagates.
 
     Retry state is tracked per-module in ``context.data`` using the key
-    ``_retry_count_{module_id}`` to remain thread-safe across concurrent calls.
+    ``_apcore.mw.retry.count.{module_id}`` to remain thread-safe across concurrent calls.
 
     .. note::
 
@@ -60,7 +60,7 @@ class RetryMiddleware(Middleware):
         if retryable is not True:
             return None
 
-        retry_key = f"_retry_count_{module_id}"
+        retry_key = f"_apcore.mw.retry.count.{module_id}"
         retry_count: int = context.data.get(retry_key, 0)
 
         if retry_count >= self._config.max_retries:

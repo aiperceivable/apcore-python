@@ -143,6 +143,12 @@ class ACLDeniedError(ModuleError):
     _default_retryable: bool | None = False
 
     def __init__(self, caller_id: str | None, target_id: str, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Access denied for '{caller_id}' calling '{target_id}'. "
+            "Verify the caller has the required role or permission, "
+            "or try an alternative module with similar functionality.",
+        )
         super().__init__(
             code="ACL_DENIED",
             message=f"Access denied: {caller_id} -> {target_id}",
@@ -259,6 +265,12 @@ class ModuleNotFoundError(ModuleError):
     _default_retryable: bool | None = False
 
     def __init__(self, module_id: str, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Module '{module_id}' does not exist in the registry. "
+            "Verify the module ID spelling. "
+            "Use system.manifest.full to list available modules.",
+        )
         super().__init__(
             code="MODULE_NOT_FOUND",
             message=f"Module not found: {module_id}",
@@ -273,6 +285,12 @@ class ModuleDisabledError(ModuleError):
     _default_retryable: bool | None = False
 
     def __init__(self, module_id: str, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Module '{module_id}' is currently disabled. "
+            "Use system.control.toggle_feature to re-enable it, "
+            "or find an alternative module.",
+        )
         super().__init__(
             code="MODULE_DISABLED",
             message=f"Module '{module_id}' is disabled",
@@ -287,6 +305,13 @@ class ModuleTimeoutError(ModuleError):
     _default_retryable: bool | None = True
 
     def __init__(self, module_id: str, timeout_ms: int, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Module '{module_id}' timed out after {timeout_ms}ms. "
+            "Consider: 1) Breaking the operation into smaller steps. "
+            "2) Reducing the input data size. "
+            "3) Asking the user if a longer timeout is acceptable.",
+        )
         super().__init__(
             code="MODULE_TIMEOUT",
             message=f"Module {module_id} timed out after {timeout_ms}ms",
@@ -316,6 +341,12 @@ class SchemaValidationError(ModuleError):
         errors: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            "Input validation failed. Review the error details to identify "
+            "which fields have invalid values, then correct them or "
+            "ask the user for valid input.",
+        )
         super().__init__(
             code="SCHEMA_VALIDATION_ERROR",
             message=message,
@@ -367,6 +398,12 @@ class CallDepthExceededError(ModuleError):
     _default_retryable: bool | None = False
 
     def __init__(self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Call depth {depth} exceeds maximum {max_depth}. "
+            "Simplify the module call chain or restructure "
+            "to reduce nesting depth.",
+        )
         super().__init__(
             code="CALL_DEPTH_EXCEEDED",
             message=f"Call depth {depth} exceeds maximum {max_depth}",
@@ -391,6 +428,12 @@ class CircularCallError(ModuleError):
     _default_retryable: bool | None = False
 
     def __init__(self, module_id: str, call_chain: list[str], **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            "A circular call was detected in the module call chain. "
+            "Review the call_chain in error details and restructure "
+            "to eliminate the cycle.",
+        )
         super().__init__(
             code="CIRCULAR_CALL",
             message=f"Circular call detected for module {module_id}",
@@ -687,6 +730,7 @@ class ErrorCodes:
     MODULE_LOAD_ERROR = "MODULE_LOAD_ERROR"
     MODULE_EXECUTE_ERROR = "MODULE_EXECUTE_ERROR"
     RELOAD_FAILED = "RELOAD_FAILED"
+    EXECUTION_CANCELLED = "EXECUTION_CANCELLED"
     SCHEMA_VALIDATION_ERROR = "SCHEMA_VALIDATION_ERROR"
     SCHEMA_NOT_FOUND = "SCHEMA_NOT_FOUND"
     SCHEMA_PARSE_ERROR = "SCHEMA_PARSE_ERROR"

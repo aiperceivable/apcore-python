@@ -228,7 +228,7 @@ class TracingMiddleware(Middleware):
 
     def _should_sample(self, context: Any) -> bool:
         """Make or inherit sampling decision."""
-        existing = context.data.get("_tracing_sampled")
+        existing = context.data.get("_apcore.mw.tracing.sampled")
         if isinstance(existing, bool):
             return existing
 
@@ -239,14 +239,14 @@ class TracingMiddleware(Middleware):
         else:  # proportional or error_first
             decision = random.random() < self._sampling_rate
 
-        context.data["_tracing_sampled"] = decision
+        context.data["_apcore.mw.tracing.sampled"] = decision
         return decision
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Any) -> dict[str, Any] | None:
         """Create a span, push to stack, make/inherit sampling decision."""
         self._should_sample(context)
 
-        spans_stack = context.data.setdefault("_tracing_spans", [])
+        spans_stack = context.data.setdefault("_apcore.mw.tracing.spans", [])
         parent_span_id = spans_stack[-1].span_id if spans_stack else None
 
         span = Span(
@@ -272,7 +272,7 @@ class TracingMiddleware(Middleware):
         context: Any,
     ) -> dict[str, Any] | None:
         """Pop span, finalize with success status, export if sampled."""
-        spans_stack = context.data.get("_tracing_spans", [])
+        spans_stack = context.data.get("_apcore.mw.tracing.spans", [])
         if not spans_stack:
             _tracing_logger.warning(
                 "TracingMiddleware.after() called with empty span stack for %s",
@@ -285,13 +285,13 @@ class TracingMiddleware(Middleware):
         span.attributes["duration_ms"] = (span.end_time - span.start_time) * 1000
         span.attributes["success"] = True
 
-        if context.data.get("_tracing_sampled"):
+        if context.data.get("_apcore.mw.tracing.sampled"):
             self._exporter.export(span)
         return None
 
     def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any) -> dict[str, Any] | None:
         """Pop span, finalize with error status, always export for error_first. Return None."""
-        spans_stack = context.data.get("_tracing_spans", [])
+        spans_stack = context.data.get("_apcore.mw.tracing.spans", [])
         if not spans_stack:
             _tracing_logger.warning(
                 "TracingMiddleware.on_error() called with empty span stack for %s",
@@ -305,7 +305,7 @@ class TracingMiddleware(Middleware):
         span.attributes["success"] = False
         span.attributes["error_code"] = getattr(error, "code", type(error).__name__)
 
-        should_export = self._sampling_strategy == "error_first" or context.data.get("_tracing_sampled")
+        should_export = self._sampling_strategy == "error_first" or context.data.get("_apcore.mw.tracing.sampled")
         if should_export:
             self._exporter.export(span)
         return None

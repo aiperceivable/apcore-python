@@ -27,6 +27,7 @@ from apcore.errors import (
     FuncMissingTypeHintError,
     InternalError,
     InvalidInputError,
+    ModuleDisabledError,
     ModuleError,
     ModuleExecuteError,
     ModuleLoadError,
@@ -282,3 +283,41 @@ class TestApprovalErrorBase:
         assert err.retryable is False
         assert err.ai_guidance == "poll for approval status"
         assert err.suggestion == "Wait for approval or contact approver"
+
+
+class TestAiGuidanceDefaults:
+    """Tests that error classes with setdefault('ai_guidance', ...) provide a non-empty default."""
+
+    @pytest.mark.parametrize(
+        ("cls", "kwargs"),
+        [
+            (ACLDeniedError, {"caller_id": "agent", "target_id": "secret.module"}),
+            (ModuleNotFoundError, {"module_id": "missing.mod"}),
+            (ModuleDisabledError, {"module_id": "disabled.mod"}),
+            (ModuleTimeoutError, {"module_id": "slow.mod", "timeout_ms": 5000}),
+            (SchemaValidationError, {}),
+            (CallDepthExceededError, {"depth": 10, "max_depth": 8, "call_chain": ["a", "b"]}),
+            (CircularCallError, {"module_id": "loop.mod", "call_chain": ["a", "b", "a"]}),
+        ],
+    )
+    def test_default_ai_guidance_is_non_empty(self, cls: type[ModuleError], kwargs: dict) -> None:
+        err = cls(**kwargs)
+        assert err.ai_guidance is not None
+        assert len(err.ai_guidance) > 0
+
+    @pytest.mark.parametrize(
+        ("cls", "kwargs"),
+        [
+            (ACLDeniedError, {"caller_id": "agent", "target_id": "secret.module"}),
+            (ModuleNotFoundError, {"module_id": "missing.mod"}),
+            (ModuleDisabledError, {"module_id": "disabled.mod"}),
+            (ModuleTimeoutError, {"module_id": "slow.mod", "timeout_ms": 5000}),
+            (SchemaValidationError, {}),
+            (CallDepthExceededError, {"depth": 10, "max_depth": 8, "call_chain": ["a", "b"]}),
+            (CircularCallError, {"module_id": "loop.mod", "call_chain": ["a", "b", "a"]}),
+        ],
+    )
+    def test_explicit_ai_guidance_overrides_default(self, cls: type[ModuleError], kwargs: dict) -> None:
+        custom_guidance = "custom AI guidance message"
+        err = cls(**kwargs, ai_guidance=custom_guidance)
+        assert err.ai_guidance == custom_guidance
