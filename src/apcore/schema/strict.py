@@ -58,9 +58,7 @@ def _strip_extensions(node: Any, *, strip_defaults: bool = True) -> None:
         return
 
     keys_to_remove = [
-        k
-        for k in node
-        if (isinstance(k, str) and k.startswith("x-")) or (strip_defaults and k == "default")
+        k for k in node if (isinstance(k, str) and k.startswith("x-")) or (strip_defaults and k == "default")
     ]
     for k in keys_to_remove:
         del node[k]

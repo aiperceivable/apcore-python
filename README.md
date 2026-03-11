@@ -29,6 +29,8 @@ Schema-driven module development framework for AI-perceivable interfaces.
 
 ## API Overview
 
+**Core**
+
 | Class | Description |
 |-------|-------------|
 | `APCore` | High-level client -- register modules, call, stream, validate |
@@ -36,9 +38,57 @@ Schema-driven module development framework for AI-perceivable interfaces.
 | `Executor` | Execution engine -- call with middleware pipeline, ACL, approval |
 | `Context` | Request context -- trace ID, identity, call chain, cancel token |
 | `Config` | Configuration -- load from YAML, get/set values |
+| `Identity` | Caller identity -- id, type, roles, attributes |
+| `FunctionModule` | Wrapped function module created by `@module` decorator |
+
+**Access Control & Approval**
+
+| Class | Description |
+|-------|-------------|
 | `ACL` | Access control -- rule-based caller/target authorization |
+| `ApprovalHandler` | Pluggable approval gate protocol |
+| `AlwaysDenyHandler` / `AutoApproveHandler` / `CallbackApprovalHandler` | Built-in approval handlers |
+
+**Middleware**
+
+| Class | Description |
+|-------|-------------|
 | `Middleware` | Pipeline hooks -- before/after/on_error interception |
+| `BeforeMiddleware` / `AfterMiddleware` | Single-phase middleware adapters |
+| `LoggingMiddleware` | Structured logging middleware |
+| `RetryMiddleware` | Automatic retry with backoff |
+| `ErrorHistoryMiddleware` | Records errors into ErrorHistory |
+| `PlatformNotifyMiddleware` | Emits events on error rate/latency spikes |
+
+**Schema**
+
+| Class | Description |
+|-------|-------------|
+| `SchemaLoader` | Load schemas from YAML or native types |
+| `SchemaValidator` | Validate data against schemas |
+| `SchemaExporter` | Export schemas for MCP, OpenAI, Anthropic, generic |
+| `RefResolver` | Resolve `$ref` references in JSON Schema |
+
+**Observability**
+
+| Class | Description |
+|-------|-------------|
+| `TracingMiddleware` | Distributed tracing with span export |
+| `MetricsMiddleware` / `MetricsCollector` | Call count, latency, error rate metrics |
+| `ContextLogger` | Context-aware structured logging |
+| `ErrorHistory` | Ring buffer of recent errors with deduplication |
+| `UsageCollector` | Per-module usage statistics and trends |
+
+**Events & Extensions**
+
+| Class | Description |
+|-------|-------------|
 | `EventEmitter` | Event system -- subscribe, emit, flush |
+| `WebhookSubscriber` / `A2ASubscriber` | Built-in event subscribers |
+| `ExtensionManager` | Unified extension point management |
+| `AsyncTaskManager` | Background module execution with status tracking |
+| `CancelToken` | Cooperative cancellation token |
+| `BindingLoader` | Load modules from YAML binding files |
 
 ## Documentation
 

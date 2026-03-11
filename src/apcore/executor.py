@@ -375,7 +375,9 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
+                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                    output, module.output_schema.model_json_schema()
+                )
 
             # Step 10 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
@@ -497,18 +499,24 @@ class Executor:
             try:
                 preflight_warnings = module.preflight(inputs, ctx)
                 if isinstance(preflight_warnings, list) and preflight_warnings:
-                    checks.append(PreflightCheckResult(
-                        check="module_preflight", passed=True, warnings=preflight_warnings,
-                    ))
+                    checks.append(
+                        PreflightCheckResult(
+                            check="module_preflight",
+                            passed=True,
+                            warnings=preflight_warnings,
+                        )
+                    )
                 else:
                     checks.append(PreflightCheckResult(check="module_preflight", passed=True))
             except Exception as exc:
                 # preflight() should not raise, but handle gracefully if it does
-                checks.append(PreflightCheckResult(
-                    check="module_preflight",
-                    passed=True,
-                    warnings=[f"preflight() raised {type(exc).__name__}: {exc}"],
-                ))
+                checks.append(
+                    PreflightCheckResult(
+                        check="module_preflight",
+                        passed=True,
+                        warnings=[f"preflight() raised {type(exc).__name__}: {exc}"],
+                    )
+                )
 
         valid = all(c.passed for c in checks)
         return PreflightResult(valid=valid, checks=checks, requires_approval=requires_approval)
@@ -873,7 +881,9 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
+                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                    output, module.output_schema.model_json_schema()
+                )
 
             # Step 10 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
@@ -997,7 +1007,9 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(output, module.output_schema.model_json_schema())
+                    ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                        output, module.output_schema.model_json_schema()
+                    )
 
                 # Step 10 -- Middleware After (async-aware)
                 output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)

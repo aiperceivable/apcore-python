@@ -466,6 +466,8 @@ class TestPublicAPIAll:
         "EventEmitter",
         "EventSubscriber",
         "ApCoreEvent",
+        "WebhookSubscriber",
+        "A2ASubscriber",
         "on",
         "off",
         # Toggle
@@ -477,6 +479,18 @@ class TestPublicAPIAll:
         # Additional errors
         "ModuleDisabledError",
         "ReloadFailedError",
+        # Observability (added in 0.11.0, exported in 0.12.0)
+        "ErrorEntry",
+        "ErrorHistory",
+        "ErrorHistoryMiddleware",
+        "UsageCollector",
+        "UsageMiddleware",
+        "PlatformNotifyMiddleware",
+        # System Modules
+        "register_sys_modules",
+        "register_subscriber_type",
+        "unregister_subscriber_type",
+        "reset_subscriber_registry",
     }
 
     def test_all_contains_all_expected_names(self):

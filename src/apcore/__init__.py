@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _get_version
 from typing import Any
 
 # Core
@@ -91,10 +93,12 @@ from apcore.acl import ACL, ACLRule, AuditEntry
 from apcore.middleware import (
     AfterMiddleware,
     BeforeMiddleware,
+    ErrorHistoryMiddleware,
     LoggingMiddleware,
     Middleware,
     MiddlewareChainError,
     MiddlewareManager,
+    PlatformNotifyMiddleware,
     RetryConfig,
     RetryMiddleware,
 )
@@ -137,6 +141,8 @@ from apcore.utils.pattern import calculate_specificity as calculate_specificity
 # Observability
 from apcore.observability import (
     ContextLogger,
+    ErrorEntry,
+    ErrorHistory,
     InMemoryExporter,
     MetricsCollector,
     MetricsMiddleware,
@@ -146,14 +152,24 @@ from apcore.observability import (
     SpanExporter,
     StdoutExporter,
     TracingMiddleware,
+    UsageCollector,
+    UsageMiddleware,
     create_span,
 )
 
 # Events
-from apcore.events import ApCoreEvent, EventEmitter, EventSubscriber
+from apcore.events import A2ASubscriber, ApCoreEvent, EventEmitter, EventSubscriber, WebhookSubscriber
 
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
+
+# System Modules
+from apcore.sys_modules.registration import (
+    register_subscriber_type,
+    register_sys_modules,
+    reset_subscriber_registry,
+    unregister_subscriber_type,
+)
 
 # ---------------------------------------------------------------------------
 # Default client for simplified global access
@@ -285,7 +301,10 @@ def enable(module_id: str, reason: str = "Enabled via APCore client") -> dict[st
     return _default_client.enable(module_id, reason)
 
 
-__version__ = "0.11.0"
+try:
+    __version__ = _get_version("apcore")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 __all__ = [
     # Core
@@ -393,6 +412,8 @@ __all__ = [
     "MiddlewareChainError",
     "RetryConfig",
     "RetryMiddleware",
+    "ErrorHistoryMiddleware",
+    "PlatformNotifyMiddleware",
     # Decorators
     "module",
     "FunctionModule",
@@ -435,14 +456,25 @@ __all__ = [
     "OTLPExporter",
     "SpanExporter",
     "create_span",
+    "ErrorEntry",
+    "ErrorHistory",
+    "UsageCollector",
+    "UsageMiddleware",
     # Events
     "ApCoreEvent",
     "EventEmitter",
     "EventSubscriber",
+    "WebhookSubscriber",
+    "A2ASubscriber",
     # Trace Context
     "TraceContext",
     "TraceParent",
     # Version
     "VersionIncompatibleError",
     "negotiate_version",
+    # System Modules
+    "register_sys_modules",
+    "register_subscriber_type",
+    "unregister_subscriber_type",
+    "reset_subscriber_registry",
 ]

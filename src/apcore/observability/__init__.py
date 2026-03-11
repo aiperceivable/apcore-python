@@ -26,6 +26,7 @@ from apcore.observability.tracing import (
     TracingMiddleware,
     create_span,
 )
+from apcore.observability.usage import UsageCollector, UsageMiddleware
 
 __all__ = [
     "ContextLogger",
@@ -40,5 +41,7 @@ __all__ = [
     "SpanExporter",
     "StdoutExporter",
     "TracingMiddleware",
+    "UsageCollector",
+    "UsageMiddleware",
     "create_span",
 ]
