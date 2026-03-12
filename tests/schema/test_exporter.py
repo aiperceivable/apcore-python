@@ -121,6 +121,32 @@ class TestExportMcp:
         result = exporter.export_mcp(sd, name="custom_tool")
         assert result["name"] == "custom_tool"
 
+    def test_meta_defaults(self) -> None:
+        sd = _make_schema_def()
+        exporter = SchemaExporter()
+        result = exporter.export_mcp(sd)
+        meta = result["_meta"]
+        assert meta["cacheable"] is False
+        assert meta["cacheTtl"] == 0
+        assert meta["cacheKeyFields"] is None
+        assert meta["paginated"] is False
+        assert meta["paginationStyle"] == "cursor"
+
+    def test_meta_with_annotations(self) -> None:
+        sd = _make_schema_def()
+        ann = _make_annotations(
+            cacheable=True, cache_ttl=600, cache_key_fields=["id", "name"],
+            paginated=True, pagination_style="offset",
+        )
+        exporter = SchemaExporter()
+        result = exporter.export_mcp(sd, annotations=ann)
+        meta = result["_meta"]
+        assert meta["cacheable"] is True
+        assert meta["cacheTtl"] == 600
+        assert meta["cacheKeyFields"] == ["id", "name"]
+        assert meta["paginated"] is True
+        assert meta["paginationStyle"] == "offset"
+
 
 # ===== export_openai() =====
 

@@ -54,6 +54,13 @@ class SchemaExporter:
                 "openWorldHint": annotations.open_world if annotations else True,
                 "streaming": annotations.streaming if annotations else False,
             },
+            "_meta": {
+                "cacheable": annotations.cacheable if annotations else False,
+                "cacheTtl": annotations.cache_ttl if annotations else 0,
+                "cacheKeyFields": annotations.cache_key_fields if annotations else None,
+                "paginated": annotations.paginated if annotations else False,
+                "paginationStyle": annotations.pagination_style if annotations else "cursor",
+            },
         }
 
     def export_openai(self, schema_def: SchemaDefinition) -> dict[str, Any]:

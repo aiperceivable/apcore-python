@@ -249,6 +249,11 @@ class ReloadModuleModule:
         previous_version = self._get_current_version(module_id)
 
         start = time.monotonic()
+
+        # Suspend: capture state from old instance before unload
+        old_module = self._registry.get(module_id)
+        suspended_state = self._try_suspend(module_id, old_module)
+
         self._registry.safe_unregister(module_id)
 
         try:
@@ -260,6 +265,11 @@ class ReloadModuleModule:
             ) from exc
 
         self._reregister_module(module_id, new_module)
+
+        # Resume: restore state into new instance after on_load
+        if suspended_state is not None:
+            self._try_resume(module_id, new_module, suspended_state)
+
         elapsed_ms = (time.monotonic() - start) * 1000.0
 
         new_version = getattr(new_module, "version", "1.0.0")
@@ -336,6 +346,35 @@ class ReloadModuleModule:
                 },
             )
         )
+
+    @staticmethod
+    def _try_suspend(module_id: str, module: Any) -> dict[str, Any] | None:
+        """Call on_suspend() on the module if available. Returns state or None."""
+        if not hasattr(module, "on_suspend") or not callable(module.on_suspend):
+            return None
+        try:
+            state = module.on_suspend()
+            if state is not None and not isinstance(state, dict):
+                logger.warning(
+                    "on_suspend() for module '%s' returned non-dict (%s); ignoring",
+                    module_id,
+                    type(state).__name__,
+                )
+                return None
+            return state
+        except Exception as exc:
+            logger.error("on_suspend() failed for module '%s': %s", module_id, exc)
+            return None
+
+    @staticmethod
+    def _try_resume(module_id: str, module: Any, state: dict[str, Any]) -> None:
+        """Call on_resume() on the module if available."""
+        if not hasattr(module, "on_resume") or not callable(module.on_resume):
+            return
+        try:
+            module.on_resume(state)
+        except Exception as exc:
+            logger.error("on_resume() failed for module '%s': %s", module_id, exc)
 
     @staticmethod
     def _log_reload(module_id: str, previous_version: str, new_version: str, reason: str) -> None:

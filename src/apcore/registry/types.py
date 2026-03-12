@@ -30,6 +30,7 @@ class ModuleDescriptor:
     annotations: ModuleAnnotations | None = None
     examples: list[ModuleExample] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    sunset_date: str | None = None
 
 
 @dataclass

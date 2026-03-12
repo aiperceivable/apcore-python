@@ -57,6 +57,31 @@ class TestMergeAnnotations:
         assert result.requires_approval is False
         assert result.open_world is True
 
+    def test_new_annotation_fields_defaults(self) -> None:
+        result = merge_annotations(None, None)
+        assert result.cacheable is False
+        assert result.cache_ttl == 0
+        assert result.cache_key_fields is None
+        assert result.paginated is False
+        assert result.pagination_style == "cursor"
+
+    def test_new_annotation_fields_from_code(self) -> None:
+        code = ModuleAnnotations(cacheable=True, cache_ttl=300, cache_key_fields=["id"], paginated=True, pagination_style="offset")
+        result = merge_annotations(None, code)
+        assert result.cacheable is True
+        assert result.cache_ttl == 300
+        assert result.cache_key_fields == ["id"]
+        assert result.paginated is True
+        assert result.pagination_style == "offset"
+
+    def test_new_annotation_fields_yaml_overrides_code(self) -> None:
+        code = ModuleAnnotations(cacheable=True, cache_ttl=300)
+        yaml: dict[str, Any] = {"cacheable": False, "cache_ttl": 0, "paginated": True}
+        result = merge_annotations(yaml, code)
+        assert result.cacheable is False
+        assert result.cache_ttl == 0
+        assert result.paginated is True
+
     def test_unknown_yaml_key_ignored(self) -> None:
         yaml: dict[str, Any] = {"readonly": True, "unknown_field": 42}
         result = merge_annotations(yaml, None)

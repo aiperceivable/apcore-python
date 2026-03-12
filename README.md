@@ -7,9 +7,11 @@
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
 
-Schema-driven module development framework for AI-perceivable interfaces.
+> **Build once, invoke by Code or AI.**
 
-**apcore** provides a unified task orchestration framework with strict type safety, access control, middleware pipelines, and built-in observability. It enables you to define modules with structured input/output schemas that are easily consumed by LLMs and other automated systems.
+A schema-enforced module standard for the AI-Perceivable era.
+
+**apcore** is an AI-Perceivable module standard that makes every interface naturally perceivable and understandable by AI through enforced Schema definitions and behavioral annotations. It provides strict type safety, access control, middleware pipelines, and built-in observability — enabling you to define modules with structured input/output schemas that are easily consumed by both code and AI.
 
 ## Features
 
@@ -25,6 +27,7 @@ Schema-driven module development framework for AI-perceivable interfaces.
 - **Approval system** -- Pluggable approval gate (Step 5) with sync/async handlers, Phase B resume, and audit events
 - **Extension points** -- Unified extension management for discoverers, middleware, ACL, approval handlers, span exporters, and module validators
 - **Async task management** -- Background module execution with status tracking, cancellation, and concurrency limiting
+- **Behavioral annotations** -- Declare module traits (readonly, destructive, idempotent, cacheable, paginated, streaming) for AI-aware orchestration
 - **W3C Trace Context** -- traceparent header injection/extraction for distributed tracing interop
 
 ## API Overview

@@ -1,4 +1,4 @@
-"""apcore - Schema-driven module development framework."""
+"""apcore - Schema-driven module standard."""
 
 from __future__ import annotations
 

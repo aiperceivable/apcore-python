@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "apcore"
 version = "0.12.0"
-description = "Schema-driven module development framework for AI-perceivable interfaces"
+description = "Schema-driven module standard for AI-perceivable interfaces"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [

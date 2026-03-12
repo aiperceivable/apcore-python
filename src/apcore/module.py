@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -51,6 +51,11 @@ class ModuleAnnotations:
         requires_approval: Whether human approval is needed before execution.
         open_world: Whether the module interacts with external systems.
         streaming: Whether the module supports streaming execution.
+        cacheable: Whether the module's results can be cached.
+        cache_ttl: Cache time-to-live in seconds (0 means no expiry).
+        cache_key_fields: Input fields used to compute the cache key (None = all).
+        paginated: Whether the module supports paginated results.
+        pagination_style: Pagination strategy ("cursor", "offset", "page").
     """
 
     readonly: bool = False
@@ -59,6 +64,11 @@ class ModuleAnnotations:
     requires_approval: bool = False
     open_world: bool = True
     streaming: bool = False
+    cacheable: bool = False
+    cache_ttl: int = 0
+    cache_key_fields: list[str] | None = None
+    paginated: bool = False
+    pagination_style: Literal["cursor", "offset", "page"] = "cursor"
 
 
 @dataclass
