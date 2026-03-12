@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-03-12
+
+### Added
+- **Caching/pagination annotations** — `ModuleAnnotations` gains 5 new fields: `cacheable`, `cache_ttl`, `cache_key_fields`, `paginated`, `pagination_style` (all optional with defaults, backward compatible)
+- **`pagination_style` Literal type** — Typed as `Literal["cursor", "offset", "page"]` instead of free-form `str`
+- **`sunset_date`** — New field on `ModuleDescriptor` for module deprecation lifecycle (ISO 8601 date)
+- **`on_suspend()` / `on_resume()` lifecycle hooks** — Duck-typed optional hooks for state preservation during hot-reload; integrated into `ReloadModuleModule` and registry watchdog
+- **MCP `_meta` export** — Schema exporter includes `cacheable`, `cacheTtl`, `cacheKeyFields`, `paginated`, `paginationStyle` in `_meta` sub-dict
+- **Suspend/resume tests** — `tests/test_suspend_resume.py` covering state transfer, backward compatibility, error handling
+
+### Changed
+- **Rebranded** — "module development framework" → "module standard" in pyproject.toml, `__init__.py`, README, and internal docstrings
+- **`Module` Protocol** — `on_suspend`/`on_resume` deliberately kept OUT of Protocol (duck-typed via `hasattr`/`callable`)
+
+---
+
 ## [0.12.0] - 2026-03-10
 
 ### Changed
