@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from apcore.errors import ModuleError
-from apcore.middleware import Middleware
+from apcore.middleware.base import Middleware
 
 _DESCRIPTIONS = {
     "apcore_module_calls_total": "Total module calls",
