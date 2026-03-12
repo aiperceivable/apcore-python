@@ -1,4 +1,4 @@
-"""Full lifecycle integration tests for the 11-step execution pipeline.
+"""Full lifecycle integration tests for the execution pipeline.
 
 Tests verify the COMPLETE pipeline with ACL + Approval + Middleware + Schema
 validation all enabled simultaneously. These are NOT isolated unit tests --
@@ -257,7 +257,7 @@ def _make_denying_handler() -> CallbackApprovalHandler:
 
 
 class TestFullLifecycle:
-    """Integration tests for the complete 11-step execution pipeline."""
+    """Integration tests for the complete execution pipeline."""
 
     def test_full_pipeline_all_gates_enabled(self) -> None:
         """All gates pass: ACL allows, approval approves, middleware runs."""

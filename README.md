@@ -16,7 +16,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 ## Features
 
 - **Schema-driven modules** -- Define input/output contracts using Pydantic models with automatic validation
-- **11-step execution pipeline** -- Context creation, safety checks, ACL enforcement, approval gate, validation, middleware chains, and execution with timeout support
+- **Execution Pipeline** -- Context creation, safety checks, ACL enforcement, approval gate, validation, middleware chains, and execution with timeout support
 - **`@module` decorator** -- Turn plain functions into fully schema-aware modules with zero boilerplate
 - **YAML bindings** -- Register modules declaratively without modifying source code
 - **Access control (ACL)** -- Pattern-based, first-match-wins rules with wildcard support

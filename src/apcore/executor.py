@@ -156,7 +156,7 @@ def _redact_secret_prefix(data: dict[str, Any]) -> None:
 class Executor:
     """Central execution engine that orchestrates the module call pipeline.
 
-    The Executor implements an 11-step flow: context creation, safety checks,
+    The Executor implements a robust execution flow: context creation, safety checks,
     module lookup, ACL enforcement, approval gate, input validation with
     redaction, middleware before chain, module execution, output validation,
     middleware after chain, and result return.
@@ -288,7 +288,7 @@ class Executor:
         context: Context | None = None,
         version_hint: str | None = None,
     ) -> dict[str, Any]:
-        """Execute a module through the 11-step pipeline.
+        """Execute a module through the execution pipeline.
 
         Args:
             module_id: The module to execute.
