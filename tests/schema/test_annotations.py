@@ -66,7 +66,9 @@ class TestMergeAnnotations:
         assert result.pagination_style == "cursor"
 
     def test_new_annotation_fields_from_code(self) -> None:
-        code = ModuleAnnotations(cacheable=True, cache_ttl=300, cache_key_fields=["id"], paginated=True, pagination_style="offset")
+        code = ModuleAnnotations(
+            cacheable=True, cache_ttl=300, cache_key_fields=["id"], paginated=True, pagination_style="offset"
+        )
         result = merge_annotations(None, code)
         assert result.cacheable is True
         assert result.cache_ttl == 300

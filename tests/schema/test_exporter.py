@@ -135,8 +135,11 @@ class TestExportMcp:
     def test_meta_with_annotations(self) -> None:
         sd = _make_schema_def()
         ann = _make_annotations(
-            cacheable=True, cache_ttl=600, cache_key_fields=["id", "name"],
-            paginated=True, pagination_style="offset",
+            cacheable=True,
+            cache_ttl=600,
+            cache_key_fields=["id", "name"],
+            paginated=True,
+            pagination_style="offset",
         )
         exporter = SchemaExporter()
         result = exporter.export_mcp(sd, annotations=ann)

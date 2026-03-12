@@ -243,9 +243,7 @@ class TestSuspendErrorHandling:
         reload_mod = _make_reload(registry)
         new_mod = _PlainModuleV2()
 
-        with caplog.at_level(logging.ERROR), patch.object(
-            reload_mod, "_rediscover_module", return_value=new_mod
-        ):
+        with caplog.at_level(logging.ERROR), patch.object(reload_mod, "_rediscover_module", return_value=new_mod):
             result = reload_mod.execute(
                 {"module_id": "broken.suspend", "reason": "test"},
                 context=None,
@@ -266,9 +264,7 @@ class TestResumeErrorHandling:
         # New module also has broken on_resume
         new_mod = _BrokenResumeModule()
 
-        with caplog.at_level(logging.ERROR), patch.object(
-            reload_mod, "_rediscover_module", return_value=new_mod
-        ):
+        with caplog.at_level(logging.ERROR), patch.object(reload_mod, "_rediscover_module", return_value=new_mod):
             result = reload_mod.execute(
                 {"module_id": "broken.resume", "reason": "test"},
                 context=None,

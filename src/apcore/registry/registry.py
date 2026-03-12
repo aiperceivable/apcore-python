@@ -924,7 +924,11 @@ class Registry:
                             self._lowercase_map[new_id.lower()] = new_id
                             self._trigger_event("register", new_id, instance)
                             # Resume: restore suspended state into new instance
-                            if suspended_state is not None and hasattr(instance, "on_resume") and callable(instance.on_resume):
+                            if (
+                                suspended_state is not None
+                                and hasattr(instance, "on_resume")
+                                and callable(instance.on_resume)
+                            ):
                                 try:
                                     instance.on_resume(suspended_state)
                                 except Exception as e:
