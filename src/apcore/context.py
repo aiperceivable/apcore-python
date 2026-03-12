@@ -148,7 +148,7 @@ class Context(Generic[T]):
 
 @runtime_checkable
 class ContextFactory(Protocol):
-    """Protocol for creating Context from framework-specific requests.
+    """Protocol for creating Context from runtime-specific requests.
 
     Web framework integrations should implement this to extract Identity
     from HTTP requests (e.g., Django request.user, JWT tokens, API keys).

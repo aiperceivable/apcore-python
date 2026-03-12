@@ -589,6 +589,10 @@ class Registry:
         if deprecation:
             self._log_deprecation_warning(module_id, version_str, deprecation)
 
+        sunset_date: str | None = None
+        if deprecation:
+            sunset_date = deprecation.get("sunset_date")
+
         return ModuleDescriptor(
             module_id=module_id,
             name=meta.get("name") or getattr(module, "name", None),
@@ -601,6 +605,7 @@ class Registry:
             annotations=getattr(module, "annotations", None),
             examples=list(getattr(module, "examples", []) or []),
             metadata=effective_metadata,
+            sunset_date=sunset_date,
         )
 
     def _log_deprecation_warning(self, module_id: str, version: str, deprecation: dict[str, Any]) -> None:

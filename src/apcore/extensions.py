@@ -1,4 +1,4 @@
-"""Extension point framework for apcore.
+"""Extension point system for apcore.
 
 Provides a centralized mechanism to register, query, and wire custom
 extensions (discoverers, middleware, ACL providers, span exporters, and

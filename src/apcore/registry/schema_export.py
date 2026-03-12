@@ -47,7 +47,7 @@ def get_schema(registry: Registry, module_id: str) -> dict[str, Any] | None:
     examples_raw = getattr(module, "examples", []) or []
     examples_list = [dataclasses.asdict(ex) for ex in examples_raw if isinstance(ex, ModuleExample)]
 
-    return {
+    result: dict[str, Any] = {
         "module_id": module_id,
         "name": getattr(module, "name", None),
         "description": getattr(module, "description", ""),
@@ -58,6 +58,12 @@ def get_schema(registry: Registry, module_id: str) -> dict[str, Any] | None:
         "annotations": annotations_dict,
         "examples": examples_list,
     }
+
+    sunset_date = getattr(module, "sunset_date", None)
+    if sunset_date is not None:
+        result["sunset_date"] = sunset_date
+
+    return result
 
 
 def export_schema(

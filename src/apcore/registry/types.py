@@ -31,6 +31,7 @@ class ModuleDescriptor:
     examples: list[ModuleExample] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     sunset_date: str | None = None
+    """ISO 8601 date string (YYYY-MM-DD) after which this module is removed."""
 
 
 @dataclass

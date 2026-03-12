@@ -1,4 +1,4 @@
-"""Error hierarchy for the apcore framework."""
+"""Error hierarchy for apcore."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ _UNSET: Any = object()
 
 
 class ModuleError(Exception):
-    """Base error for all apcore framework errors."""
+    """Base error for all apcore errors."""
 
     _default_retryable: bool | None = None
 

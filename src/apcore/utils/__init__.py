@@ -1,4 +1,4 @@
-"""Utility functions for the apcore framework."""
+"""Utility functions for apcore."""
 
 from apcore.utils.call_chain import guard_call_chain
 from apcore.utils.error_propagation import propagate_error
