@@ -62,6 +62,8 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `RetryMiddleware` | Automatic retry with backoff |
 | `ErrorHistoryMiddleware` | Records errors into ErrorHistory |
 | `PlatformNotifyMiddleware` | Emits events on error rate/latency spikes |
+| `ObsLoggingMiddleware` | Observability-aware structured logging middleware |
+| `UsageMiddleware` | Per-call usage tracking middleware |
 
 **Schema**
 
@@ -81,6 +83,10 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `ContextLogger` | Context-aware structured logging |
 | `ErrorHistory` | Ring buffer of recent errors with deduplication |
 | `UsageCollector` | Per-module usage statistics and trends |
+| `TraceContext` | W3C Trace Context propagation (traceparent/tracestate) |
+| `InMemoryExporter` | Span exporter that stores spans in memory |
+| `StdoutExporter` | Span exporter that writes spans to stdout |
+| `OTLPExporter` | Span exporter using OpenTelemetry Protocol |
 
 **Events & Extensions**
 
@@ -92,6 +98,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `AsyncTaskManager` | Background module execution with status tracking |
 | `CancelToken` | Cooperative cancellation token |
 | `BindingLoader` | Load modules from YAML binding files |
+| `ErrorCodeRegistry` | Central registry for structured error codes |
 
 ## Documentation
 
@@ -200,29 +207,171 @@ acl = ACL(rules=[
 executor = Executor(registry=registry, acl=acl)
 ```
 
-## Project Structure
+## Examples
 
+The `examples/` directory contains runnable demos:
+
+---
+
+### `simple_client` — APCore client with decorator-based modules
+
+Initializes an `APCore` client, registers modules with `@client.module()`, and calls them directly.
+
+```python
+from apcore import APCore
+
+client = APCore()
+
+@client.module(id="math.add", description="Add two integers")
+def add(a: int, b: int) -> int:
+    return a + b
+
+result = client.call("math.add", {"a": 10, "b": 5})
+print(result)  # {'result': 15}
+
+@client.module(id="greet")
+def greet(name: str, greeting: str = "Hello") -> dict:
+    return {"message": f"{greeting}, {name}!"}
+
+result = client.call("greet", {"name": "Alice"})
+print(result)  # {'message': 'Hello, Alice!'}
 ```
-src/apcore/
-    __init__.py          # Public API
-    async_task.py        # Background task manager
-    cancel.py            # Cooperative cancellation primitives
-    context.py           # Execution context & identity
-    executor.py          # Core execution engine
-    decorator.py         # @module decorator
-    bindings.py          # YAML binding loader
-    config.py            # Configuration
-    acl.py               # Access control
-    approval.py          # Approval system
-    extensions.py        # Extension point manager
-    errors.py            # Error hierarchy
-    module.py            # Module annotations & metadata
-    trace_context.py     # W3C trace context helpers
-    middleware/          # Middleware system
-    observability/       # Tracing, metrics, logging
-    registry/            # Module discovery & registration
-    schema/              # Schema loading, validation, export
-    utils/               # Utilities
+
+---
+
+### `global_client` — Minimal global client usage
+
+No explicit initialization needed — use the default global client directly.
+
+```python
+import apcore
+
+@apcore.module(id="math.add")
+def add(a: int, b: int) -> int:
+    return a + b
+
+result = apcore.call("math.add", {"a": 10, "b": 5})
+print(result)  # {'result': 15}
+```
+
+---
+
+### `greet` — Duck-typed module with Pydantic schemas
+
+Demonstrates the class-based module interface with Pydantic `BaseModel` for input/output schemas.
+
+```python
+from pydantic import BaseModel
+
+class GreetInput(BaseModel):
+    name: str
+
+class GreetOutput(BaseModel):
+    message: str
+
+class GreetModule:
+    input_schema = GreetInput
+    output_schema = GreetOutput
+    description = "Greet a user by name"
+
+    def execute(self, inputs: dict, context) -> dict:
+        name = inputs["name"]
+        return {"message": f"Hello, {name}!"}
+```
+
+---
+
+### `get_user` — Readonly module with `ModuleAnnotations`
+
+Demonstrates behavioral annotations (`readonly`, `idempotent`) and simulated database lookup.
+
+```python
+from pydantic import BaseModel
+from apcore.module import ModuleAnnotations
+
+class GetUserInput(BaseModel):
+    user_id: str
+
+class GetUserOutput(BaseModel):
+    id: str
+    name: str
+    email: str
+
+class GetUserModule:
+    input_schema = GetUserInput
+    output_schema = GetUserOutput
+    description = "Get user details by ID"
+    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+
+    _users = {
+        "user-1": {"id": "user-1", "name": "Alice", "email": "alice@example.com"},
+        "user-2": {"id": "user-2", "name": "Bob", "email": "bob@example.com"},
+    }
+
+    def execute(self, inputs: dict, context) -> dict:
+        user_id = inputs["user_id"]
+        user = self._users.get(user_id)
+        if user is None:
+            return {"id": user_id, "name": "Unknown", "email": "unknown@example.com"}
+        return dict(user)
+```
+
+---
+
+### `send_email` — Destructive module with sensitive fields and ContextLogger
+
+Shows `x-sensitive` on schema fields (for log redaction), `ModuleAnnotations` with metadata, `ModuleExample` for AI-perceivable documentation, and `ContextLogger` usage.
+
+```python
+from pydantic import BaseModel, Field
+from apcore.module import ModuleAnnotations, ModuleExample
+from apcore.observability import ContextLogger
+
+class SendEmailInput(BaseModel):
+    to: str
+    subject: str
+    body: str
+    api_key: str = Field(..., json_schema_extra={"x-sensitive": True})
+
+class SendEmailOutput(BaseModel):
+    status: str
+    message_id: str
+
+class SendEmailModule:
+    input_schema = SendEmailInput
+    output_schema = SendEmailOutput
+    description = "Send an email message"
+    tags = ["email", "communication", "external"]
+    version = "1.2.0"
+    metadata = {"provider": "example-smtp", "max_retries": 3}
+    annotations = ModuleAnnotations(destructive=True, idempotent=False, open_world=True)
+    examples = [
+        ModuleExample(
+            title="Send a welcome email",
+            inputs={"to": "user@example.com", "subject": "Welcome!", "body": "...", "api_key": "sk-xxx"},
+            output={"status": "sent", "message_id": "msg-12345"},
+            description="Sends a welcome email to a new user.",
+        ),
+    ]
+
+    def execute(self, inputs: dict, context) -> dict:
+        logger = ContextLogger.from_context(context, name="send_email")
+        logger.info("Sending email", extra={"to": inputs["to"], "subject": inputs["subject"]})
+        message_id = f"msg-{hash(inputs['to']) % 100000:05d}"
+        logger.info("Email sent successfully", extra={"message_id": message_id})
+        return {"status": "sent", "message_id": message_id}
+```
+
+---
+
+### `decorated_add` — `@module` decorator for simple functions
+
+```python
+from apcore.decorator import module
+
+@module(description="Add two integers", tags=["math", "utility"])
+def add(a: int, b: int) -> int:
+    return a + b
 ```
 
 ## Development
