@@ -63,7 +63,6 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `ErrorHistoryMiddleware` | Records errors into ErrorHistory |
 | `PlatformNotifyMiddleware` | Emits events on error rate/latency spikes |
 | `ObsLoggingMiddleware` | Observability-aware structured logging middleware |
-| `UsageMiddleware` | Per-call usage tracking middleware |
 
 **Schema**
 
@@ -83,6 +82,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `ContextLogger` | Context-aware structured logging |
 | `ErrorHistory` | Ring buffer of recent errors with deduplication |
 | `UsageCollector` | Per-module usage statistics and trends |
+| `UsageMiddleware` | Per-call usage tracking middleware |
 | `TraceContext` | W3C Trace Context propagation (traceparent/tracestate) |
 | `InMemoryExporter` | Span exporter that stores spans in memory |
 | `StdoutExporter` | Span exporter that writes spans to stdout |
