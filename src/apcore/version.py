@@ -1,4 +1,8 @@
-"""Version negotiation (Algorithm A14)."""
+"""Version negotiation (Algorithm A14).
+
+Compares caller-requested semver ranges against a module's declared version
+and selects the best compatible match, enabling safe multi-version coexistence.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""Executor and related utilities for apcore."""
+"""Executor — the module execution engine for apcore.
+
+Resolves a module by ID, validates inputs against its schema, enforces ACL
+and approval policies, runs the middleware chain, and returns the result.
+Supports sync, async, and streaming execution modes.
+"""
 
 from __future__ import annotations
 

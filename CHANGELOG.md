@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-03-19
+
+### Added
+- **Dict schema support** — Modules can now define `input_schema` / `output_schema` as plain JSON Schema dicts instead of Pydantic model classes. A `_DictSchemaAdapter` transparently wraps dict schemas at registration time so all internal code paths (executor, schema exporter, `get_definition`) work without changes.
+
+### Fixed
+- **`get_definition()` crash on dict schemas** — Previously called `.model_json_schema()` on dict objects, causing `AttributeError`
+- **Executor crash on dict schemas** — `call()`, `call_async()`, and `stream()` all called `.model_validate()` on dict objects
+
+### Improved
+- **File header docstrings** — Enhanced docstrings for `errors.py`, `executor.py`, and `version.py`
+
+---
+
 ## [0.13.0] - 2026-03-12
 
 ### Added

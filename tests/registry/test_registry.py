@@ -394,6 +394,44 @@ class TestGetDefinition:
         reg = Registry()
         assert reg.get_definition("missing") is None
 
+    def test_dict_schema(self) -> None:
+        """get_definition() works when input_schema / output_schema are plain dicts."""
+
+        class DictSchemaModule:
+            description = "Module with dict schemas"
+            input_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+            output_schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+            version = "1.0.0"
+            tags: list[str] = []
+
+            def execute(self, inputs: dict, context: object = None) -> dict:
+                return {"ok": True}
+
+        reg = Registry()
+        reg.register("dict.mod", DictSchemaModule())
+        defn = reg.get_definition("dict.mod")
+        assert defn is not None
+        assert defn.input_schema == {"type": "object", "properties": {"name": {"type": "string"}}}
+        assert defn.output_schema == {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+    def test_no_schema(self) -> None:
+        """get_definition() returns empty dict when module has no schema."""
+
+        class NoSchemaModule:
+            description = "Module without schemas"
+            version = "1.0.0"
+            tags: list[str] = []
+
+            def execute(self, inputs: dict, context: object = None) -> dict:
+                return {}
+
+        reg = Registry()
+        reg.register("no.typed", NoSchemaModule())
+        defn = reg.get_definition("no.typed")
+        assert defn is not None
+        assert defn.input_schema == {}
+        assert defn.output_schema == {}
+
 
 # ===== Event Callbacks =====
 

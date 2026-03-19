@@ -1,4 +1,10 @@
-"""Error hierarchy for apcore."""
+"""Error hierarchy for apcore.
+
+Defines ModuleError (the base for all apcore errors), standard ErrorCodes,
+and specialized subclasses (ACLDeniedError, SchemaValidationError, etc.).
+Each error carries optional AI guidance fields (retryable, ai_guidance,
+user_fixable, suggestion) to enable Self-Healing agents.
+"""
 
 from __future__ import annotations
 

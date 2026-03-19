@@ -451,6 +451,41 @@ class TestCallEdgeCases:
         assert result == {"result": "ok"}
         assert mod.execute_calls[0][0] == {}
 
+    def test_dict_schema_call(self) -> None:
+        """call() works when module schemas are plain dicts (not Pydantic models)."""
+
+        class DictSchemaModule:
+            description = "Dict schema module"
+            input_schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+            output_schema = {"type": "object", "properties": {"y": {"type": "integer"}}}
+            version = "1.0.0"
+            tags: list[str] = []
+
+            def execute(self, inputs: dict[str, Any], context: Any) -> dict[str, Any]:
+                return {"y": inputs.get("x", 0) + 1}
+
+        ex = _make_executor(module=DictSchemaModule())
+        result = ex.call("test.module", {"x": 5})
+        assert result == {"y": 6}
+
+    @pytest.mark.asyncio
+    async def test_dict_schema_call_async(self) -> None:
+        """call_async() works when module schemas are plain dicts."""
+
+        class DictSchemaModule:
+            description = "Dict schema module"
+            input_schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+            output_schema = {"type": "object", "properties": {"y": {"type": "integer"}}}
+            version = "1.0.0"
+            tags: list[str] = []
+
+            async def execute(self, inputs: dict[str, Any], context: Any) -> dict[str, Any]:
+                return {"y": inputs.get("x", 0) + 1}
+
+        ex = _make_executor(module=DictSchemaModule())
+        result = await ex.call_async("test.module", {"x": 5})
+        assert result == {"y": 6}
+
 
 # === validate() Tests ===
 

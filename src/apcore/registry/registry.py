@@ -32,6 +32,43 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class _DictSchemaAdapter:
+    """Adapts a plain JSON Schema dict to the Pydantic model class interface.
+
+    Allows modules that define ``input_schema`` / ``output_schema`` as raw
+    dicts to work transparently with the executor, schema exporter, and any
+    other code that calls ``model_validate``, ``model_json_schema``, or
+    ``model_rebuild`` on a schema object.
+
+    Note: ``model_validate`` is a pass-through — no JSON Schema validation is
+    performed.  Adding real validation would require a ``jsonschema`` dependency
+    which is not currently declared.  Modules that need strict input checking
+    should use Pydantic model classes or validate inside ``execute()``.
+    """
+
+    def __init__(self, schema: dict[str, Any]) -> None:
+        self._schema = schema
+
+    def model_json_schema(self) -> dict[str, Any]:
+        return self._schema
+
+    def model_validate(self, data: Any) -> Any:
+        """Pass-through: returns *data* unchanged (no validation)."""
+        return data
+
+    def model_rebuild(self) -> None:
+        pass
+
+
+def _ensure_schema_adapter(module: Any) -> None:
+    """Wrap raw dict schemas on *module* with ``_DictSchemaAdapter`` in-place."""
+    for attr in ("input_schema", "output_schema"):
+        value = getattr(module, attr, None)
+        if isinstance(value, dict):
+            setattr(module, attr, _DictSchemaAdapter(value))
+
+
 REGISTRY_EVENTS: dict[str, str] = {
     "REGISTER": "register",
     "UNREGISTER": "unregister",
@@ -399,6 +436,8 @@ class Registry:
 
         if len(module_id) > MAX_MODULE_ID_LENGTH:
             raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
+
+        _ensure_schema_adapter(module)
 
         effective_version = version or getattr(module, "version", None) or "0.0.0"
 
@@ -974,6 +1013,7 @@ class Registry:
 
         Used by sys modules that use the reserved 'system.' prefix.
         """
+        _ensure_schema_adapter(module)
         with self._lock:
             self._modules[module_id] = module
             self._lowercase_map[module_id.lower()] = module_id

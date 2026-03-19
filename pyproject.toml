@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apcore"
-version = "0.13.0"
+version = "0.13.1"
 description = "Schema-driven module standard for AI-perceivable interfaces"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,7 +62,7 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
     "aiohttp>=3.9",
-    "apdev[dev]>=0.2.0",
+    "apdev[dev]>=0.2.3",
 ]
 
 [tool.setuptools.packages.find]

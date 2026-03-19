@@ -15,7 +15,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 
 ## Features
 
-- **Schema-driven modules** -- Define input/output contracts using Pydantic models with automatic validation
+- **Schema-driven modules** -- Define input/output contracts using Pydantic models (with automatic validation) or plain JSON Schema dicts
 - **Execution Pipeline** -- Context creation, safety checks, ACL enforcement, approval gate, validation, middleware chains, and execution with timeout support
 - **`@module` decorator** -- Turn plain functions into fully schema-aware modules with zero boilerplate
 - **YAML bindings** -- Register modules declaratively without modifying source code
@@ -183,6 +183,30 @@ client.register("greet", GreetModule())
 result = client.call("greet", {"name": "Alice"})
 # {"message": "Hello, Alice!"}
 ```
+
+### Alternative: Define schemas with plain dicts
+
+If you prefer not to use Pydantic, pass raw JSON Schema dicts directly:
+
+```python
+from apcore import APCore
+
+client = APCore()
+
+class WeatherModule:
+    input_schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+    output_schema = {"type": "object", "properties": {"temp": {"type": "number"}}}
+    description = "Get current temperature"
+
+    def execute(self, inputs: dict, context=None) -> dict:
+        return {"temp": 22.5}
+
+client.register("weather", WeatherModule())
+result = client.call("weather", {"city": "Tokyo"})
+# {"temp": 22.5}
+```
+
+> **Note:** Dict schemas skip Pydantic input validation. Use Pydantic models when you need automatic type coercion and validation, or validate inside `execute()`.
 
 ### Add middleware
 
