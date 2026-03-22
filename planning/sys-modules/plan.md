@@ -6,9 +6,9 @@ Add 20 new features to apcore that enable the AI self-evolution ecosystem: healt
 
 ## Source Documents
 
-- PRD: `docs/apcore-improvements/prd.md` (in aiperceivable-docs repo)
-- Feature Analysis: `docs/5-plans/apcore-new-features-comprehensive.md` (in aiperceivable-docs repo)
-- Design Review: `docs/2-research/architecture/apcore-ai-era-design-review.md` (in aiperceivable-docs repo)
+- PRD: `docs/apcore-improvements/prd.md` (in aipartnerup-docs repo)
+- Feature Analysis: `docs/5-plans/apcore-new-features-comprehensive.md` (in aipartnerup-docs repo)
+- Design Review: `docs/2-research/architecture/apcore-ai-era-design-review.md` (in aipartnerup-docs repo)
 
 ## Architecture Design
 

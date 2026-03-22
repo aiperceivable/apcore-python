@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/aiperceivable/apcore/main/apcore-logo.svg" alt="apcore logo" width="200"/>
+  <img src="https://raw.githubusercontent.com/aipartnerup/apcore/main/apcore-logo.svg" alt="apcore logo" width="200"/>
 </div>
 
 # apcore
@@ -103,7 +103,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 ## Documentation
 
 For full documentation, including Quick Start guides for both Python and TypeScript, visit:
-**[https://aiperceivable.github.io/apcore/getting-started.html](https://aiperceivable.github.io/apcore/getting-started.html)**
+**[https://aipartnerup.github.io/apcore/getting-started.html](https://aipartnerup.github.io/apcore/getting-started.html)**
 
 ## Requirements
 
@@ -432,9 +432,9 @@ Apache-2.0
 
 ## 🔗 Links
 
-- **Documentation**: [docs/apcore](https://github.com/aiperceivable/apcore) - Complete documentation
-- **Website**: [aiperceivable.com](https://aiperceivable.com)
-- **GitHub**: [aiperceivable/apcore-python](https://github.com/aiperceivable/apcore-python)
+- **Documentation**: [docs/apcore](https://github.com/aipartnerup/apcore) - Complete documentation
+- **Website**: [aipartnerup.com](https://aipartnerup.com)
+- **GitHub**: [aipartnerup/apcore-python](https://github.com/aipartnerup/apcore-python)
 - **PyPI**: [apcore](https://pypi.org/project/apcore/)
-- **Issues**: [GitHub Issues](https://github.com/aiperceivable/apcore-python/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/aiperceivable/apcore-python/discussions)
+- **Issues**: [GitHub Issues](https://github.com/aipartnerup/apcore-python/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/aipartnerup/apcore-python/discussions)

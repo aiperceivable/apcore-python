@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apcore"
-version = "0.13.2"
+version = "0.13.1"
 description = "Schema-driven module standard for AI-perceivable interfaces"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "aiperceivable", email = "tercel.yi@gmail.com"}
+    {name = "aipartnerup", email = "tercel.yi@gmail.com"}
 ]
 license = {text = "Apache-2.0"}
 keywords = [
@@ -45,11 +45,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://aiperceivable.com"
-Documentation = "https://github.com/aiperceivable/apcore"
-Repository = "https://github.com/aiperceivable/apcore-python"
-Issues = "https://github.com/aiperceivable/apcore-python/issues"
-Changelog = "https://github.com/aiperceivable/apcore-python/blob/main/CHANGELOG.md"
+Homepage = "https://aipartnerup.com"
+Documentation = "https://github.com/aipartnerup/apcore"
+Repository = "https://github.com/aipartnerup/apcore-python"
+Issues = "https://github.com/aipartnerup/apcore-python/issues"
+Changelog = "https://github.com/aipartnerup/apcore-python/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 events = [
