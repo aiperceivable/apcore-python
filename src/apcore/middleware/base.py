@@ -12,7 +12,19 @@ class Middleware:
 
     Subclass and override the methods you need. All methods return None by
     default, which signals 'no modification' to the middleware pipeline.
+
+    Attributes:
+        priority: Execution priority (0-1000). Higher priority executes first.
+            Middlewares with equal priority preserve registration order.
+            Defaults to 0 for backward compatibility.
     """
+
+    priority: int = 0
+
+    def __init__(self, *, priority: int = 0) -> None:
+        if not (0 <= priority <= 1000):
+            raise ValueError(f"priority must be between 0 and 1000, got {priority}")
+        self.priority = priority
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Context) -> dict[str, Any] | None:
         """Called before module execution. Return modified inputs or None."""

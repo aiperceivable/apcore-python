@@ -1,4 +1,4 @@
-"""Tests for the Middleware base class and function adapters."""
+"""Tests for the Middleware base class, function adapters, and priority ordering."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, Mock
 
 from apcore.context import Context
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
+from apcore.middleware.manager import MiddlewareManager
 
 
 # === Middleware Base Class ===
@@ -169,3 +170,129 @@ class TestAfterMiddleware:
         ctx = MagicMock(spec=Context)
         am.after("mod.id", {"k": "v"}, {"out": 1}, ctx)
         spy.assert_called_once_with("mod.id", {"k": "v"}, {"out": 1}, ctx)
+
+
+# === Middleware Priority Ordering ===
+
+
+class TestMiddlewarePriority:
+    """Tests for middleware priority ordering in MiddlewareManager."""
+
+    def test_default_priority_is_zero(self) -> None:
+        """Middleware instances default to priority 0."""
+        mw = Middleware()
+        assert mw.priority == 0
+
+    def test_custom_priority(self) -> None:
+        """Middleware accepts a custom priority via constructor."""
+        mw = Middleware(priority=500)
+        assert mw.priority == 500
+
+    def test_higher_priority_executes_first(self) -> None:
+        """Middlewares with higher priority appear earlier in the list."""
+        manager = MiddlewareManager()
+        low = Middleware(priority=100)
+        high = Middleware(priority=900)
+        mid = Middleware(priority=500)
+
+        manager.add(low)
+        manager.add(high)
+        manager.add(mid)
+
+        snapshot = manager.snapshot()
+        assert snapshot == [high, mid, low]
+
+    def test_equal_priority_preserves_registration_order(self) -> None:
+        """Middlewares with the same priority are ordered by registration time."""
+        manager = MiddlewareManager()
+        first = Middleware(priority=100)
+        second = Middleware(priority=100)
+        third = Middleware(priority=100)
+
+        manager.add(first)
+        manager.add(second)
+        manager.add(third)
+
+        snapshot = manager.snapshot()
+        assert snapshot == [first, second, third]
+
+    def test_mixed_priorities_with_ties(self) -> None:
+        """Mixed priorities sort correctly with registration-order tiebreaking."""
+        manager = MiddlewareManager()
+        a = Middleware(priority=500)
+        b = Middleware(priority=100)
+        c = Middleware(priority=500)
+        d = Middleware(priority=1000)
+        e = Middleware(priority=0)
+
+        manager.add(a)
+        manager.add(b)
+        manager.add(c)
+        manager.add(d)
+        manager.add(e)
+
+        snapshot = manager.snapshot()
+        assert snapshot == [d, a, c, b, e]
+
+    def test_default_priority_backward_compatible(self) -> None:
+        """Middlewares without explicit priority still work (default 0)."""
+        manager = MiddlewareManager()
+        mw1 = Middleware()
+        mw2 = Middleware()
+        mw3 = Middleware()
+
+        manager.add(mw1)
+        manager.add(mw2)
+        manager.add(mw3)
+
+        snapshot = manager.snapshot()
+        assert snapshot == [mw1, mw2, mw3]
+
+    def test_subclass_without_super_init_defaults_to_zero(self) -> None:
+        """Subclasses that don't call super().__init__() still have priority 0."""
+
+        class CustomMiddleware(Middleware):
+            def __init__(self) -> None:
+                self.custom_field = "hello"
+
+        mw = CustomMiddleware()
+        assert mw.priority == 0
+
+    def test_remove_preserves_priority_order(self) -> None:
+        """Removing a middleware preserves the priority-sorted order."""
+        manager = MiddlewareManager()
+        low = Middleware(priority=100)
+        high = Middleware(priority=900)
+        mid = Middleware(priority=500)
+
+        manager.add(low)
+        manager.add(high)
+        manager.add(mid)
+        manager.remove(mid)
+
+        snapshot = manager.snapshot()
+        assert snapshot == [high, low]
+
+    def test_priority_below_zero_raises_value_error(self) -> None:
+        """Priority below 0 raises ValueError."""
+        import pytest
+
+        with pytest.raises(ValueError, match="priority must be between 0 and 1000"):
+            Middleware(priority=-1)
+
+    def test_priority_above_1000_raises_value_error(self) -> None:
+        """Priority above 1000 raises ValueError."""
+        import pytest
+
+        with pytest.raises(ValueError, match="priority must be between 0 and 1000"):
+            Middleware(priority=1001)
+
+    def test_before_middleware_accepts_priority(self) -> None:
+        """BeforeMiddleware forwards priority to the base class."""
+        bm = BeforeMiddleware(lambda mid, inp, ctx: None, priority=42)
+        assert bm.priority == 42
+
+    def test_after_middleware_accepts_priority(self) -> None:
+        """AfterMiddleware forwards priority to the base class."""
+        am = AfterMiddleware(lambda mid, inp, out, ctx: None, priority=99)
+        assert am.priority == 99

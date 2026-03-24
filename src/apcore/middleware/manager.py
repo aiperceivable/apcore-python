@@ -44,9 +44,21 @@ class MiddlewareManager:
         self._lock = threading.Lock()
 
     def add(self, middleware: Middleware) -> None:
-        """Append a middleware to the end of the execution list."""
+        """Insert a middleware sorted by priority (higher first).
+
+        Middlewares with equal priority preserve registration order
+        (stable insertion). Priority range is 0-1000 per the protocol spec.
+        """
         with self._lock:
-            self._middlewares.append(middleware)
+            # Find the first position where the existing middleware has a
+            # lower priority. This keeps higher-priority items first and
+            # preserves registration order among equal priorities.
+            insert_idx = len(self._middlewares)
+            for i, existing in enumerate(self._middlewares):
+                if existing.priority < middleware.priority:
+                    insert_idx = i
+                    break
+            self._middlewares.insert(insert_idx, middleware)
 
     def remove(self, middleware: Middleware) -> bool:
         """Remove a middleware by identity (is). Returns True if found and removed."""

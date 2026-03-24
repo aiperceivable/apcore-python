@@ -12,8 +12,11 @@ __all__ = ["BeforeMiddleware", "AfterMiddleware"]
 class BeforeMiddleware(Middleware):
     """Wraps a before-only callback function as a Middleware instance."""
 
-    def __init__(self, callback: Callable[[str, dict[str, Any], Context], dict[str, Any] | None]) -> None:
+    def __init__(
+        self, callback: Callable[[str, dict[str, Any], Context], dict[str, Any] | None], *, priority: int = 0
+    ) -> None:
         """Store the callback for delegation."""
+        super().__init__(priority=priority)
         self._callback = callback
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Context) -> dict[str, Any] | None:
@@ -27,8 +30,11 @@ class AfterMiddleware(Middleware):
     def __init__(
         self,
         callback: Callable[[str, dict[str, Any], dict[str, Any], Context], dict[str, Any] | None],
+        *,
+        priority: int = 0,
     ) -> None:
         """Store the callback for delegation."""
+        super().__init__(priority=priority)
         self._callback = callback
 
     def after(
