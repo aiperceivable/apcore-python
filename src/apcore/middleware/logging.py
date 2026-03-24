@@ -27,6 +27,7 @@ class LoggingMiddleware(Middleware):
         log_outputs: bool = True,
         log_errors: bool = True,
     ) -> None:
+        super().__init__(priority=700)
         self._logger = logger or logging.getLogger("apcore.middleware.logging")
         self._log_inputs = log_inputs
         self._log_outputs = log_outputs

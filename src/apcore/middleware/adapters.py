@@ -13,7 +13,7 @@ class BeforeMiddleware(Middleware):
     """Wraps a before-only callback function as a Middleware instance."""
 
     def __init__(
-        self, callback: Callable[[str, dict[str, Any], Context], dict[str, Any] | None], *, priority: int = 0
+        self, callback: Callable[[str, dict[str, Any], Context], dict[str, Any] | None], *, priority: int = 100
     ) -> None:
         """Store the callback for delegation."""
         super().__init__(priority=priority)
@@ -31,7 +31,7 @@ class AfterMiddleware(Middleware):
         self,
         callback: Callable[[str, dict[str, Any], dict[str, Any], Context], dict[str, Any] | None],
         *,
-        priority: int = 0,
+        priority: int = 100,
     ) -> None:
         """Store the callback for delegation."""
         super().__init__(priority=priority)
