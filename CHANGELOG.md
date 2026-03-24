@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Middleware priority** — `Middleware` base class now accepts `priority: int` (0-1000, default 0). Higher priority executes first; equal priority preserves registration order. `BeforeMiddleware` and `AfterMiddleware` adapters also accept `priority`.
 - **Priority range validation** — `ValueError` raised for priority values outside 0-1000
 
+### Breaking Changes
+- Middleware default priority changed from `0` to `100` per PROTOCOL_SPEC §11.2. Middleware without explicit priority will now execute before priority-0 middleware.
+
+
 ## [0.13.2] - 2026-03-22
 
 ### Changed

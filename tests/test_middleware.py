@@ -178,10 +178,10 @@ class TestAfterMiddleware:
 class TestMiddlewarePriority:
     """Tests for middleware priority ordering in MiddlewareManager."""
 
-    def test_default_priority_is_zero(self) -> None:
-        """Middleware instances default to priority 0."""
+    def test_default_priority_is_100(self) -> None:
+        """Middleware instances default to priority 100 per PROTOCOL_SPEC."""
         mw = Middleware()
-        assert mw.priority == 0
+        assert mw.priority == 100
 
     def test_custom_priority(self) -> None:
         """Middleware accepts a custom priority via constructor."""
@@ -235,7 +235,7 @@ class TestMiddlewarePriority:
         assert snapshot == [d, a, c, b, e]
 
     def test_default_priority_backward_compatible(self) -> None:
-        """Middlewares without explicit priority still work (default 0)."""
+        """Middlewares without explicit priority still work (default 100)."""
         manager = MiddlewareManager()
         mw1 = Middleware()
         mw2 = Middleware()
@@ -248,15 +248,15 @@ class TestMiddlewarePriority:
         snapshot = manager.snapshot()
         assert snapshot == [mw1, mw2, mw3]
 
-    def test_subclass_without_super_init_defaults_to_zero(self) -> None:
-        """Subclasses that don't call super().__init__() still have priority 0."""
+    def test_subclass_without_super_init_defaults_to_100(self) -> None:
+        """Subclasses that don't call super().__init__() still have class default priority 100."""
 
         class CustomMiddleware(Middleware):
             def __init__(self) -> None:
                 self.custom_field = "hello"
 
         mw = CustomMiddleware()
-        assert mw.priority == 0
+        assert mw.priority == 100
 
     def test_remove_preserves_priority_order(self) -> None:
         """Removing a middleware preserves the priority-sorted order."""

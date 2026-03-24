@@ -16,12 +16,12 @@ class Middleware:
     Attributes:
         priority: Execution priority (0-1000). Higher priority executes first.
             Middlewares with equal priority preserve registration order.
-            Defaults to 0 for backward compatibility.
+            Defaults to 100 per PROTOCOL_SPEC §11.2.
     """
 
-    priority: int = 0
+    priority: int = 100
 
-    def __init__(self, *, priority: int = 0) -> None:
+    def __init__(self, *, priority: int = 100) -> None:
         if not (0 <= priority <= 1000):
             raise ValueError(f"priority must be between 0 and 1000, got {priority}")
         self.priority = priority
