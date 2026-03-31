@@ -516,7 +516,9 @@ class Config:
         if not isinstance(file_data, dict):
             raise ConfigError(message=f"Config file must be a mapping, got {type(file_data).__name__}")
 
-        if "apcore" in file_data:
+        # Namespace mode requires "apcore" key to be a dict, not null/scalar/list.
+        apcore_val = file_data.get("apcore")
+        if isinstance(apcore_val, dict):
             config = cls._load_namespace_mode(file_data, validate=validate)
         else:
             config = cls._load_legacy_mode(file_data, validate=validate)
