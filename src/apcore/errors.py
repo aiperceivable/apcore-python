@@ -16,6 +16,12 @@ __all__ = [
     "ModuleError",
     "ConfigNotFoundError",
     "ConfigError",
+    "ConfigNamespaceDuplicateError",
+    "ConfigNamespaceReservedError",
+    "ConfigEnvPrefixConflictError",
+    "ConfigMountError",
+    "ConfigBindError",
+    "ErrorFormatterDuplicateError",
     "ACLRuleError",
     "ACLDeniedError",
     "ApprovalError",
@@ -132,6 +138,80 @@ class ConfigError(ModuleError):
 
     def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(code="CONFIG_INVALID", message=message, **kwargs)
+
+
+class ConfigNamespaceDuplicateError(ModuleError):
+    """Raised when a namespace name is already registered."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, name: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="CONFIG_NAMESPACE_DUPLICATE",
+            message=f"Namespace already registered: {name!r}",
+            details={"name": name},
+            **kwargs,
+        )
+
+
+class ConfigNamespaceReservedError(ModuleError):
+    """Raised when a namespace name is reserved by the framework."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, name: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="CONFIG_NAMESPACE_RESERVED",
+            message=f"Namespace name is reserved: {name!r}",
+            details={"name": name},
+            **kwargs,
+        )
+
+
+class ConfigEnvPrefixConflictError(ModuleError):
+    """Raised when a namespace env_prefix conflicts with an existing one."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, env_prefix: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="CONFIG_ENV_PREFIX_CONFLICT",
+            message=f"Environment prefix conflicts with existing registration: {env_prefix!r}",
+            details={"env_prefix": env_prefix},
+            **kwargs,
+        )
+
+
+class ConfigMountError(ModuleError):
+    """Raised when a namespace mount operation is invalid."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, message: str, **kwargs: Any) -> None:
+        super().__init__(code="CONFIG_MOUNT_ERROR", message=message, **kwargs)
+
+
+class ConfigBindError(ModuleError):
+    """Raised when binding a namespace to a model class fails."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, message: str, **kwargs: Any) -> None:
+        super().__init__(code="CONFIG_BIND_ERROR", message=message, **kwargs)
+
+
+class ErrorFormatterDuplicateError(ModuleError):
+    """Raised when an error formatter is registered for an already-registered adapter."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, adapter_name: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="ERROR_FORMATTER_DUPLICATE",
+            message=f"Error formatter already registered for adapter: {adapter_name!r}",
+            details={"adapter_name": adapter_name},
+            **kwargs,
+        )
 
 
 class ACLRuleError(ModuleError):
@@ -728,6 +808,12 @@ class ErrorCodes:
 
     CONFIG_NOT_FOUND = "CONFIG_NOT_FOUND"
     CONFIG_INVALID = "CONFIG_INVALID"
+    CONFIG_NAMESPACE_DUPLICATE = "CONFIG_NAMESPACE_DUPLICATE"
+    CONFIG_NAMESPACE_RESERVED = "CONFIG_NAMESPACE_RESERVED"
+    CONFIG_ENV_PREFIX_CONFLICT = "CONFIG_ENV_PREFIX_CONFLICT"
+    CONFIG_MOUNT_ERROR = "CONFIG_MOUNT_ERROR"
+    CONFIG_BIND_ERROR = "CONFIG_BIND_ERROR"
+    ERROR_FORMATTER_DUPLICATE = "ERROR_FORMATTER_DUPLICATE"
     ACL_RULE_ERROR = "ACL_RULE_ERROR"
     ACL_DENIED = "ACL_DENIED"
     MODULE_NOT_FOUND = "MODULE_NOT_FOUND"
@@ -764,10 +850,10 @@ class ErrorCodes:
     GENERAL_NOT_IMPLEMENTED = "GENERAL_NOT_IMPLEMENTED"
     DEPENDENCY_NOT_FOUND = "DEPENDENCY_NOT_FOUND"
 
-    def __setattr__(self, name: str, value: object) -> None:
+    def __setattr__(self, name: str, value: object) -> None:  # noqa: ARG002
         raise AttributeError("ErrorCodes is immutable")
 
-    def __delattr__(self, name: str) -> None:
+    def __delattr__(self, name: str) -> None:  # noqa: ARG002
         raise AttributeError("ErrorCodes is immutable")
 
 

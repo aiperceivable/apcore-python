@@ -42,7 +42,10 @@ from apcore.module import (
 )
 
 # Config
-from apcore.config import Config
+from apcore.config import Config, discover_config_file
+
+# Error Formatter
+from apcore.error_formatter import ErrorFormatter, ErrorFormatterRegistry
 
 # Errors
 from apcore.errors import (
@@ -62,12 +65,18 @@ from apcore.errors import (
     CallFrequencyExceededError,
     CircularCallError,
     CircularDependencyError,
+    ConfigBindError,
+    ConfigEnvPrefixConflictError,
     ConfigError,
+    ConfigMountError,
+    ConfigNamespaceDuplicateError,
+    ConfigNamespaceReservedError,
     ConfigNotFoundError,
     DependencyNotFoundError,
     ErrorCodeCollisionError,
     ErrorCodeRegistry,
     ErrorCodes,
+    ErrorFormatterDuplicateError,
     FeatureNotImplementedError,
     FuncMissingReturnTypeError,
     FuncMissingTypeHintError,
@@ -352,6 +361,10 @@ __all__ = [
     "DependencyInfo",
     # Config
     "Config",
+    "discover_config_file",
+    # Error Formatter
+    "ErrorFormatter",
+    "ErrorFormatterRegistry",
     # Registry constants
     "REGISTRY_EVENTS",
     "MODULE_ID_PATTERN",
@@ -379,9 +392,15 @@ __all__ = [
     "CallFrequencyExceededError",
     "CircularCallError",
     "CircularDependencyError",
+    "ConfigBindError",
+    "ConfigEnvPrefixConflictError",
     "ConfigError",
+    "ConfigMountError",
+    "ConfigNamespaceDuplicateError",
+    "ConfigNamespaceReservedError",
     "ConfigNotFoundError",
     "DependencyNotFoundError",
+    "ErrorFormatterDuplicateError",
     "ErrorCodeCollisionError",
     "ErrorCodeRegistry",
     "FeatureNotImplementedError",

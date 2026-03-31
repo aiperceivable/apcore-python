@@ -1,9 +1,11 @@
 import apcore
 
+
 # 1. No need to initialize anything if using the default global client
 @apcore.module(id="math.add")
 def add(a: int, b: int) -> int:
     return a + b
+
 
 if __name__ == "__main__":
     # 2. Call directly via apcore.call

@@ -3,11 +3,13 @@ from apcore import APCore
 # 1. Initialize the simplified client
 client = APCore()
 
+
 # 2. Define a module using the client's decorator (auto-registers to client.registry)
 @client.module(id="math.add", description="Add two integers")
 def add(a: int, b: int) -> int:
     """Adds two numbers."""
     return a + b
+
 
 # 3. Call the module directly through the client
 if __name__ == "__main__":

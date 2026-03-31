@@ -6,6 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12294/badge)](https://www.bestpractices.dev/projects/12294)
 
 > **Build once, invoke by Code or AI.**
 
@@ -40,7 +41,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `Registry` | Module storage -- discover, register, get, list, watch |
 | `Executor` | Execution engine -- call with middleware pipeline, ACL, approval |
 | `Context` | Request context -- trace ID, identity, call chain, cancel token |
-| `Config` | Configuration -- load from YAML, get/set values |
+| `Config` | Configuration -- load from YAML, get/set values, namespace-partitioned Config Bus |
 | `Identity` | Caller identity -- id, type, roles, attributes |
 | `FunctionModule` | Wrapped function module created by `@module` decorator |
 
@@ -99,6 +100,84 @@ A schema-enforced module standard for the AI-Perceivable era.
 | `CancelToken` | Cooperative cancellation token |
 | `BindingLoader` | Load modules from YAML binding files |
 | `ErrorCodeRegistry` | Central registry for structured error codes |
+| `ErrorFormatterRegistry` | Surface-specific error formatter registry (MCP, A2A, CLI adapters) |
+
+## Configuration
+
+### Config Bus and Namespace Registration
+
+`Config` doubles as an ecosystem-level Config Bus. Any package can register a named namespace with optional JSON Schema validation, env prefix, and default values:
+
+```python
+from apcore import Config
+
+# Register a namespace (class-level, shared across all Config instances)
+Config.register_namespace(
+    "my_plugin",
+    schema={"type": "object", "properties": {"timeout_ms": {"type": "integer"}}},
+    env_prefix="MY_PLUGIN__",
+    defaults={"timeout_ms": 5000},
+)
+
+# Load config as usual
+config = Config.load("project.yaml")
+
+# Namespace-aware access
+timeout = config.get("my_plugin.timeout_ms")   # dot-path with namespace resolution
+subtree = config.namespace("my_plugin")          # full subtree as dict
+
+# Typed access
+config.get_typed("my_plugin.timeout_ms", int)
+
+# Mount an external source (no unified YAML required)
+config.mount("my_plugin", from_dict={"timeout_ms": 3000})
+
+# Introspect registered namespaces
+names = Config.registered_namespaces()
+```
+
+### Built-in Namespaces
+
+apcore pre-registers two namespaces that promote its existing flat config keys:
+
+| Namespace | Env prefix | Keys |
+|-----------|-----------|------|
+| `observability` | `APCORE__OBSERVABILITY` | tracing, metrics, logging, error_history, platform_notify |
+| `sys_modules` | `APCORE__SYS` | thresholds.error_rate, thresholds.latency_p99_ms |
+
+### Environment Variable Conventions
+
+| Pattern | When to use | Example |
+|---------|------------|---------|
+| `APCORE_KEY_NAME` | Override a flat top-level apcore key (existing convention) | `APCORE_EXECUTOR_DEFAULT__TIMEOUT=5000` |
+| `APCORE__NAMESPACE` prefix | Override keys inside a registered namespace (new convention) | `APCORE__OBSERVABILITY_TRACING_ENABLED=true` |
+| Custom prefix declared in `register_namespace` | Third-party packages with their own prefix | `MY_PLUGIN__TIMEOUT_MS=3000` |
+
+The double-underscore separator (`__`) in `APCORE__` avoids collisions with the existing single-underscore `APCORE_` flat-key prefix. Within each namespace, a single `_` maps to `.` and `__` maps to a literal `_`.
+
+### New Error Codes (0.15.0)
+
+| Code | Meaning |
+|------|---------|
+| `CONFIG_NAMESPACE_DUPLICATE` | A namespace with this name is already registered |
+| `CONFIG_NAMESPACE_RESERVED` | The namespace name is reserved (`_config`, `apcore`) |
+| `CONFIG_ENV_PREFIX_CONFLICT` | Two namespaces share the same env prefix |
+| `CONFIG_MOUNT_ERROR` | Failed to load or parse a mounted config source |
+| `CONFIG_BIND_ERROR` | Failed to deserialize a namespace subtree into the requested type |
+| `ERROR_FORMATTER_DUPLICATE` | A formatter for this surface is already registered |
+
+### Event Type Names
+
+Canonical event type names use dot-namespaced identifiers. `apcore.*` is reserved for core framework events; adapter packages use their own prefix (e.g., `apcore-mcp.*`).
+
+| Canonical name | Replaces | Emitted by |
+|---------------|---------|-----------|
+| `apcore.module.toggled` | `module_health_changed` | `system.control.toggle_feature` |
+| `apcore.health.recovered` | `module_health_changed` | `PlatformNotifyMiddleware` (error rate recovery) |
+| `apcore.config.updated` | `config_changed` | `system.control.update_config` |
+| `apcore.module.reloaded` | `config_changed` | `system.control.reload_module` |
+
+The legacy short-form names are still emitted alongside the canonical names during the transition period.
 
 ## Documentation
 

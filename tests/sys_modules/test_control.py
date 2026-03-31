@@ -94,7 +94,7 @@ class TestUpdateConfigAppliesChange:
 
 class TestUpdateConfigEmitsConfigChangedEvent:
     def test_update_config_emits_config_changed_event(self) -> None:
-        """Verify EventEmitter.emit() is called with a config_changed event."""
+        """Verify EventEmitter.emit() is called with canonical and legacy events."""
         config = _make_config()
         emitter = EventEmitter()
         emitter.emit = MagicMock()  # type: ignore[method-assign]
@@ -103,12 +103,16 @@ class TestUpdateConfigEmitsConfigChangedEvent:
             {"key": "executor.default_timeout", "value": 5000, "reason": "event test"},
             None,
         )
-        emitter.emit.assert_called_once()
-        event = emitter.emit.call_args[0][0]
-        assert event.event_type == "config_changed"
-        assert event.data["key"] == "executor.default_timeout"
-        assert event.data["old_value"] == 30000
-        assert event.data["new_value"] == 5000
+        # Two events: canonical (apcore.config.updated) + legacy alias (config_changed)
+        assert emitter.emit.call_count == 2
+        events = [call[0][0] for call in emitter.emit.call_args_list]
+        event_types = {e.event_type for e in events}
+        assert "apcore.config.updated" in event_types
+        assert "config_changed" in event_types
+        canonical = next(e for e in events if e.event_type == "apcore.config.updated")
+        assert canonical.data["key"] == "executor.default_timeout"
+        assert canonical.data["old_value"] == 30000
+        assert canonical.data["new_value"] == 5000
 
 
 class TestUpdateConfigRestrictedKeySysModulesEnabled:
@@ -382,11 +386,15 @@ class TestReloadModuleEmitsConfigChangedEvent:
                 context=None,
             )
 
-        mock_emit.assert_called_once()
-        event = mock_emit.call_args[0][0]
-        assert isinstance(event, ApCoreEvent)
-        assert event.event_type == "config_changed"
-        assert event.module_id == "my.module"
+        # Two events: canonical (apcore.module.reloaded) + legacy alias (config_changed)
+        assert mock_emit.call_count == 2
+        events = [call[0][0] for call in mock_emit.call_args_list]
+        assert all(isinstance(e, ApCoreEvent) for e in events)
+        event_types = {e.event_type for e in events}
+        assert "apcore.module.reloaded" in event_types
+        assert "config_changed" in event_types
+        canonical = next(e for e in events if e.event_type == "apcore.module.reloaded")
+        assert canonical.module_id == "my.module"
 
 
 class TestReloadModuleNoEventOnFailure:
@@ -610,7 +618,7 @@ class TestToggleFeatureModuleNotFound:
 
 class TestToggleFeatureEmitsModuleHealthChanged:
     def test_toggle_feature_emits_module_health_changed(self, _clear_disabled_modules: Any) -> None:
-        """Verify EventEmitter.emit() is called with module_health_changed event on toggle."""
+        """Verify emit() is called with canonical and legacy events on toggle."""
         registry, _ = _make_registry_with_module("my.module")
         emitter = EventEmitter()
         emitter.emit = MagicMock()  # type: ignore[method-assign]
@@ -619,12 +627,16 @@ class TestToggleFeatureEmitsModuleHealthChanged:
             {"module_id": "my.module", "enabled": False, "reason": "test"},
             context=None,
         )
-        emitter.emit.assert_called_once()
-        event = emitter.emit.call_args[0][0]
-        assert isinstance(event, ApCoreEvent)
-        assert event.event_type == "module_health_changed"
-        assert event.module_id == "my.module"
-        assert event.data["enabled"] is False
+        # Two events: canonical (apcore.module.toggled) + legacy alias (module_health_changed)
+        assert emitter.emit.call_count == 2
+        events = [call[0][0] for call in emitter.emit.call_args_list]
+        assert all(isinstance(e, ApCoreEvent) for e in events)
+        event_types = {e.event_type for e in events}
+        assert "apcore.module.toggled" in event_types
+        assert "module_health_changed" in event_types
+        canonical = next(e for e in events if e.event_type == "apcore.module.toggled")
+        assert canonical.module_id == "my.module"
+        assert canonical.data["enabled"] is False
 
 
 class TestToggleFeatureSurvivesReload:

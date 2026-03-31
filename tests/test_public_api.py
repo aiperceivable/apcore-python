@@ -365,6 +365,7 @@ class TestPublicAPIAll:
         "ModuleValidator",
         # Config
         "Config",
+        "discover_config_file",
         # Errors
         "ErrorCodes",
         "ModuleError",
@@ -491,6 +492,16 @@ class TestPublicAPIAll:
         "register_subscriber_type",
         "unregister_subscriber_type",
         "reset_subscriber_registry",
+        # Config Bus (0.15.0)
+        "ConfigBindError",
+        "ConfigEnvPrefixConflictError",
+        "ConfigMountError",
+        "ConfigNamespaceDuplicateError",
+        "ConfigNamespaceReservedError",
+        # Error Formatter (0.15.0)
+        "ErrorFormatter",
+        "ErrorFormatterRegistry",
+        "ErrorFormatterDuplicateError",
     }
 
     def test_all_contains_all_expected_names(self):

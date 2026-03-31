@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-03-30
+
+### Added
+
+#### Config Bus Architecture (§9.4–§9.14)
+- **`Config.register_namespace(name, schema=None, env_prefix=None, defaults=None)`** — Class-level namespace registration. Any package can claim a named config subtree with optional JSON Schema validation, env prefix, and default values. Global registry is shared across all `Config` instances. Late registration is allowed; call `config.reload()` afterward to apply defaults and env overrides.
+- **`config.get("namespace.key.path")`** — Dot-path access with namespace resolution. First segment resolves to a registered namespace; remaining segments traverse the subtree.
+- **`config.namespace(name)`** — Returns the full config subtree for a registered namespace as a dict.
+- **`config.bind(ns, type)` / `config.get_typed(path, type)`** — Typed namespace access; `bind` returns a view of the namespace deserialized into `type`, `get_typed` deserializes a single dot-path value.
+- **`config.mount(namespace, from_file=...|from_dict=...)`** — Attach external config sources to a namespace without a unified YAML file. Primary integration path for third-party packages with existing config systems.
+- **`Config.registered_namespaces()`** — Class-level introspection; returns names of all registered namespaces.
+- **Unified YAML with namespace partitioning** — Single YAML file with namespace-keyed top-level sections. Automatic mode detection: legacy mode (no `apcore:` key, fully backward compatible) vs. namespace mode (`apcore:` key present). `_config` is a reserved meta-namespace (`strict`, `allow_unknown`).
+- **Per-namespace env override with longest-prefix-match dispatch** — Each namespace declares its own `env_prefix`. `APCORE__` double-underscore convention for apcore sub-packages (e.g., `APCORE__OBSERVABILITY`, `APCORE__SYS`) to avoid collision with the existing single-underscore `APCORE_` prefix used for flat keys.
+- **Hot-reload namespace support** — `config.reload()` re-reads YAML, re-detects mode, re-applies namespace defaults and env overrides, re-validates, and re-reads mounted files.
+- **New error codes** — `CONFIG_NAMESPACE_DUPLICATE`, `CONFIG_NAMESPACE_RESERVED`, `CONFIG_ENV_PREFIX_CONFLICT`, `CONFIG_MOUNT_ERROR`, `CONFIG_BIND_ERROR`
+
+#### Error Formatter Registry (§8.8)
+- **`ErrorFormatter` protocol** — Interface for adapter-specific error formatters. Implementations transform `ModuleError` into the surface-specific wire format (e.g., MCP camelCase, JSON-RPC code mapping).
+- **`ErrorFormatterRegistry`** — Shared registry for surface-specific formatters:
+  - `ErrorFormatterRegistry.register(surface, formatter)` — register a formatter for a named surface
+  - `ErrorFormatterRegistry.get(surface)` — retrieve a registered formatter
+  - `ErrorFormatterRegistry.format(surface, error)` — format an error, falling back to `error.to_dict()` if no formatter is registered for that surface
+- **New error code** — `ERROR_FORMATTER_DUPLICATE`
+
+#### Built-in Namespace Registrations (§9.15)
+- **`observability` namespace** (`APCORE__OBSERVABILITY` env prefix) — apcore pre-registers this namespace, promoting the existing `apcore.observability.*` flat config keys (tracing, metrics, logging, error_history, platform_notify) into a named subtree. Adapter packages (apcore-mcp, apcore-a2a, apcore-cli) should read from this namespace rather than independent logging defaults.
+- **`sys_modules` namespace** (`APCORE__SYS` env prefix) — apcore pre-registers this namespace, promoting the existing `apcore.sys_modules.*` flat keys into a named subtree. `register_sys_modules()` prefers `config.namespace("sys_modules")` in namespace mode with `config.get("sys_modules.*")` legacy fallback. Both registrations are 1:1 migrations of existing keys; there are no breaking changes.
+
+#### Event Type Naming Convention and Collision Fix (§9.16)
+- **Canonical event names** — Two confirmed event type collisions in apcore-python are resolved:
+  - `"module_health_changed"` (previously used for both enable/disable toggles and error-rate recovery) split into `apcore.module.toggled` (toggle on/off) and `apcore.health.recovered` (error rate recovery)
+  - `"config_changed"` (previously used for both key updates and module reload) split into `apcore.config.updated` (runtime key update via `system.control.update_config`) and `apcore.module.reloaded` (hot-reload via `system.control.reload_module`)
+- **Naming convention** — `apcore.*` is reserved for core framework events. Adapter packages use their own prefix: `apcore-mcp.*`, `apcore-a2a.*`, `apcore-cli.*`.
+- **Transition aliases** — All four legacy short-form names (`module_health_changed`, `config_changed`) continue to be emitted alongside the canonical names during the transition period.
+
+---
+
 ## [0.14.0] - 2026-03-24
 
 ### Added

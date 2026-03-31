@@ -107,6 +107,44 @@ def reset_subscriber_registry() -> None:
     _subscriber_factories["a2a"] = _default_a2a_factory
 
 
+# ---------------------------------------------------------------------------
+# Namespace-mode helpers — §9.15.3
+# ---------------------------------------------------------------------------
+
+_MISSING = object()
+
+
+def _nested_dict_get(data: dict[str, Any], dotted_key: str, default: Any) -> Any:
+    """Get a value from a nested dict using a dot-separated key path."""
+    current: Any = data
+    for key in dotted_key.split("."):
+        if not isinstance(current, dict):
+            return default
+        v = current.get(key, _MISSING)
+        if v is _MISSING:
+            return default
+        current = v
+    return current
+
+
+def _resolve_sys_cfg(config: Config) -> dict[str, Any] | None:
+    """Return the sys_modules namespace dict in namespace mode (§9.15.3).
+
+    In namespace mode, prefer ``config.namespace("sys_modules")``.
+    Returns None in legacy mode so callers fall back to ``config.get("sys_modules.*")``.
+    """
+    if getattr(config, "_mode", "legacy") == "namespace":
+        return config.namespace("sys_modules") or {}
+    return None
+
+
+def _cfg_get(sys_cfg: dict[str, Any] | None, config: Config, sub_key: str, default: Any) -> Any:
+    """Get a sys_modules value — namespace dict in namespace mode, dot-path in legacy."""
+    if sys_cfg is not None:
+        return _nested_dict_get(sys_cfg, sub_key, default)
+    return config.get(f"sys_modules.{sub_key}", default)
+
+
 def register_sys_modules(
     registry: Registry,
     executor: Executor,
@@ -126,10 +164,13 @@ def register_sys_modules(
     """
     result: dict[str, Any] = {}
 
-    if not config.get("sys_modules.enabled", False):
+    # §9.15.3: prefer config.namespace("sys_modules") in namespace mode
+    sys_cfg = _resolve_sys_cfg(config)
+
+    if not _cfg_get(sys_cfg, config, "enabled", False):
         return result
 
-    error_history = _create_error_history(config)
+    error_history = _create_error_history(config, sys_cfg)
     result["error_history"] = error_history
 
     eh_middleware = ErrorHistoryMiddleware(error_history)
@@ -145,16 +186,16 @@ def register_sys_modules(
 
     _register_sys_modules(registry, config, metrics_collector, error_history, usage_collector)
 
-    if config.get("sys_modules.events.enabled", False):
-        _setup_events(registry, executor, config, metrics_collector, error_history, usage_collector, result)
+    if _cfg_get(sys_cfg, config, "events.enabled", False):
+        _setup_events(registry, executor, config, sys_cfg, metrics_collector, error_history, usage_collector, result)
 
     return result
 
 
-def _create_error_history(config: Config) -> ErrorHistory:
+def _create_error_history(config: Config, sys_cfg: dict[str, Any] | None) -> ErrorHistory:
     """Create an ErrorHistory instance from config values."""
-    max_per_module = config.get("sys_modules.error_history.max_entries_per_module", 50)
-    max_total = config.get("sys_modules.error_history.max_total_entries", 1000)
+    max_per_module = _cfg_get(sys_cfg, config, "error_history.max_entries_per_module", 50)
+    max_total = _cfg_get(sys_cfg, config, "error_history.max_total_entries", 1000)
     return ErrorHistory(
         max_entries_per_module=max_per_module,
         max_total_entries=max_total,
@@ -222,6 +263,7 @@ def _setup_events(
     registry: Registry,
     executor: Executor,
     config: Config,
+    sys_cfg: dict[str, Any] | None,
     metrics_collector: MetricsCollector | None,
     error_history: ErrorHistory,
     usage_collector: UsageCollector,
@@ -231,8 +273,8 @@ def _setup_events(
     event_emitter = EventEmitter()
     result["event_emitter"] = event_emitter
 
-    error_rate_threshold = config.get("sys_modules.events.thresholds.error_rate", 0.1)
-    latency_p99_threshold = config.get("sys_modules.events.thresholds.latency_p99_ms", 5000.0)
+    error_rate_threshold = _cfg_get(sys_cfg, config, "events.thresholds.error_rate", 0.1)
+    latency_p99_threshold = _cfg_get(sys_cfg, config, "events.thresholds.latency_p99_ms", 5000.0)
     pn_middleware = PlatformNotifyMiddleware(
         event_emitter=event_emitter,
         metrics_collector=metrics_collector,
@@ -245,7 +287,7 @@ def _setup_events(
     # Control modules (require EventEmitter)
     _register_control_modules(registry, config, event_emitter)
 
-    _instantiate_subscribers(config, event_emitter)
+    _instantiate_subscribers(config, sys_cfg, event_emitter)
     _bridge_registry_events(registry, event_emitter)
 
 
@@ -265,9 +307,9 @@ def _register_control_modules(
     _register_sys_module(registry, "system.control.toggle_feature", toggle_feature)
 
 
-def _instantiate_subscribers(config: Config, event_emitter: EventEmitter) -> None:
+def _instantiate_subscribers(config: Config, sys_cfg: dict[str, Any] | None, event_emitter: EventEmitter) -> None:
     """Create and subscribe EventSubscribers from config."""
-    subscribers_config = config.get("sys_modules.events.subscribers", [])
+    subscribers_config = _cfg_get(sys_cfg, config, "events.subscribers", [])
     for sub_cfg in subscribers_config:
         try:
             subscriber = _create_subscriber(sub_cfg)
