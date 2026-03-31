@@ -146,7 +146,7 @@ class PlatformNotifyMiddleware(Middleware):
                         event_type="error_threshold_exceeded",
                         module_id=module_id,
                         timestamp=datetime.now(timezone.utc).isoformat(),
-                        severity="warning",
+                        severity="error",
                         data={"error_rate": error_rate, "threshold": self._error_rate_threshold},
                     )
                 )
@@ -162,26 +162,38 @@ class PlatformNotifyMiddleware(Middleware):
                         event_type="latency_threshold_exceeded",
                         module_id=module_id,
                         timestamp=datetime.now(timezone.utc).isoformat(),
-                        severity="warning",
-                        data={"p99_ms": p99_ms, "threshold_ms": self._latency_p99_threshold_ms},
+                        severity="warn",
+                        data={"p99_latency_ms": p99_ms, "threshold": self._latency_p99_threshold_ms},
                     )
                 )
                 self._alerted[module_id].add("latency")
 
     def _check_error_recovery(self, module_id: str) -> None:
-        """Emit module_health_changed if error rate dropped below threshold * 0.5."""
+        """Emit apcore.health.recovered (canonical) and module_health_changed (legacy alias)."""
         error_rate = self._compute_error_rate(module_id)
         with self._alert_lock:
             if "error_rate" not in self._alerted.get(module_id, set()):
                 return
             if error_rate < self._error_rate_threshold * 0.5:
+                timestamp = datetime.now(timezone.utc).isoformat()
+                data: dict[str, Any] = {"status": "recovered", "error_rate": error_rate}
+                self._emitter.emit(
+                    ApCoreEvent(
+                        event_type="apcore.health.recovered",
+                        module_id=module_id,
+                        timestamp=timestamp,
+                        severity="info",
+                        data=data,
+                    )
+                )
+                # Legacy alias — remove in 0.16.0
                 self._emitter.emit(
                     ApCoreEvent(
                         event_type="module_health_changed",
                         module_id=module_id,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        timestamp=timestamp,
                         severity="info",
-                        data={"status": "recovered", "error_rate": error_rate},
+                        data=data,
                     )
                 )
                 self._alerted[module_id].discard("error_rate")

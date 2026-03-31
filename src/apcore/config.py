@@ -95,7 +95,7 @@ _CONSTRAINTS: dict[str, tuple[Any, str]] = {
 
 #: Default configuration values.
 _DEFAULTS: dict[str, Any] = {
-    "version": "0.8.0",
+    "version": "0.15.0",
     "extensions": {
         "root": "./extensions",
         "auto_discover": True,

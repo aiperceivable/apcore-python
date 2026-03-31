@@ -175,27 +175,44 @@ class UpdateConfigModule:
         return True
 
     def _emit_event(self, key: str, old_value: Any, new_value: Any) -> None:
-        """Emit a config_changed event."""
+        """Emit apcore.config.updated (canonical) and config_changed (legacy alias)."""
+        payload = ApCoreEvent(
+            event_type="apcore.config.updated",
+            module_id="system.control.update_config",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            severity="info",
+            data={
+                "key": key,
+                "old_value": old_value,
+                "new_value": new_value,
+            },
+        )
+        self._emitter.emit(payload)
+        # Legacy alias — remove in 0.16.0
         self._emitter.emit(
             ApCoreEvent(
                 event_type="config_changed",
                 module_id="system.control.update_config",
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=payload.timestamp,
                 severity="info",
-                data={
-                    "key": key,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                },
+                data=payload.data,
             )
         )
 
-    _SENSITIVE_SEGMENTS = frozenset({"token", "secret", "key", "password", "auth", "credential"})
+    _SENSITIVE_SEGMENTS = ("token", "secret", "key", "password", "auth", "credential")
 
     @classmethod
     def _is_sensitive_key(cls, key: str) -> bool:
-        """Check if a config key path contains sensitive-sounding segments."""
-        return any(seg in key.lower().split(".") for seg in cls._SENSITIVE_SEGMENTS)
+        """Check if a config key path contains sensitive-sounding segments.
+
+        Matches exact segments or underscore-compound segments (e.g. api_key,
+        auth_token) without false-positives on words like "keyboard".
+        """
+        return any(
+            seg == s or seg.endswith(f"_{s}") or seg.startswith(f"{s}_")
+            for seg in key.lower().split(".")
+            for s in cls._SENSITIVE_SEGMENTS
+        )
 
     @classmethod
     def _log_change(cls, key: str, old_value: Any, new_value: Any, reason: str) -> None:
@@ -333,17 +350,26 @@ class ReloadModuleModule:
         self._registry.register_internal(module_id, module)
 
     def _emit_config_changed(self, module_id: str, previous_version: str, new_version: str) -> None:
-        """Emit a config_changed event after successful reload."""
+        """Emit apcore.module.reloaded (canonical) and config_changed (legacy alias)."""
+        payload = ApCoreEvent(
+            event_type="apcore.module.reloaded",
+            module_id=module_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            severity="info",
+            data={
+                "previous_version": previous_version,
+                "new_version": new_version,
+            },
+        )
+        self._emitter.emit(payload)
+        # Legacy alias — remove in 0.16.0
         self._emitter.emit(
             ApCoreEvent(
                 event_type="config_changed",
                 module_id=module_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=payload.timestamp,
                 severity="info",
-                data={
-                    "previous_version": previous_version,
-                    "new_version": new_version,
-                },
+                data=payload.data,
             )
         )
 
@@ -465,14 +491,23 @@ class ToggleFeatureModule:
             self._toggle_state.disable(module_id)
 
     def _emit_event(self, module_id: str, enabled: bool) -> None:
-        """Emit a module_health_changed event."""
+        """Emit apcore.module.toggled (canonical) and module_health_changed (legacy alias)."""
+        payload = ApCoreEvent(
+            event_type="apcore.module.toggled",
+            module_id=module_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            severity="info",
+            data={"enabled": enabled},
+        )
+        self._emitter.emit(payload)
+        # Legacy alias — remove in 0.16.0
         self._emitter.emit(
             ApCoreEvent(
                 event_type="module_health_changed",
                 module_id=module_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=payload.timestamp,
                 severity="info",
-                data={"enabled": enabled},
+                data=payload.data,
             )
         )
 
