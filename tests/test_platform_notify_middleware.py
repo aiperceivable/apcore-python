@@ -57,6 +57,9 @@ class TestPlatformNotifyMiddleware:
         event: ApCoreEvent = emitter.emit.call_args[0][0]
         assert event.event_type == "error_threshold_exceeded"
         assert event.module_id == "mod.a"
+        assert event.severity == "error"
+        assert "error_rate" in event.data
+        assert "threshold" in event.data
 
     def test_on_error_no_emit_below_threshold(self) -> None:
         emitter = MagicMock(spec=EventEmitter)
@@ -111,6 +114,9 @@ class TestPlatformNotifyMiddleware:
         assert len(calls) == 1
         event: ApCoreEvent = calls[0][0][0]
         assert event.module_id == "mod.b"
+        assert event.severity == "warn"
+        assert "p99_latency_ms" in event.data
+        assert "threshold" in event.data
 
     def test_after_no_emit_below_latency_threshold(self) -> None:
         emitter = MagicMock(spec=EventEmitter)
