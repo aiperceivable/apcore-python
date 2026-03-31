@@ -10,7 +10,7 @@ import copy
 import dataclasses
 import logging
 import os
-import re
+
 import sys
 import threading
 from pathlib import Path
@@ -153,9 +153,6 @@ _DEFAULTS: dict[str, Any] = {
 # =============================================================================
 
 _RESERVED_NAMESPACES: frozenset[str] = frozenset({"apcore", "_config"})
-
-#: Pattern that matches the APCORE_ legacy prefix — env_prefix must not match.
-_APCORE_RESERVED_ENV_PATTERN: re.Pattern[str] = re.compile(r"^APCORE_[A-Z0-9]")
 
 
 @dataclasses.dataclass
@@ -427,14 +424,14 @@ class Config:
         Args:
             name: Namespace name (must not be reserved or already registered).
             schema: Optional JSON Schema dict or path to a JSON Schema file.
-            env_prefix: Optional env var prefix (e.g. ``"APCORE__OBSERVABILITY"``).
+            env_prefix: Optional env var prefix (e.g. ``"APCORE_OBSERVABILITY"``).
             defaults: Optional default values for this namespace.
 
         Raises:
             ConfigNamespaceReservedError: If ``name`` is a reserved namespace.
             ConfigNamespaceDuplicateError: If ``name`` is already registered.
             ConfigEnvPrefixConflictError: If ``env_prefix`` conflicts with an
-                existing prefix or matches the legacy ``APCORE_[A-Z0-9]`` pattern.
+                existing prefix.
         """
         if name in _RESERVED_NAMESPACES:
             raise ConfigNamespaceReservedError(name=name)
@@ -455,9 +452,7 @@ class Config:
 
     @classmethod
     def _validate_env_prefix(cls, env_prefix: str) -> None:
-        """Raise ConfigEnvPrefixConflictError if env_prefix is already in use or reserved."""
-        if _APCORE_RESERVED_ENV_PATTERN.match(env_prefix):
-            raise ConfigEnvPrefixConflictError(env_prefix=env_prefix)
+        """Raise ConfigEnvPrefixConflictError if env_prefix is already in use."""
         for reg in _GLOBAL_NS_REGISTRY.values():
             if reg.env_prefix and reg.env_prefix == env_prefix:
                 raise ConfigEnvPrefixConflictError(env_prefix=env_prefix)
@@ -928,7 +923,7 @@ def _instantiate_model(model_class: type, data: dict[str, Any], namespace: str) 
 
 Config.register_namespace(
     "observability",
-    env_prefix="APCORE__OBSERVABILITY",
+    env_prefix="APCORE_OBSERVABILITY",
     defaults={
         "tracing": {
             "enabled": False,
@@ -958,7 +953,7 @@ Config.register_namespace(
 
 Config.register_namespace(
     "sys_modules",
-    env_prefix="APCORE__SYS",
+    env_prefix="APCORE_SYS",
     defaults={
         "enabled": True,
         "health": {"enabled": True},

@@ -142,18 +142,18 @@ apcore pre-registers two namespaces that promote its existing flat config keys:
 
 | Namespace | Env prefix | Keys |
 |-----------|-----------|------|
-| `observability` | `APCORE__OBSERVABILITY` | tracing, metrics, logging, error_history, platform_notify |
-| `sys_modules` | `APCORE__SYS` | thresholds.error_rate, thresholds.latency_p99_ms |
+| `observability` | `APCORE_OBSERVABILITY` | tracing, metrics, logging, error_history, platform_notify |
+| `sys_modules` | `APCORE_SYS` | thresholds.error_rate, thresholds.latency_p99_ms |
 
 ### Environment Variable Conventions
 
 | Pattern | When to use | Example |
 |---------|------------|---------|
 | `APCORE_KEY_NAME` | Override a flat top-level apcore key (existing convention) | `APCORE_EXECUTOR_DEFAULT__TIMEOUT=5000` |
-| `APCORE__NAMESPACE` prefix | Override keys inside a registered namespace (new convention) | `APCORE__OBSERVABILITY_TRACING_ENABLED=true` |
+| `APCORE_NAMESPACE` prefix | Override keys inside a registered namespace | `APCORE_OBSERVABILITY_TRACING_ENABLED=true` |
 | Custom prefix declared in `register_namespace` | Third-party packages with their own prefix | `MY_PLUGIN__TIMEOUT_MS=3000` |
 
-The double-underscore separator (`__`) in `APCORE__` avoids collisions with the existing single-underscore `APCORE_` flat-key prefix. Within each namespace, a single `_` maps to `.` and `__` maps to a literal `_`.
+The longest-prefix-match dispatch algorithm ensures that `APCORE_OBSERVABILITY_TRACING_ENABLED` routes to the `observability` namespace (not to a core flat key). Within each namespace, a single `_` maps to `.` and `__` maps to a literal `_`.
 
 ### New Error Codes (0.15.0)
 

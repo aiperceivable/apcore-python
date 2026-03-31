@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-03-31
+
+### Changed
+
+- **Env prefix convention simplified** — Removed the `^APCORE_[A-Z0-9]` reservation rule from `Config._validate_env_prefix()`. Sub-packages now use single-underscore prefixes (`APCORE_MCP`, `APCORE_OBSERVABILITY`, `APCORE_SYS`) instead of the double-underscore form. Only the exact `APCORE` prefix is reserved for the core namespace.
+- Built-in namespace env prefixes: `APCORE__OBSERVABILITY` → `APCORE_OBSERVABILITY`, `APCORE__SYS` → `APCORE_SYS`.
+
+---
+
 ## [0.15.0] - 2026-03-30
 
 ### Added
@@ -17,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`config.mount(namespace, from_file=...|from_dict=...)`** — Attach external config sources to a namespace without a unified YAML file. Primary integration path for third-party packages with existing config systems.
 - **`Config.registered_namespaces()`** — Class-level introspection; returns names of all registered namespaces.
 - **Unified YAML with namespace partitioning** — Single YAML file with namespace-keyed top-level sections. Automatic mode detection: legacy mode (no `apcore:` key, fully backward compatible) vs. namespace mode (`apcore:` key present). `_config` is a reserved meta-namespace (`strict`, `allow_unknown`).
-- **Per-namespace env override with longest-prefix-match dispatch** — Each namespace declares its own `env_prefix`. `APCORE__` double-underscore convention for apcore sub-packages (e.g., `APCORE__OBSERVABILITY`, `APCORE__SYS`) to avoid collision with the existing single-underscore `APCORE_` prefix used for flat keys.
+- **Per-namespace env override with longest-prefix-match dispatch** — Each namespace declares its own `env_prefix`. Apcore sub-packages use `APCORE_` prefixed names (e.g., `APCORE_OBSERVABILITY`, `APCORE_SYS`); the longest-prefix-match dispatch algorithm resolves any ambiguity with the core `APCORE` prefix.
 - **Hot-reload namespace support** — `config.reload()` re-reads YAML, re-detects mode, re-applies namespace defaults and env overrides, re-validates, and re-reads mounted files.
 - **New error codes** — `CONFIG_NAMESPACE_DUPLICATE`, `CONFIG_NAMESPACE_RESERVED`, `CONFIG_ENV_PREFIX_CONFLICT`, `CONFIG_MOUNT_ERROR`, `CONFIG_BIND_ERROR`
 
@@ -30,8 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New error code** — `ERROR_FORMATTER_DUPLICATE`
 
 #### Built-in Namespace Registrations (§9.15)
-- **`observability` namespace** (`APCORE__OBSERVABILITY` env prefix) — apcore pre-registers this namespace, promoting the existing `apcore.observability.*` flat config keys (tracing, metrics, logging, error_history, platform_notify) into a named subtree. Adapter packages (apcore-mcp, apcore-a2a, apcore-cli) should read from this namespace rather than independent logging defaults.
-- **`sys_modules` namespace** (`APCORE__SYS` env prefix) — apcore pre-registers this namespace, promoting the existing `apcore.sys_modules.*` flat keys into a named subtree. `register_sys_modules()` prefers `config.namespace("sys_modules")` in namespace mode with `config.get("sys_modules.*")` legacy fallback. Both registrations are 1:1 migrations of existing keys; there are no breaking changes.
+- **`observability` namespace** (`APCORE_OBSERVABILITY` env prefix) — apcore pre-registers this namespace, promoting the existing `apcore.observability.*` flat config keys (tracing, metrics, logging, error_history, platform_notify) into a named subtree. Adapter packages (apcore-mcp, apcore-a2a, apcore-cli) should read from this namespace rather than independent logging defaults.
+- **`sys_modules` namespace** (`APCORE_SYS` env prefix) — apcore pre-registers this namespace, promoting the existing `apcore.sys_modules.*` flat keys into a named subtree. `register_sys_modules()` prefers `config.namespace("sys_modules")` in namespace mode with `config.get("sys_modules.*")` legacy fallback. Both registrations are 1:1 migrations of existing keys; there are no breaking changes.
 
 #### Event Type Naming Convention and Collision Fix (§9.16)
 - **Canonical event names** — Two confirmed event type collisions in apcore-python are resolved:

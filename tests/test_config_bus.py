@@ -87,14 +87,9 @@ class TestRegisterNamespace:
         with pytest.raises(ConfigNamespaceReservedError):
             Config.register_namespace("_config")
 
-    def test_register_env_prefix_conflict_legacy_pattern(self) -> None:
-        # Must not match ^APCORE_[A-Z0-9]
-        with pytest.raises(ConfigEnvPrefixConflictError):
-            Config.register_namespace("envns", env_prefix="APCORE_FOO")
-
-    def test_register_env_prefix_double_underscore_ok(self) -> None:
-        # APCORE__SOMETHING is fine (double underscore)
-        Config.register_namespace("envns2", env_prefix="APCORE__ENVNS2")
+    def test_register_env_prefix_apcore_subpackage_ok(self) -> None:
+        # APCORE_SOMETHING is fine — longest-prefix-match disambiguates.
+        Config.register_namespace("envns2", env_prefix="APCORE_ENVNS2")
         names = [r["name"] for r in Config.registered_namespaces()]
         assert "envns2" in names
 
@@ -130,12 +125,12 @@ class TestBuiltinNamespaces:
     def test_observability_has_correct_env_prefix(self) -> None:
         namespaces = Config.registered_namespaces()
         ns = next(r for r in namespaces if r["name"] == "observability")
-        assert ns["env_prefix"] == "APCORE__OBSERVABILITY"
+        assert ns["env_prefix"] == "APCORE_OBSERVABILITY"
 
     def test_sys_modules_has_correct_env_prefix(self) -> None:
         namespaces = Config.registered_namespaces()
         ns = next(r for r in namespaces if r["name"] == "sys_modules")
-        assert ns["env_prefix"] == "APCORE__SYS"
+        assert ns["env_prefix"] == "APCORE_SYS"
 
 
 # ---------------------------------------------------------------------------
