@@ -494,6 +494,7 @@ class TestPublicAPIAll:
         "reset_subscriber_registry",
         # Config Bus (0.15.0)
         "ConfigBindError",
+        "ConfigEnvMapConflictError",
         "ConfigEnvPrefixConflictError",
         "ConfigMountError",
         "ConfigNamespaceDuplicateError",

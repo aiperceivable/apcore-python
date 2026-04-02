@@ -182,6 +182,20 @@ class ConfigEnvPrefixConflictError(ModuleError):
         )
 
 
+class ConfigEnvMapConflictError(ModuleError):
+    """Raised when an env_map key is already claimed by another mapping."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, env_var: str, owner: str, **kwargs: Any) -> None:
+        super().__init__(
+            code="CONFIG_ENV_MAP_CONFLICT",
+            message=f"Environment variable {env_var!r} is already mapped by {owner!r}",
+            details={"env_var": env_var, "owner": owner},
+            **kwargs,
+        )
+
+
 class ConfigMountError(ModuleError):
     """Raised when a namespace mount operation is invalid."""
 

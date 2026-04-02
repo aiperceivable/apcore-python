@@ -16,6 +16,7 @@ from apcore.config import (
 )
 from apcore.errors import (
     ConfigBindError,
+    ConfigEnvMapConflictError,
     ConfigEnvPrefixConflictError,
     ConfigError,
     ConfigMountError,
@@ -31,11 +32,15 @@ from apcore.errors import (
 
 def _clear_ns_registry_except_builtins() -> None:
     """Remove test namespaces from the global registry (leave built-ins)."""
+    from apcore.config import _GLOBAL_ENV_MAP, _GLOBAL_ENV_MAP_CLAIMED
+
     with _GLOBAL_NS_REGISTRY_LOCK:
         builtin_names = {"observability", "sys_modules"}
         keys_to_remove = [k for k in _GLOBAL_NS_REGISTRY if k not in builtin_names]
         for k in keys_to_remove:
             del _GLOBAL_NS_REGISTRY[k]
+    _GLOBAL_ENV_MAP.clear()
+    _GLOBAL_ENV_MAP_CLAIMED.clear()
 
 
 def _clear_ns_registry_all() -> None:
@@ -439,6 +444,187 @@ class TestNamespaceEnvOverrides:
         config = Config.load(str(yaml_file), validate=False)
         # APP__NS_B is longer than APP__NS, so it should match ns_b
         assert config.get("ns_b.key") == "from_b"
+
+    def test_env_style_flat_preserves_underscores(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        Config.register_namespace("flattest", env_prefix="MYFLAT", env_style="flat")
+        monkeypatch.setenv("MYFLAT_DEVTO_API_KEY", "abc123")
+        monkeypatch.setenv("MYFLAT_LLM_MODEL", "gemini-pro")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # Flat style: underscores preserved, no nesting
+        assert config.get("flattest.devto_api_key") == "abc123"
+        assert config.get("flattest.llm_model") == "gemini-pro"
+        # Confirm no nested structure was created
+        ns = config.namespace("flattest")
+        assert "devto_api_key" in ns
+        assert "devto" not in ns  # would exist if nested-style split occurred
+
+    def test_env_style_flat_with_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        Config.register_namespace(
+            "flatdef",
+            env_prefix="FLATDEF",
+            env_style="flat",
+            defaults={"db_url": "sqlite://", "max_retries": 3},
+        )
+        monkeypatch.setenv("FLATDEF_DB_URL", "postgres://prod")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # Env override should win over default
+        assert config.get("flatdef.db_url") == "postgres://prod"
+        # Default should still be present for non-overridden keys
+        assert config.get("flatdef.max_retries") == 3
+
+    def test_env_style_nested_is_default_behavior(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        Config.register_namespace("nestedtest", env_prefix="MYNEST")
+        monkeypatch.setenv("MYNEST_API_TIMEOUT", "60")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # Default nested style: _ → . creates nesting
+        assert config.get("nestedtest.api.timeout") == 60
+
+    def test_env_style_invalid_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="env_style must be"):
+            Config.register_namespace("badstyle", env_prefix="BAD", env_style="unknown")
+
+    def test_env_style_auto_resolves_mixed_flat_and_nested(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace(
+            "autotest",
+            env_prefix="AUTOAPP",
+            env_style="auto",
+            defaults={"devto_api_key": "", "publish": {"delay": 5, "retry": 3}},
+        )
+        monkeypatch.setenv("AUTOAPP_DEVTO_API_KEY", "abc123")
+        monkeypatch.setenv("AUTOAPP_PUBLISH_DELAY", "10")
+        monkeypatch.setenv("AUTOAPP_PUBLISH_RETRY", "7")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # Flat key matched
+        assert config.get("autotest.devto_api_key") == "abc123"
+        # Nested keys matched
+        assert config.get("autotest.publish.delay") == 10
+        assert config.get("autotest.publish.retry") == 7
+        # Verify structure: "devto" should not be a nested dict
+        ns = config.namespace("autotest")
+        assert "devto_api_key" in ns
+        assert "devto" not in ns
+
+    def test_env_style_auto_fallback_to_nested_for_unknown_keys(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace(
+            "autofb",
+            env_prefix="AUTOFB",
+            env_style="auto",
+            defaults={"known_key": "x"},
+        )
+        monkeypatch.setenv("AUTOFB_UNKNOWN_STUFF", "val")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # Unknown key falls back to nested conversion
+        assert config.get("autofb.unknown.stuff") == "val"
+
+    def test_max_depth_limits_nesting(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace("depthtest", env_prefix="DEPTHAPP", max_depth=3)
+        monkeypatch.setenv("DEPTHAPP_A_B_C_D_E", "val")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # max_depth=3 means at most 3 segments (2 dots), rest are literal _
+        assert config.get("depthtest.a.b.c_d_e") == "val"
+
+    def test_max_depth_default_is_five(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace("depth5", env_prefix="DEPTH5APP")
+        monkeypatch.setenv("DEPTH5APP_A_B_C_D_E_F_G", "val")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        # Default max_depth=5: 5 segments, rest literal
+        assert config.get("depth5.a.b.c.d.e_f_g") == "val"
+
+    def test_env_prefix_auto_derived_from_name(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace("autoderive")  # no env_prefix → "AUTODERIVE"
+        monkeypatch.setenv("AUTODERIVE_FOO", "bar")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        assert config.get("autoderive.foo") == "bar"
+
+    def test_env_prefix_auto_derived_hyphen_to_underscore(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace("my-app")  # → "MY_APP"
+        monkeypatch.setenv("MY_APP_PORT", "9090")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        assert config.get("my-app.port") == 9090
+
+    def test_namespace_env_map(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.register_namespace(
+            "maptest",
+            env_map={"REDIS_URL": "cache_url", "STRIPE_KEY": "payment_key"},
+        )
+        monkeypatch.setenv("REDIS_URL", "redis://localhost")
+        monkeypatch.setenv("STRIPE_KEY", "sk_test_123")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        assert config.get("maptest.cache_url") == "redis://localhost"
+        assert config.get("maptest.payment_key") == "sk_test_123"
+
+    def test_global_env_map(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Config.env_map({"PORT": "port", "DATABASE_URL": "db_url"})
+        monkeypatch.setenv("PORT", "3000")
+        monkeypatch.setenv("DATABASE_URL", "postgres://prod")
+        yaml_file = tmp_path / "cfg.yaml"
+        yaml_file.write_text("apcore:\n  version: '1.0.0'\n")
+        config = Config.load(str(yaml_file), validate=False)
+        assert config.get("port") == 3000
+        assert config.get("db_url") == "postgres://prod"
+
+    def test_env_map_conflict_raises(self) -> None:
+        Config.register_namespace(
+            "conflict_a",
+            env_map={"CONFLICT_VAR": "val"},
+        )
+        with pytest.raises(ConfigEnvMapConflictError):
+            Config.register_namespace(
+                "conflict_b",
+                env_map={"CONFLICT_VAR": "val"},
+            )
 
 
 # ---------------------------------------------------------------------------

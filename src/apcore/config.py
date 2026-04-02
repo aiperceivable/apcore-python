@@ -20,6 +20,7 @@ import yaml
 
 from apcore.errors import (
     ConfigBindError,
+    ConfigEnvMapConflictError,
     ConfigEnvPrefixConflictError,
     ConfigError,
     ConfigMountError,
@@ -155,16 +156,25 @@ _DEFAULTS: dict[str, Any] = {
 _RESERVED_NAMESPACES: frozenset[str] = frozenset({"apcore", "_config"})
 
 
+_DEFAULT_MAX_DEPTH: int = 5
+_VALID_ENV_STYLES: frozenset[str] = frozenset({"nested", "flat", "auto"})
+
+
 @dataclasses.dataclass
 class _NamespaceRegistration:
     name: str
     schema: dict[str, Any] | str | None
-    env_prefix: str | None
+    env_prefix: str  # auto-derived or explicit (never None after registration)
     defaults: dict[str, Any] | None
+    env_style: str  # "auto" (default), "nested", or "flat"
+    max_depth: int  # max nesting depth for env conversion (default 5)
+    env_map: dict[str, str] | None  # bare env var → config key mapping
 
 
 _GLOBAL_NS_REGISTRY: dict[str, _NamespaceRegistration] = {}
 _GLOBAL_NS_REGISTRY_LOCK: threading.Lock = threading.Lock()
+_GLOBAL_ENV_MAP: dict[str, str] = {}  # bare env var → top-level config key
+_GLOBAL_ENV_MAP_CLAIMED: dict[str, str] = {}  # env var → owner (for conflict detection)
 
 T = TypeVar("T")
 
@@ -252,9 +262,106 @@ def _coerce_env_value(value: str) -> Any:
     return value
 
 
-def _env_suffix_to_dot_path(suffix: str) -> str:
-    """Convert env var suffix to dot-path (single _ → ., double __ → _)."""
-    return suffix.lower().replace("__", "\x00").replace("_", ".").replace("\x00", "_")
+def _env_suffix_to_dot_path_with_depth(suffix: str, max_depth: int) -> str:
+    """Convert env var suffix to dot-path, stopping at *max_depth* segments.
+
+    After producing ``max_depth - 1`` dots (i.e. *max_depth* segments),
+    remaining ``_`` characters are preserved as literal underscores.
+    Double ``__`` always means literal ``_`` regardless of depth.
+    """
+    lower = suffix.lower()
+    result: list[str] = []
+    dot_count = 0
+    i = 0
+    while i < len(lower):
+        ch = lower[i]
+        if ch == "_":
+            if i + 1 < len(lower) and lower[i + 1] == "_":
+                result.append("_")  # double __ → literal _
+                i += 2
+            elif dot_count < max_depth - 1:
+                result.append(".")
+                dot_count += 1
+                i += 1
+            else:
+                result.append("_")  # depth limit reached
+                i += 1
+        else:
+            result.append(ch)
+            i += 1
+    return "".join(result)
+
+
+def _auto_resolve_suffix(
+    suffix: str,
+    defaults: dict[str, Any] | None,
+    max_depth: int,
+) -> str:
+    """Resolve env var suffix using the *defaults* tree structure.
+
+    Tries the full suffix as a flat key first, then recursively splits at
+    underscore positions to match nested dict keys.  Falls back to
+    ``_env_suffix_to_dot_path_with_depth`` when no match is found.
+    """
+    lower = suffix.lower()
+    if defaults is None:
+        return _env_suffix_to_dot_path_with_depth(lower, max_depth)
+
+    result = _match_suffix_to_tree(lower, defaults, 0, max_depth)
+    if result is not None:
+        return result
+    # Fallback: nested conversion with depth limit.
+    return _env_suffix_to_dot_path_with_depth(lower, max_depth)
+
+
+def _match_suffix_to_tree(
+    suffix: str,
+    tree: dict[str, Any],
+    depth: int,
+    max_depth: int,
+) -> str | None:
+    """Try to match *suffix* against keys in *tree* (recursive)."""
+    # 1. Try full suffix as a flat key.
+    if suffix in tree:
+        return suffix
+
+    # 2. Depth limit reached — cannot split further.
+    if depth >= max_depth - 1:
+        return None
+
+    # 3. Try splitting at each underscore position (left to right).
+    for i, ch in enumerate(suffix):
+        if ch != "_" or i == 0 or i == len(suffix) - 1:
+            continue
+        prefix_part = suffix[:i]
+        remainder = suffix[i + 1 :]
+        subtree = tree.get(prefix_part)
+        if isinstance(subtree, dict):
+            sub = _match_suffix_to_tree(remainder, subtree, depth + 1, max_depth)
+            if sub is not None:
+                return prefix_part + "." + sub
+
+    return None
+
+
+def _resolve_env_suffix(
+    suffix: str,
+    registration: _NamespaceRegistration,
+) -> tuple[str, bool]:
+    """Resolve an env var suffix to a config key path.
+
+    Returns ``(key, is_nested)`` where *is_nested* indicates whether the key
+    contains dots (i.e. should be stored via ``_set_nested``).
+    """
+    if registration.env_style == "flat":
+        key = suffix.lower()
+        return key, False
+    if registration.env_style == "auto":
+        key = _auto_resolve_suffix(suffix, registration.defaults, registration.max_depth)
+        return key, "." in key
+    # "nested" (default)
+    key = _env_suffix_to_dot_path_with_depth(suffix, registration.max_depth)
+    return key, "." in key
 
 
 def _apply_namespace_env_overrides(
@@ -263,35 +370,62 @@ def _apply_namespace_env_overrides(
 ) -> dict[str, Any]:
     """Apply per-namespace env overrides using longest-prefix-match dispatch (§9.8.3).
 
-    Sorted by env_prefix length descending so longer prefixes win.
+    Handles three sources in order:
+      1. Global env_map (bare env var → top-level key)
+      2. Namespace env_map (bare env var → namespace key)
+      3. Prefix-based dispatch (MYAPP_FOO → myapp.foo)
     """
     result = copy.deepcopy(data)
 
-    # Only namespaces with an env_prefix are eligible.
+    # Build namespace env_map lookup.
+    ns_env_maps: dict[str, tuple[str, str]] = {}  # env_var → (ns_name, config_key)
+    for reg in registrations:
+        if reg.env_map:
+            for env_var, config_key in reg.env_map.items():
+                ns_env_maps[env_var] = (reg.name, config_key)
+
+    # Prefix table: sorted by length descending for longest-prefix-match.
     prefixed = sorted(
         [r for r in registrations if r.env_prefix],
-        key=lambda r: len(r.env_prefix or ""),
+        key=lambda r: len(r.env_prefix),
         reverse=True,
     )
-    if not prefixed:
-        return result
 
     for env_key, env_value in os.environ.items():
+        coerced = _coerce_env_value(env_value)
+
+        # 1. Global env_map (bare env var → top-level key).
+        if env_key in _GLOBAL_ENV_MAP:
+            result[_GLOBAL_ENV_MAP[env_key]] = coerced
+            continue
+
+        # 2. Namespace env_map (bare env var → namespace key).
+        if env_key in ns_env_maps:
+            ns_name, config_key = ns_env_maps[env_key]
+            ns_data = result.setdefault(ns_name, {})
+            ns_data[config_key] = coerced
+            continue
+
+        # 3. Prefix-based dispatch.
+        if not prefixed:
+            continue
         matched = _find_matching_ns_registration(env_key, prefixed)
         if matched is None:
             continue
-        prefix = matched.env_prefix or ""
+        prefix = matched.env_prefix
         suffix = env_key[len(prefix) :]
         if not suffix:
             continue
-        # Strip leading separator (single _ between prefix and key body)
         if suffix.startswith("_"):
             suffix = suffix[1:]
         if not suffix:
             continue
-        dot_path = _env_suffix_to_dot_path(suffix)
+        key, is_nested = _resolve_env_suffix(suffix, matched)
         ns_data = result.setdefault(matched.name, {})
-        _set_nested(ns_data, dot_path, _coerce_env_value(env_value))
+        if is_nested:
+            _set_nested(ns_data, key, coerced)
+        else:
+            ns_data[key] = coerced
 
     return result
 
@@ -418,21 +552,37 @@ class Config:
         schema: dict[str, Any] | str | None = None,
         env_prefix: str | None = None,
         defaults: dict[str, Any] | None = None,
+        env_style: str | None = None,
+        max_depth: int | None = None,
+        env_map: dict[str, str] | None = None,
     ) -> None:
         """Register a namespace globally.
 
         Args:
             name: Namespace name (must not be reserved or already registered).
             schema: Optional JSON Schema dict or path to a JSON Schema file.
-            env_prefix: Optional env var prefix (e.g. ``"APCORE_OBSERVABILITY"``).
+            env_prefix: Env var prefix. When ``None``, auto-derived from
+                ``name`` via ``name.upper().replace("-", "_")``.  When an
+                explicit string, used as-is.
             defaults: Optional default values for this namespace.
+            env_style: Env var key conversion strategy (default ``"auto"``).
+            max_depth: Max nesting depth for env key conversion (default 5).
+            env_map: Explicit mapping of bare env var names to config keys
+                within this namespace (e.g. ``{"REDIS_URL": "cache_url"}``).
 
         Raises:
             ConfigNamespaceReservedError: If ``name`` is a reserved namespace.
             ConfigNamespaceDuplicateError: If ``name`` is already registered.
-            ConfigEnvPrefixConflictError: If ``env_prefix`` conflicts with an
-                existing prefix.
+            ConfigEnvPrefixConflictError: If ``env_prefix`` conflicts.
+            ConfigEnvMapConflictError: If an ``env_map`` key is already claimed.
         """
+        resolved_style = env_style or "auto"
+        if resolved_style not in _VALID_ENV_STYLES:
+            msg = f"env_style must be one of {sorted(_VALID_ENV_STYLES)}, got {resolved_style!r}"
+            raise ValueError(msg)
+        resolved_depth = max_depth if max_depth is not None else _DEFAULT_MAX_DEPTH
+        resolved_prefix = env_prefix if env_prefix is not None else name.upper().replace("-", "_")
+
         if name in _RESERVED_NAMESPACES:
             raise ConfigNamespaceReservedError(name=name)
 
@@ -440,22 +590,59 @@ class Config:
             if name in _GLOBAL_NS_REGISTRY:
                 raise ConfigNamespaceDuplicateError(name=name)
 
-            if env_prefix is not None:
-                cls._validate_env_prefix(env_prefix)
+            cls._validate_env_prefix(resolved_prefix)
+
+            if env_map:
+                cls._validate_env_map(env_map, owner=name)
 
             _GLOBAL_NS_REGISTRY[name] = _NamespaceRegistration(
                 name=name,
                 schema=schema,
-                env_prefix=env_prefix,
+                env_prefix=resolved_prefix,
                 defaults=defaults,
+                env_style=resolved_style,
+                max_depth=resolved_depth,
+                env_map=env_map,
             )
+
+    @classmethod
+    def env_map(cls, mapping: dict[str, str]) -> None:
+        """Register global bare env var → top-level config key mappings.
+
+        Args:
+            mapping: Dict of env var names to config keys
+                (e.g. ``{"PORT": "port", "DATABASE_URL": "db_url"}``).
+
+        Raises:
+            ConfigEnvMapConflictError: If an env var is already claimed.
+        """
+        with _GLOBAL_NS_REGISTRY_LOCK:
+            for env_var in mapping:
+                if env_var in _GLOBAL_ENV_MAP_CLAIMED:
+                    owner = _GLOBAL_ENV_MAP_CLAIMED[env_var]
+                    raise ConfigEnvMapConflictError(env_var=env_var, owner=owner)
+            # All clean — register.
+            for env_var, config_key in mapping.items():
+                _GLOBAL_ENV_MAP[env_var] = config_key
+                _GLOBAL_ENV_MAP_CLAIMED[env_var] = "__global__"
 
     @classmethod
     def _validate_env_prefix(cls, env_prefix: str) -> None:
         """Raise ConfigEnvPrefixConflictError if env_prefix is already in use."""
         for reg in _GLOBAL_NS_REGISTRY.values():
-            if reg.env_prefix and reg.env_prefix == env_prefix:
+            if reg.env_prefix == env_prefix:
                 raise ConfigEnvPrefixConflictError(env_prefix=env_prefix)
+
+    @classmethod
+    def _validate_env_map(cls, env_map: dict[str, str], owner: str) -> None:
+        """Raise ConfigEnvMapConflictError if any env var is already claimed."""
+        for env_var in env_map:
+            if env_var in _GLOBAL_ENV_MAP_CLAIMED:
+                existing_owner = _GLOBAL_ENV_MAP_CLAIMED[env_var]
+                raise ConfigEnvMapConflictError(env_var=env_var, owner=existing_owner)
+        # All clean — claim them.
+        for env_var in env_map:
+            _GLOBAL_ENV_MAP_CLAIMED[env_var] = owner
 
     @classmethod
     def registered_namespaces(cls) -> list[dict[str, Any]]:
