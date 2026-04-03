@@ -10,13 +10,9 @@ import pytest
 
 from apcore.acl import ACL, ACLRule
 from apcore.acl_handlers import (
-    ACLConditionHandler,
-    AsyncACLConditionHandler,
     SyncACLConditionHandler,
     _IdentityTypesHandler,
     _MaxCallDepthHandler,
-    _NotHandler,
-    _OrHandler,
     _RolesHandler,
 )
 from apcore.context import Context, Identity
@@ -190,18 +186,24 @@ class TestOrHandler:
     def test_or_passes_when_any_match(self) -> None:
         """AC-011: $or evaluates with OR logic."""
         ctx = _make_context(identity_type="user", roles=["admin"])
-        acl = _make_acl_with_condition("$or", [
-            {"roles": ["admin"]},
-            {"identity_types": ["service"]},
-        ])
+        acl = _make_acl_with_condition(
+            "$or",
+            [
+                {"roles": ["admin"]},
+                {"identity_types": ["service"]},
+            ],
+        )
         assert acl.check("caller", "target", context=ctx) is True
 
     def test_or_fails_when_none_match(self) -> None:
         ctx = _make_context(identity_type="user", roles=["viewer"])
-        acl = _make_acl_with_condition("$or", [
-            {"roles": ["admin"]},
-            {"identity_types": ["service"]},
-        ])
+        acl = _make_acl_with_condition(
+            "$or",
+            [
+                {"roles": ["admin"]},
+                {"identity_types": ["service"]},
+            ],
+        )
         assert acl.check("caller", "target", context=ctx) is False
 
     def test_or_empty_list_returns_false(self) -> None:
@@ -217,10 +219,13 @@ class TestOrHandler:
 
     def test_or_skips_non_dict_elements(self) -> None:
         ctx = _make_context(roles=["admin"])
-        acl = _make_acl_with_condition("$or", [
-            "invalid_string",
-            {"roles": ["admin"]},
-        ])
+        acl = _make_acl_with_condition(
+            "$or",
+            [
+                "invalid_string",
+                {"roles": ["admin"]},
+            ],
+        )
         assert acl.check("caller", "target", context=ctx) is True
 
 
@@ -244,18 +249,24 @@ class TestNestedCompound:
     def test_nested_or_with_and(self) -> None:
         """AC-032: Nested compound conditions."""
         ctx = _make_context(identity_type="service", call_chain=["a", "b"])
-        acl = _make_acl_with_condition("$or", [
-            {"roles": ["admin"]},
-            {"identity_types": ["service"], "max_call_depth": 5},
-        ])
+        acl = _make_acl_with_condition(
+            "$or",
+            [
+                {"roles": ["admin"]},
+                {"identity_types": ["service"], "max_call_depth": 5},
+            ],
+        )
         assert acl.check("caller", "target", context=ctx) is True
 
     def test_nested_or_with_and_fails_when_depth_exceeded(self) -> None:
         ctx = _make_context(identity_type="service", call_chain=["a"] * 10)
-        acl = _make_acl_with_condition("$or", [
-            {"roles": ["admin"]},
-            {"identity_types": ["service"], "max_call_depth": 5},
-        ])
+        acl = _make_acl_with_condition(
+            "$or",
+            [
+                {"roles": ["admin"]},
+                {"identity_types": ["service"], "max_call_depth": 5},
+            ],
+        )
         assert acl.check("caller", "target", context=ctx) is False
 
 

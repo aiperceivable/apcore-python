@@ -98,9 +98,7 @@ class TestContextDeserialize:
     def test_deserialize_roundtrip(self) -> None:
         """Serialize then deserialize preserves fields."""
         ctx = Context.create(executor=None)
-        ctx.identity = Identity(
-            id="user-1", type="user", roles=("admin",), attrs={"org": "acme"}
-        )
+        ctx.identity = Identity(id="user-1", type="user", roles=("admin",), attrs={"org": "acme"})
         ctx.data["app.counter"] = 42
         serialized = ctx.serialize()
         restored = Context.deserialize(serialized)

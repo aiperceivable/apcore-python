@@ -182,7 +182,9 @@ class PipelineEngine:
     """Executes a pipeline strategy step by step."""
 
     async def run(
-        self, strategy: ExecutionStrategy, ctx: PipelineContext,
+        self,
+        strategy: ExecutionStrategy,
+        ctx: PipelineContext,
     ) -> tuple[Any, PipelineTrace]:
         """Run all steps in the strategy, returning the final output and trace."""
         trace = PipelineTrace(
@@ -200,13 +202,15 @@ class PipelineEngine:
             try:
                 result = await step.execute(ctx)
             except Exception as exc:
-                trace.steps.append(StepTrace(
-                    name=step.name,
-                    duration_ms=(time.monotonic() - step_start) * 1000,
-                    result=StepResult(action="abort", explanation=str(exc)),
-                    skipped=False,
-                    decision_point=False,
-                ))
+                trace.steps.append(
+                    StepTrace(
+                        name=step.name,
+                        duration_ms=(time.monotonic() - step_start) * 1000,
+                        result=StepResult(action="abort", explanation=str(exc)),
+                        skipped=False,
+                        decision_point=False,
+                    )
+                )
                 trace.total_duration_ms = (time.monotonic() - start) * 1000
                 raise
 
@@ -235,13 +239,15 @@ class PipelineEngine:
                         target_idx = j
                         break
                     # Record skipped steps in trace
-                    trace.steps.append(StepTrace(
-                        name=steps[j].name,
-                        duration_ms=0,
-                        result=StepResult(action="continue"),
-                        skipped=True,
-                        decision_point=False,
-                    ))
+                    trace.steps.append(
+                        StepTrace(
+                            name=steps[j].name,
+                            duration_ms=0,
+                            result=StepResult(action="continue"),
+                            skipped=True,
+                            decision_point=False,
+                        )
+                    )
                 if target_idx is None:
                     raise StepNotFoundError(
                         f"skip_to target '{target}' not found",
@@ -253,9 +259,7 @@ class PipelineEngine:
 
         trace.success = True
         trace.total_duration_ms = (time.monotonic() - start) * 1000
-        final_output = (
-            ctx.validated_output if ctx.validated_output is not None else ctx.output
-        )
+        final_output = ctx.validated_output if ctx.validated_output is not None else ctx.output
         return final_output, trace
 
 

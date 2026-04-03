@@ -143,9 +143,7 @@ class Context(Generic[T]):
             result["identity"] = None
         if self.redacted_inputs is not None:
             result["redacted_inputs"] = dict(self.redacted_inputs)
-        result["data"] = {
-            k: v for k, v in self.data.items() if not k.startswith("_")
-        }
+        result["data"] = {k: v for k, v in self.data.items() if not k.startswith("_")}
         return result
 
     @classmethod
@@ -162,8 +160,7 @@ class Context(Generic[T]):
         version = data.get("_context_version", 1)
         if version > 1:
             _logger.warning(
-                "Unknown _context_version %d (expected 1). "
-                "Proceeding with best-effort deserialization.",
+                "Unknown _context_version %d (expected 1). " "Proceeding with best-effort deserialization.",
                 version,
             )
 

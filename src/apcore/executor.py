@@ -216,6 +216,7 @@ class Executor:
         )
         if strategy is None:
             from apcore.builtin_steps import build_standard_strategy
+
             self._strategy = build_standard_strategy(**strategy_kwargs)
         elif isinstance(strategy, str):
             self._strategy = self._resolve_strategy_name(strategy, **strategy_kwargs)
@@ -416,9 +417,7 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                REDACTED_OUTPUT.set(ctx, redact_sensitive(
-                    output, module.output_schema.model_json_schema()
-                ))
+                REDACTED_OUTPUT.set(ctx, redact_sensitive(output, module.output_schema.model_json_schema()))
 
             # Step 10 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
@@ -922,9 +921,7 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                REDACTED_OUTPUT.set(ctx, redact_sensitive(
-                    output, module.output_schema.model_json_schema()
-                ))
+                REDACTED_OUTPUT.set(ctx, redact_sensitive(output, module.output_schema.model_json_schema()))
 
             # Step 10 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
@@ -1048,9 +1045,7 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    REDACTED_OUTPUT.set(ctx, redact_sensitive(
-                        output, module.output_schema.model_json_schema()
-                    ))
+                    REDACTED_OUTPUT.set(ctx, redact_sensitive(output, module.output_schema.model_json_schema()))
 
                 # Step 10 -- Middleware After (async-aware)
                 output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)
@@ -1073,9 +1068,7 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    REDACTED_OUTPUT.set(ctx, redact_sensitive(
-                        accumulated, module.output_schema.model_json_schema()
-                    ))
+                    REDACTED_OUTPUT.set(ctx, redact_sensitive(accumulated, module.output_schema.model_json_schema()))
 
                 # Step 10 -- Middleware After on accumulated result (async-aware)
                 accumulated = await self._middleware_manager.execute_after_async(
@@ -1226,9 +1219,7 @@ class Executor:
 
         if loop is None:
             return asyncio.run(engine.run(effective_strategy, pipe_ctx))
-        return self._run_in_new_thread(
-            engine.run(effective_strategy, pipe_ctx), module_id, None
-        )
+        return self._run_in_new_thread(engine.run(effective_strategy, pipe_ctx), module_id, None)
 
     async def call_async_with_trace(
         self,
@@ -1263,7 +1254,8 @@ class Executor:
         return await engine.run(effective_strategy, pipe_ctx)
 
     def _effective_strategy(
-        self, strategy: ExecutionStrategy | str | None,
+        self,
+        strategy: ExecutionStrategy | str | None,
     ) -> ExecutionStrategy:
         """Return the strategy to use for a call, resolving strings."""
         if strategy is None:

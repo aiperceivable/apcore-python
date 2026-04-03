@@ -84,7 +84,9 @@ class ACL:
 
     @classmethod
     def _evaluate_conditions(
-        cls, conditions: dict[str, Any], context: Context,
+        cls,
+        conditions: dict[str, Any],
+        context: Context,
     ) -> bool:
         """Evaluate all conditions with AND logic. Fail-closed on unknown."""
         for key, value in conditions.items():
@@ -100,7 +102,8 @@ class ACL:
             if inspect.isawaitable(result):
                 result.close()  # prevent "coroutine never awaited" warning
                 _logger.warning(
-                    "Async condition %r in sync context — treated as unsatisfied. Use async_check().", key,
+                    "Async condition %r in sync context — treated as unsatisfied. Use async_check().",
+                    key,
                 )
                 return False
             if not result:
@@ -109,7 +112,9 @@ class ACL:
 
     @classmethod
     async def _evaluate_conditions_async(
-        cls, conditions: dict[str, Any], context: Context,
+        cls,
+        conditions: dict[str, Any],
+        context: Context,
     ) -> bool:
         """Async variant. Awaits async handlers, calls sync handlers directly."""
         for key, value in conditions.items():

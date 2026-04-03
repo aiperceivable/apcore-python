@@ -17,12 +17,6 @@ from typing import Any
 import pydantic
 
 from apcore.context import Context
-from apcore.errors import (
-    ACLDeniedError,
-    ModuleNotFoundError,
-    SchemaValidationError,
-)
-from apcore.executor import REDACTED_VALUE, redact_sensitive
 from apcore.pipeline import (
     BaseStep,
     ExecutionStrategy,
@@ -363,9 +357,7 @@ class BuiltinExecute(BaseStep):
                 output = await module.execute(inputs, ctx.context)
             else:
                 loop = asyncio.get_event_loop()
-                output = await loop.run_in_executor(
-                    None, module.execute, inputs, ctx.context
-                )
+                output = await loop.run_in_executor(None, module.execute, inputs, ctx.context)
             ctx.output = output
         except Exception as exc:
             return StepResult(action="abort", explanation=f"Execution error: {exc}")

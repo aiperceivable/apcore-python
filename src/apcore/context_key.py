@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
-
-from apcore.context import Context
+from typing import Any, Generic, Protocol, TypeVar
 
 T = TypeVar("T")
 
 _MISSING = object()
+
+
+class _ContextLike(Protocol):
+    """Structural protocol for any object with a ``data`` mapping."""
+
+    data: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -22,20 +26,20 @@ class ContextKey(Generic[T]):
 
     name: str
 
-    def get(self, ctx: Context, default: T | None = None) -> T | None:  # type: ignore[type-var]
+    def get(self, ctx: _ContextLike, default: T | None = None) -> T | None:  # type: ignore[type-var]
         """Return the value for this key, or *default* if absent."""
         value = ctx.data.get(self.name, _MISSING)
         return default if value is _MISSING else value  # type: ignore[return-value]
 
-    def set(self, ctx: Context, value: T) -> None:
+    def set(self, ctx: _ContextLike, value: T) -> None:
         """Store *value* under this key in context.data."""
         ctx.data[self.name] = value
 
-    def delete(self, ctx: Context) -> None:
+    def delete(self, ctx: _ContextLike) -> None:
         """Remove this key from context.data (no-op if absent)."""
         ctx.data.pop(self.name, None)
 
-    def exists(self, ctx: Context) -> bool:
+    def exists(self, ctx: _ContextLike) -> bool:
         """Return True if this key is present in context.data."""
         return self.name in ctx.data
 

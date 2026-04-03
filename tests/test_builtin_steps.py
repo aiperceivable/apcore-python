@@ -25,7 +25,6 @@ from apcore.pipeline import (
     BaseStep,
     ExecutionStrategy,
     PipelineContext,
-    StepResult,
 )
 
 
