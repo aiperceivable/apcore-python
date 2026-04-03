@@ -180,6 +180,24 @@ from apcore.observability import (
 # Events
 from apcore.events import A2ASubscriber, ApCoreEvent, EventEmitter, EventSubscriber, WebhookSubscriber
 
+# Pipeline
+from apcore.pipeline import (
+    BaseStep,
+    ExecutionStrategy,
+    PipelineAbortError,
+    PipelineContext,
+    PipelineTrace,
+    Step,
+    StepNameDuplicateError,
+    StepNotFoundError,
+    StepNotRemovableError,
+    StepNotReplaceableError,
+    StepResult,
+    StepTrace,
+    StrategyInfo,
+    StrategyNotFoundError,
+)
+
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
@@ -511,6 +529,21 @@ __all__ = [
     # Version
     "VersionIncompatibleError",
     "negotiate_version",
+    # Pipeline
+    "Step",
+    "BaseStep",
+    "StepResult",
+    "PipelineContext",
+    "PipelineTrace",
+    "StepTrace",
+    "ExecutionStrategy",
+    "StrategyInfo",
+    "PipelineAbortError",
+    "StepNotFoundError",
+    "StepNotRemovableError",
+    "StepNotReplaceableError",
+    "StepNameDuplicateError",
+    "StrategyNotFoundError",
     # System Modules
     "register_sys_modules",
     "register_subscriber_type",

@@ -40,6 +40,14 @@ from apcore.utils.error_propagation import propagate_error
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
 from apcore.module import ModuleAnnotations, PreflightCheckResult, PreflightResult
+from apcore.pipeline import (
+    ExecutionStrategy,
+    PipelineContext,
+    PipelineEngine,
+    PipelineTrace,
+    StrategyInfo,
+    StrategyNotFoundError,
+)
 from apcore.registry import MODULE_ID_PATTERN, Registry
 from apcore.utils.call_chain import guard_call_chain
 
@@ -168,9 +176,13 @@ class Executor:
     middleware after chain, and result return.
     """
 
+    _registered_strategies: dict[str, ExecutionStrategy] = {}
+
     def __init__(
         self,
         registry: Registry,
+        *,
+        strategy: ExecutionStrategy | str | None = None,
         middlewares: list[Middleware] | None = None,
         acl: ACL | None = None,
         config: Config | None = None,
@@ -180,6 +192,9 @@ class Executor:
 
         Args:
             registry: Module registry for looking up modules by ID.
+            strategy: Optional execution strategy. Can be an ExecutionStrategy
+                instance, a preset name string ("standard", "internal",
+                "testing", "performance"), or None (defaults to standard).
             middlewares: Optional list of middleware instances to register.
             acl: Optional ACL for access control enforcement.
             config: Optional configuration for timeout/depth settings.
@@ -190,6 +205,22 @@ class Executor:
         self._acl = acl
         self._config = config
         self._approval_handler = approval_handler
+
+        # Resolve strategy
+        strategy_kwargs = dict(
+            registry=registry,
+            config=config,
+            acl=acl,
+            approval_handler=approval_handler,
+            middlewares=middlewares,
+        )
+        if strategy is None:
+            from apcore.builtin_steps import build_standard_strategy
+            self._strategy = build_standard_strategy(**strategy_kwargs)
+        elif isinstance(strategy, str):
+            self._strategy = self._resolve_strategy_name(strategy, **strategy_kwargs)
+        else:
+            self._strategy = strategy
 
         if middlewares:
             for mw in middlewares:
@@ -217,6 +248,8 @@ class Executor:
     def from_registry(
         cls,
         registry: Registry,
+        *,
+        strategy: ExecutionStrategy | str | None = None,
         middlewares: list[Middleware] | None = None,
         acl: ACL | None = None,
         config: Config | None = None,
@@ -226,6 +259,7 @@ class Executor:
 
         Args:
             registry: The module registry.
+            strategy: Optional execution strategy or preset name.
             middlewares: Optional middleware list.
             acl: Optional access control list.
             config: Optional configuration.
@@ -236,6 +270,7 @@ class Executor:
         """
         return cls(
             registry=registry,
+            strategy=strategy,
             middlewares=middlewares,
             acl=acl,
             config=config,
@@ -1102,3 +1137,194 @@ class Executor:
         """Clear the async module detection cache."""
         with self._async_cache_lock:
             self._async_cache.clear()
+
+    # -------------------------------------------------------------------------
+    # Strategy resolution
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_strategy_name(name: str, **kwargs: Any) -> ExecutionStrategy:
+        """Resolve a strategy name to an ExecutionStrategy instance.
+
+        Checks preset names first, then the class-level registered strategies.
+
+        Args:
+            name: Strategy name ("standard", "internal", "testing", "performance",
+                or a previously registered name).
+            **kwargs: Forwarded to preset builder functions.
+
+        Returns:
+            The resolved ExecutionStrategy.
+
+        Raises:
+            StrategyNotFoundError: If the name is not recognized.
+        """
+        from apcore.builtin_steps import (
+            build_internal_strategy,
+            build_performance_strategy,
+            build_standard_strategy,
+            build_testing_strategy,
+        )
+
+        preset_builders: dict[str, Any] = {
+            "standard": build_standard_strategy,
+            "internal": build_internal_strategy,
+            "testing": build_testing_strategy,
+            "performance": build_performance_strategy,
+        }
+
+        if name in preset_builders:
+            return preset_builders[name](**kwargs)
+
+        if name in Executor._registered_strategies:
+            return Executor._registered_strategies[name]
+
+        raise StrategyNotFoundError(
+            message=f"Strategy '{name}' not found. "
+            f"Available: {sorted(set(list(preset_builders) + list(Executor._registered_strategies)))}"
+        )
+
+    # -------------------------------------------------------------------------
+    # call_with_trace / call_async_with_trace
+    # -------------------------------------------------------------------------
+
+    def call_with_trace(
+        self,
+        module_id: str,
+        inputs: dict[str, Any] | None = None,
+        context: Any | None = None,
+        *,
+        strategy: ExecutionStrategy | str | None = None,
+    ) -> tuple[dict[str, Any], PipelineTrace]:
+        """Sync call that returns (result, trace).
+
+        Runs the module through the pipeline engine and returns both the
+        output and the full pipeline trace for introspection.
+
+        Args:
+            module_id: The module to execute.
+            inputs: Input data dict. None is treated as {}.
+            context: Optional execution context.
+            strategy: Override strategy for this call.
+
+        Returns:
+            A tuple of (result dict, PipelineTrace).
+        """
+        effective_strategy = self._effective_strategy(strategy)
+        pipe_ctx = PipelineContext(
+            module_id=module_id,
+            inputs=inputs or {},
+            context=context,
+            strategy=effective_strategy,
+        )
+        engine = PipelineEngine()
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is None:
+            return asyncio.run(engine.run(effective_strategy, pipe_ctx))
+        return self._run_in_new_thread(
+            engine.run(effective_strategy, pipe_ctx), module_id, None
+        )
+
+    async def call_async_with_trace(
+        self,
+        module_id: str,
+        inputs: dict[str, Any] | None = None,
+        context: Any | None = None,
+        *,
+        strategy: ExecutionStrategy | str | None = None,
+    ) -> tuple[dict[str, Any], PipelineTrace]:
+        """Async call that returns (result, trace).
+
+        Runs the module through the pipeline engine and returns both the
+        output and the full pipeline trace for introspection.
+
+        Args:
+            module_id: The module to execute.
+            inputs: Input data dict. None is treated as {}.
+            context: Optional execution context.
+            strategy: Override strategy for this call.
+
+        Returns:
+            A tuple of (result dict, PipelineTrace).
+        """
+        effective_strategy = self._effective_strategy(strategy)
+        pipe_ctx = PipelineContext(
+            module_id=module_id,
+            inputs=inputs or {},
+            context=context,
+            strategy=effective_strategy,
+        )
+        engine = PipelineEngine()
+        return await engine.run(effective_strategy, pipe_ctx)
+
+    def _effective_strategy(
+        self, strategy: ExecutionStrategy | str | None,
+    ) -> ExecutionStrategy:
+        """Return the strategy to use for a call, resolving strings."""
+        if strategy is None:
+            return self._strategy
+        if isinstance(strategy, str):
+            return self._resolve_strategy_name(
+                strategy,
+                registry=self._registry,
+                config=self._config,
+                acl=self._acl,
+                approval_handler=self._approval_handler,
+                middlewares=self._middleware_manager.snapshot(),
+            )
+        return strategy
+
+    # -------------------------------------------------------------------------
+    # Introspection
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def register_strategy(cls, name: str, strategy: ExecutionStrategy) -> None:
+        """Register a named strategy for resolution by string name.
+
+        Args:
+            name: The name to register under.
+            strategy: The ExecutionStrategy instance.
+        """
+        cls._registered_strategies[name] = strategy
+
+    def list_strategies(self) -> list[StrategyInfo]:
+        """Return StrategyInfo for the current strategy and all registered strategies.
+
+        Returns:
+            A list of StrategyInfo, starting with the current strategy.
+        """
+        seen: set[str] = set()
+        result: list[StrategyInfo] = []
+
+        # Current strategy first
+        info = self._strategy.info()
+        result.append(info)
+        seen.add(info.name)
+
+        # Registered strategies
+        for name, strat in sorted(self._registered_strategies.items()):
+            if name not in seen:
+                result.append(strat.info())
+                seen.add(name)
+
+        return result
+
+    @property
+    def current_strategy(self) -> ExecutionStrategy:
+        """Return the current execution strategy."""
+        return self._strategy
+
+    def describe_pipeline(self) -> str:
+        """Return a human-readable description of the current pipeline.
+
+        Returns:
+            A string like "11-step pipeline: step1 -> step2 -> ...".
+        """
+        names = self._strategy.step_names()
+        return f"{len(names)}-step pipeline: " + " \u2192 ".join(names)
