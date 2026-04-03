@@ -21,8 +21,8 @@ _SUPPORTED_LANGUAGES: frozenset[str] = frozenset(_SEPARATORS)
 #  Handles transitions like: "Http" | "JSON" | "Parser" | "v2".
 _CASE_BOUNDARY = re.compile(
     r"""
-    (?<=[a-z0-9])(?=[A-Z])     # lowercase/digit → uppercase  (e.g. "http|Json")
-    | (?<=[A-Z])(?=[A-Z][a-z]) # uppercase run → start of word (e.g. "HTTP|Json")
+    (?<=[a-z0-9])(?=[A-Z])       # lowercase/digit → uppercase  (e.g. "http|Json")
+    | (?<=[A-Z])(?=[A-Z][a-z0-9]) # uppercase run → start of word (e.g. "HTTP|Json")
     """,
     re.VERBOSE,
 )
@@ -32,24 +32,26 @@ _CANONICAL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
 
 def _to_snake_case(segment: str) -> str:
-    """Convert a PascalCase, camelCase, or mixed-case segment to snake_case.
-
-    Acronyms are treated as single words::
-
-        "HttpJsonParser" → "http_json_parser"
-        "HTMLParser"     → "html_parser"
-        "getDBUrl"       → "get_db_url"
-    """
+    """Convert a PascalCase, camelCase, or mixed-case segment to snake_case."""
     if not segment:
         return segment
 
-    # If already snake_case (all lowercase + underscores), return as-is.
-    if segment == segment.lower() and segment.isidentifier():
-        return segment
-
-    # Split at case boundaries, join with underscore, lowercase.
-    words = _CASE_BOUNDARY.split(segment)
-    return "_".join(w.lower() for w in words if w)
+    res = []
+    for i, char in enumerate(segment):
+        if i > 0:
+            prev = segment[i - 1]
+            # Case 1: lowercase/digit followed by uppercase -> add underscore
+            if prev.islower() or prev.isdigit():
+                if char.isupper():
+                    res.append("_")
+            # Case 2: uppercase followed by uppercase followed by lowercase -> add underscore before the middle one
+            # e.g., HTTPAPIHandler: ...PIH... -> ...PI_H...
+            elif prev.isupper() and char.isupper():
+                if i + 1 < len(segment) and segment[i + 1].islower():
+                    res.append("_")
+        res.append(char.lower())
+    
+    return "".join(res).replace("__", "_")
 
 
 def normalize_to_canonical_id(local_id: str, language: str) -> str:

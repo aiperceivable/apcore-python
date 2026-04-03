@@ -219,20 +219,17 @@ def _set_nested(data: dict[str, Any], dot_path: str, value: Any) -> None:
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Apply APCORE_* environment variable overrides.
-
-    Naming convention: single ``_`` → ``.`` (section separator), double ``__`` → literal ``_``.
-
-    Examples::
-
-        APCORE_EXECUTOR_DEFAULT__TIMEOUT=5000  → executor.default_timeout = 5000
-        APCORE_ACL_DEFAULT__EFFECT=allow        → acl.default_effect = "allow"
-        APCORE_SCHEMA_ROOT=/schemas             → schema.root = "/schemas"
-
-    Numeric strings are coerced to int/float; ``"true"``/``"false"`` become booleans.
-    """
+    """Apply APCORE_* environment variable overrides and global mappings."""
     result = copy.deepcopy(data)  # deep copy to protect shared defaults
     for env_key, env_value in os.environ.items():
+        coerced = _coerce_env_value(env_value)
+
+        # 1. Global env_map (bare env var → top-level key).
+        if env_key in _GLOBAL_ENV_MAP:
+            _set_nested(result, _GLOBAL_ENV_MAP[env_key], coerced)
+            continue
+
+        # 2. Standard APCORE_ prefix.
         if not env_key.startswith(_ENV_PREFIX):
             continue
         suffix = env_key[len(_ENV_PREFIX) :]
@@ -240,7 +237,6 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
             continue
         # Convert: single _ → . (separator), double __ → literal _
         dot_path = suffix.lower().replace("__", "\x00").replace("_", ".").replace("\x00", "_")
-        coerced = _coerce_env_value(env_value)
         _set_nested(result, dot_path, coerced)
     return result
 
@@ -289,7 +285,7 @@ def _env_suffix_to_dot_path_with_depth(suffix: str, max_depth: int) -> str:
         else:
             result.append(ch)
             i += 1
-    return "".join(result)
+    return "".join(result).strip(".")
 
 
 def _auto_resolve_suffix(
@@ -534,12 +530,23 @@ class Config:
     namespace name and looks up nested keys within it.
     """
 
-    def __init__(self, data: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        data: dict[str, Any] | None = None,
+        env_style: str = "auto",
+    ) -> None:
+        """Initialize configuration system.
+
+        Args:
+            data: Optional in-memory configuration data.
+            env_style: Default env var conversion strategy ('auto', 'nested', 'flat').
+        """
         self._data: dict[str, Any] = data or {}
         self._yaml_path: str | None = None
         self._lock = threading.Lock()
         self._mode: str = "legacy"
         self._mounts: dict[str, dict[str, Any]] = {}
+        self._env_style: str = env_style
 
     # ------------------------------------------------------------------
     # Namespace registry (class-level)

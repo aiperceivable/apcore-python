@@ -44,30 +44,34 @@ _EvalFn = Callable[[dict[str, Any], Context], bool]
 
 
 class _IdentityTypesHandler:
-    """Check context.identity.type is in the allowed list."""
+    """Check context.identity.type matches allowed value(s)."""
 
     def evaluate(self, value: Any, context: Context) -> bool:
-        if not isinstance(value, list) or context.identity is None:
+        if context.identity is None:
             return False
-        return context.identity.type in value
+        if isinstance(value, list):
+            return context.identity.type in value
+        return context.identity.type == value
 
 
 class _RolesHandler:
-    """Check at least one role overlaps between identity and required roles."""
+    """Check role overlap between identity and required roles."""
 
     def evaluate(self, value: Any, context: Context) -> bool:
-        if not isinstance(value, list) or context.identity is None:
+        if context.identity is None:
             return False
-        return bool(set(context.identity.roles) & set(value))
+        required = {value} if isinstance(value, str) else set(value)
+        return bool(set(context.identity.roles) & required)
 
 
 class _MaxCallDepthHandler:
     """Check call chain length does not exceed threshold."""
 
     def evaluate(self, value: Any, context: Context) -> bool:
-        if not isinstance(value, int):
+        threshold = value.get("lte") if isinstance(value, dict) else value
+        if not isinstance(threshold, int):
             return False
-        return len(context.call_chain) <= value
+        return len(context.call_chain) <= threshold
 
 
 # ---------------------------------------------------------------------------

@@ -236,8 +236,8 @@ class TestACLEvaluationConformance:
             for r in case["rules"]
         ]
         acl = ACL(rules=rules, default_effect=case["default_effect"])
-        result = acl.check(caller_id=case["caller"], target_id=case["target"])
+        result = acl.check(caller_id=case["caller_id"], target_id=case["target_id"])
         assert result == case["expected"], (
-            f"ACL check(caller={case['caller']!r}, target={case['target']!r}) "
+            f"ACL check(caller_id={case['caller_id']!r}, target_id={case['target_id']!r}) "
             f"returned {result}, expected {case['expected']}"
         )

@@ -75,7 +75,14 @@ class ACL:
         remove_rule, reload) are safe to call concurrently.
     """
 
-    _condition_handlers: ClassVar[dict[str, ACLConditionHandler]] = {}
+    _condition_handlers: ClassVar[dict[str, ACLConditionHandler]] = {
+        "identity_types": _IdentityTypesHandler(),
+        "identity_type": _IdentityTypesHandler(),
+        "roles": _RolesHandler(),
+        "role": _RolesHandler(),
+        "max_call_depth": _MaxCallDepthHandler(),
+        "call_depth": _MaxCallDepthHandler(),
+    }
 
     @classmethod
     def register_condition(cls, key: str, handler: ACLConditionHandler) -> None:
@@ -135,7 +142,7 @@ class ACL:
 
     def __init__(
         self,
-        rules: list[ACLRule],
+        rules: list[ACLRule] | None = None,
         default_effect: str = "deny",
         *,
         audit_logger: Callable[[AuditEntry], None] | None = None,
@@ -143,12 +150,13 @@ class ACL:
         """Initialize ACL with ordered rules and a default effect.
 
         Args:
-            rules: Ordered list of ACL rules (first match wins).
+            rules: Ordered list of ACL rules (first match wins). Defaults to [].
             default_effect: Effect when no rule matches ('allow' or 'deny').
             audit_logger: Optional callback invoked with an AuditEntry for
                 every check() call. Useful for structured audit trails.
         """
-        self._rules: list[ACLRule] = list(rules)
+        self._rules = list(rules) if rules is not None else []
+
         self._default_effect: str = default_effect
         self._yaml_path: str | None = None
         self._audit_logger: Callable[[AuditEntry], None] | None = audit_logger
@@ -253,7 +261,7 @@ class ACL:
             if self._matches_rule(rule, effective_caller, target_id, context):
                 decision = rule.effect == "allow"
                 self._logger.debug(
-                    "ACL check: caller=%s target=%s decision=%s rule=%s",
+                    "ACL check: caller_id=%s target_id=%s decision=%s rule=%s",
                     caller_id,
                     target_id,
                     "allow" if decision else "deny",
@@ -274,7 +282,7 @@ class ACL:
 
         default_decision = default_effect == "allow"
         self._logger.debug(
-            "ACL check: caller=%s target=%s decision=%s rule=default",
+            "ACL check: caller_id=%s target_id=%s decision=%s rule=default",
             caller_id,
             target_id,
             "allow" if default_decision else "deny",
@@ -320,7 +328,7 @@ class ACL:
             if await self._matches_rule_async(rule, effective_caller, target_id, context):
                 decision = rule.effect == "allow"
                 self._logger.debug(
-                    "ACL async_check: caller=%s target=%s decision=%s rule=%s",
+                    "ACL async_check: caller_id=%s target_id=%s decision=%s rule=%s",
                     caller_id,
                     target_id,
                     "allow" if decision else "deny",
@@ -341,7 +349,7 @@ class ACL:
 
         default_decision = default_effect == "allow"
         self._logger.debug(
-            "ACL async_check: caller=%s target=%s decision=%s rule=default",
+            "ACL async_check: caller_id=%s target_id=%s decision=%s rule=default",
             caller_id,
             target_id,
             "allow" if default_decision else "deny",
@@ -360,29 +368,49 @@ class ACL:
             audit_logger(entry)
         return default_decision
 
-    async def _matches_rule_async(
+    def _match_patterns(self, patterns: list[str], value: str, context: Context | None = None) -> bool:
+        """Match a list of patterns against a value.
+
+        Implements compound operators ($or, $not) in pattern lists.
+        """
+        if not patterns:
+            return False
+
+        # Check for compound operators
+        first = patterns[0]
+        if first == "$or":
+            return any(self._match_pattern(p, value, context) for p in patterns[1:])
+        if first == "$not":
+            # $not expects exactly one subsequent pattern
+            if len(patterns) < 2:
+                return False
+            return not self._match_pattern(patterns[1], value, context)
+
+        # Standard OR behavior for flat list
+        return any(self._match_pattern(p, value, context) for p in patterns)
+
+    def _matches_rule(
         self,
         rule: ACLRule,
         caller: str,
         target: str,
         context: Context | None,
     ) -> bool:
-        """Async version of _matches_rule that awaits async condition handlers."""
-        caller_match = any(self._match_pattern(p, caller, context) for p in rule.callers)
-        if not caller_match:
+        """Check if a rule matches the given caller, target, and context."""
+        if not self._match_patterns(rule.callers, caller, context):
             return False
 
-        target_match = any(self._match_pattern(p, target, context) for p in rule.targets)
-        if not target_match:
+        if not self._match_patterns(rule.targets, target, context):
             return False
 
         if rule.conditions is not None:
             if context is None:
                 return False
-            if not await self._evaluate_conditions_async(rule.conditions, context):
+            if not self._evaluate_conditions(rule.conditions, context):
                 return False
 
         return True
+
 
     def _build_audit_entry(
         self,
@@ -471,12 +499,41 @@ class ACL:
             return False
         return self._evaluate_conditions(conditions, context)
 
-    def add_rule(self, rule: ACLRule) -> None:
+    def add_rule(
+        self,
+        rule: ACLRule | None = None,
+        *,
+        callers: list[str] | str | None = None,
+        targets: list[str] | str | None = None,
+        effect: str = "deny",
+        description: str = "",
+        conditions: dict[str, Any] | None = None,
+    ) -> None:
         """Add a rule at position 0 (highest priority).
 
         Args:
-            rule: The ACLRule to add.
+            rule: Optional pre-built ACLRule.
+            callers: Caller pattern(s) if *rule* is None.
+            targets: Target pattern(s) if *rule* is None.
+            effect: Rule effect if *rule* is None.
+            description: Rule description if *rule* is None.
+            conditions: Rule conditions if *rule* is None.
         """
+        if rule is None:
+            if callers is None or targets is None:
+                raise ValueError("Must provide either 'rule' or both 'callers' and 'targets'")
+
+            def _to_list(v: list[str] | str) -> list[str]:
+                return [v] if isinstance(v, str) else list(v)
+
+            rule = ACLRule(
+                callers=_to_list(callers),
+                targets=_to_list(targets),
+                effect=effect,
+                description=description,
+                conditions=conditions,
+            )
+
         with self._lock:
             self._rules.insert(0, rule)
 
@@ -514,11 +571,8 @@ class ACL:
 
 
 # ---------------------------------------------------------------------------
-# Auto-register built-in handlers at module load time
+# Auto-register compound operators at module load time
 # ---------------------------------------------------------------------------
-
-ACL.register_condition("identity_types", _IdentityTypesHandler())
-ACL.register_condition("roles", _RolesHandler())
-ACL.register_condition("max_call_depth", _MaxCallDepthHandler())
 ACL.register_condition("$or", _OrHandler(ACL._evaluate_conditions))
 ACL.register_condition("$not", _NotHandler(ACL._evaluate_conditions))
+
