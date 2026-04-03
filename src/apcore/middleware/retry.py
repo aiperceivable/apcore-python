@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from apcore.context_keys import RETRY_COUNT_BASE
 from apcore.middleware.base import Context, Middleware
 
 __all__ = ["RetryConfig", "RetryMiddleware"]
@@ -60,8 +61,8 @@ class RetryMiddleware(Middleware):
         if retryable is not True:
             return None
 
-        retry_key = f"_apcore.mw.retry.count.{module_id}"
-        retry_count: int = context.data.get(retry_key, 0)
+        retry_key = RETRY_COUNT_BASE.scoped(module_id)
+        retry_count: int = retry_key.get(context, default=0)
 
         if retry_count >= self._config.max_retries:
             _logger.warning(
@@ -72,7 +73,7 @@ class RetryMiddleware(Middleware):
             return None
 
         delay_ms = self._calculate_delay(retry_count)
-        context.data[retry_key] = retry_count + 1
+        retry_key.set(context, retry_count + 1)
 
         _logger.info(
             "Retrying module '%s' (attempt %d/%d) after %dms",

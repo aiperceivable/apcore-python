@@ -212,7 +212,7 @@ class TestObsLoggingMiddleware:
         mw = ObsLoggingMiddleware(logger=logger)
         ctx = Context.create()
         mw.before("mod.a", {"x": 1}, ctx)
-        assert len(ctx.data["_obs_logging_starts"]) == 1
+        assert len(ctx.data["_apcore.mw.logging.starts"]) == 1
         data = json.loads(buf.getvalue())
         assert "Module call started" in data["message"]
 
@@ -226,7 +226,7 @@ class TestObsLoggingMiddleware:
         buf.truncate(0)
         buf.seek(0)
         mw.after("mod.a", {}, {"result": "ok"}, ctx)
-        assert len(ctx.data["_obs_logging_starts"]) == 0
+        assert len(ctx.data["_apcore.mw.logging.starts"]) == 0
         data = json.loads(buf.getvalue())
         assert "Module call completed" in data["message"]
         assert "duration_ms" in data["extra"]
@@ -242,7 +242,7 @@ class TestObsLoggingMiddleware:
         buf.seek(0)
         result = mw.on_error("mod.a", {}, RuntimeError("fail"), ctx)
         assert result is None
-        assert len(ctx.data["_obs_logging_starts"]) == 0
+        assert len(ctx.data["_apcore.mw.logging.starts"]) == 0
         data = json.loads(buf.getvalue())
         assert "Module call failed" in data["message"]
         assert data["extra"]["error_type"] == "RuntimeError"
@@ -301,11 +301,11 @@ class TestObsLoggingMiddleware:
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
         mw.before("mod.b", {}, ctx)
-        assert len(ctx.data["_obs_logging_starts"]) == 2
+        assert len(ctx.data["_apcore.mw.logging.starts"]) == 2
         mw.after("mod.b", {}, {"r": 1}, ctx)
-        assert len(ctx.data["_obs_logging_starts"]) == 1
+        assert len(ctx.data["_apcore.mw.logging.starts"]) == 1
         mw.after("mod.a", {}, {"r": 2}, ctx)
-        assert len(ctx.data["_obs_logging_starts"]) == 0
+        assert len(ctx.data["_apcore.mw.logging.starts"]) == 0
         # Should have 4 log entries (2 before + 2 after)
         lines = [line for line in buf.getvalue().strip().split("\n") if line]
         assert len(lines) == 4

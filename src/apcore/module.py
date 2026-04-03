@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+import logging
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from apcore.context import Context
 
 __all__ = [
+    "DEFAULT_ANNOTATIONS",
     "Module",
     "ModuleAnnotations",
     "ModuleExample",
@@ -19,6 +21,8 @@ __all__ = [
     "PreflightResult",
     "ValidationResult",
 ]
+
+_logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -40,6 +44,22 @@ class Module(Protocol):
     def execute(self, inputs: dict[str, Any], context: Context) -> dict[str, Any]: ...
 
 
+_CANONICAL_FIELDS = {
+    "readonly",
+    "destructive",
+    "idempotent",
+    "requires_approval",
+    "open_world",
+    "streaming",
+    "cacheable",
+    "cache_ttl",
+    "cache_key_fields",
+    "paginated",
+    "pagination_style",
+    "extra",
+}
+
+
 @dataclass(frozen=True)
 class ModuleAnnotations:
     """Behavioral annotations for a module.
@@ -55,7 +75,8 @@ class ModuleAnnotations:
         cache_ttl: Cache time-to-live in seconds (0 means no expiry).
         cache_key_fields: Input fields used to compute the cache key (None = all).
         paginated: Whether the module supports paginated results.
-        pagination_style: Pagination strategy ("cursor", "offset", "page").
+        pagination_style: Pagination strategy (default "cursor"). Accepts any string.
+        extra: Extension dictionary for ecosystem package metadata.
     """
 
     readonly: bool = False
@@ -66,9 +87,36 @@ class ModuleAnnotations:
     streaming: bool = False
     cacheable: bool = False
     cache_ttl: int = 0
-    cache_key_fields: list[str] | None = None
+    cache_key_fields: tuple[str, ...] | None = None
     paginated: bool = False
-    pagination_style: Literal["cursor", "offset", "page"] = "cursor"
+    pagination_style: str = "cursor"
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Enforce immutability constraints on frozen dataclass."""
+        # Convert list to tuple for cache_key_fields
+        if isinstance(self.cache_key_fields, list):
+            object.__setattr__(self, "cache_key_fields", tuple(self.cache_key_fields))
+        # Shallow copy extra to detach from caller's mutable dict
+        object.__setattr__(self, "extra", dict(self.extra))
+        # Validate cache_ttl >= 0
+        if self.cache_ttl < 0:
+            _logger.warning("cache_ttl %d is negative, clamping to 0", self.cache_ttl)
+            object.__setattr__(self, "cache_ttl", 0)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ModuleAnnotations:
+        """Deserialize from dict, capturing unknown keys into extra."""
+        known = {k: v for k, v in data.items() if k in _CANONICAL_FIELDS}
+        unknown = {k: v for k, v in data.items() if k not in _CANONICAL_FIELDS}
+        explicit_extra = known.pop("extra", {})
+        if not isinstance(explicit_extra, dict):
+            explicit_extra = {}
+        extra: dict[str, Any] = {**explicit_extra, **unknown}
+        return cls(**known, extra=extra)
+
+
+DEFAULT_ANNOTATIONS = ModuleAnnotations()
 
 
 @dataclass

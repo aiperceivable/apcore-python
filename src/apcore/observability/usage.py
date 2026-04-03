@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from apcore.context_keys import USAGE_STARTS
 from apcore.middleware import Middleware
 
 __all__ = [
@@ -273,7 +274,9 @@ class UsageMiddleware(Middleware):
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Any) -> dict[str, Any] | None:
         """Store start time in context data."""
-        context.data.setdefault("_usage_starts", []).append(time.time())
+        starts = USAGE_STARTS.get(context, default=[])
+        starts.append(time.time())
+        USAGE_STARTS.set(context, starts)
         return None
 
     def after(
@@ -305,7 +308,7 @@ class UsageMiddleware(Middleware):
     @staticmethod
     def _pop_elapsed_ms(context: Any) -> float:
         """Pop start time and return elapsed milliseconds."""
-        starts = context.data.get("_usage_starts", [])
+        starts = USAGE_STARTS.get(context, default=[])
         if not starts:
             return 0.0
         start_time = starts.pop()

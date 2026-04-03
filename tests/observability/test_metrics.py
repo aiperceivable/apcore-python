@@ -233,13 +233,13 @@ class TestMetricsMiddlewareBefore:
     """Tests for MetricsMiddleware.before()."""
 
     def test_before_pushes_start_time(self):
-        """before() appends a float timestamp to context.data['_metrics_starts']."""
+        """before() appends a float timestamp to context.data['_apcore.mw.metrics.starts']."""
         c = MetricsCollector()
         mw = MetricsMiddleware(c)
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
-        assert len(ctx.data["_metrics_starts"]) == 1
-        assert isinstance(ctx.data["_metrics_starts"][0], float)
+        assert len(ctx.data["_apcore.mw.metrics.starts"]) == 1
+        assert isinstance(ctx.data["_apcore.mw.metrics.starts"][0], float)
 
 
 class TestMetricsMiddlewareAfter:
@@ -252,7 +252,7 @@ class TestMetricsMiddlewareAfter:
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
         mw.after("mod.a", {}, {"result": "ok"}, ctx)
-        assert len(ctx.data["_metrics_starts"]) == 0
+        assert len(ctx.data["_apcore.mw.metrics.starts"]) == 0
         snap = c.snapshot()
         calls_key = (
             "apcore_module_calls_total",
@@ -334,11 +334,11 @@ class TestMetricsMiddlewareNested:
         ctx = Context.create()
         mw.before("mod.a", {}, ctx)
         mw.before("mod.b", {}, ctx)
-        assert len(ctx.data["_metrics_starts"]) == 2
+        assert len(ctx.data["_apcore.mw.metrics.starts"]) == 2
         mw.after("mod.b", {}, {"r": 1}, ctx)
-        assert len(ctx.data["_metrics_starts"]) == 1
+        assert len(ctx.data["_apcore.mw.metrics.starts"]) == 1
         mw.after("mod.a", {}, {"r": 2}, ctx)
-        assert len(ctx.data["_metrics_starts"]) == 0
+        assert len(ctx.data["_apcore.mw.metrics.starts"]) == 0
         snap = c.snapshot()
         # Both modules should have success calls
         key_a = (

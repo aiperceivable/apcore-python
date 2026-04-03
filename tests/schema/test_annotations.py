@@ -72,7 +72,7 @@ class TestMergeAnnotations:
         result = merge_annotations(None, code)
         assert result.cacheable is True
         assert result.cache_ttl == 300
-        assert result.cache_key_fields == ["id"]
+        assert result.cache_key_fields == ("id",)
         assert result.paginated is True
         assert result.pagination_style == "offset"
 

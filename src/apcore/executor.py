@@ -20,6 +20,7 @@ from typing import Any, Callable
 import pydantic
 
 from apcore.acl import ACL
+from apcore.context_keys import REDACTED_OUTPUT
 from apcore.approval import ApprovalHandler, ApprovalRequest, ApprovalResult
 from apcore.cancel import ExecutionCancelledError
 from apcore.config import Config
@@ -380,9 +381,9 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                REDACTED_OUTPUT.set(ctx, redact_sensitive(
                     output, module.output_schema.model_json_schema()
-                )
+                ))
 
             # Step 10 -- Middleware After
             output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
@@ -886,9 +887,9 @@ class Executor:
                         errors=_convert_validation_errors(e),
                     ) from e
 
-                ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                REDACTED_OUTPUT.set(ctx, redact_sensitive(
                     output, module.output_schema.model_json_schema()
-                )
+                ))
 
             # Step 10 -- Middleware After (async-aware)
             output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
@@ -1012,9 +1013,9 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                    REDACTED_OUTPUT.set(ctx, redact_sensitive(
                         output, module.output_schema.model_json_schema()
-                    )
+                    ))
 
                 # Step 10 -- Middleware After (async-aware)
                 output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)
@@ -1037,9 +1038,9 @@ class Executor:
                             errors=_convert_validation_errors(e),
                         ) from e
 
-                    ctx.data["_apcore.executor.redacted_output"] = redact_sensitive(
+                    REDACTED_OUTPUT.set(ctx, redact_sensitive(
                         accumulated, module.output_schema.model_json_schema()
-                    )
+                    ))
 
                 # Step 10 -- Middleware After on accumulated result (async-aware)
                 accumulated = await self._middleware_manager.execute_after_async(

@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Any
 
+from apcore.context_keys import METRICS_STARTS
 from apcore.errors import ModuleError
 from apcore.middleware.base import Middleware
 
@@ -166,7 +167,9 @@ class MetricsMiddleware(Middleware):
         self._collector = collector
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Any) -> dict[str, Any] | None:
-        context.data.setdefault("_metrics_starts", []).append(time.time())
+        starts = METRICS_STARTS.get(context, default=[])
+        starts.append(time.time())
+        METRICS_STARTS.set(context, starts)
         return None
 
     def after(
@@ -176,7 +179,7 @@ class MetricsMiddleware(Middleware):
         output: dict[str, Any],
         context: Any,
     ) -> dict[str, Any] | None:
-        starts = context.data.get("_metrics_starts", [])
+        starts = METRICS_STARTS.get(context, default=[])
         if not starts:
             return None
         start_time = starts.pop()
@@ -186,7 +189,7 @@ class MetricsMiddleware(Middleware):
         return None
 
     def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any) -> dict[str, Any] | None:
-        starts = context.data.get("_metrics_starts", [])
+        starts = METRICS_STARTS.get(context, default=[])
         if not starts:
             return None
         start_time = starts.pop()

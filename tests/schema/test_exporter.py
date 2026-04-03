@@ -146,7 +146,7 @@ class TestExportMcp:
         meta = result["_meta"]
         assert meta["cacheable"] is True
         assert meta["cacheTtl"] == 600
-        assert meta["cacheKeyFields"] == ["id", "name"]
+        assert meta["cacheKeyFields"] == ("id", "name")
         assert meta["paginated"] is True
         assert meta["paginationStyle"] == "offset"
 

@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from apcore.context_keys import LOGGING_STARTS
 from apcore.middleware.base import Middleware
 
 
@@ -124,7 +125,9 @@ class ObsLoggingMiddleware(Middleware):
         self._log_outputs = log_outputs
 
     def before(self, module_id: str, inputs: dict[str, Any], context: Any) -> dict[str, Any] | None:
-        context.data.setdefault("_obs_logging_starts", []).append(time.time())
+        starts = LOGGING_STARTS.get(context, default=[])
+        starts.append(time.time())
+        LOGGING_STARTS.set(context, starts)
         extra: dict[str, Any] = {
             "module_id": module_id,
             "caller_id": context.caller_id,
@@ -141,7 +144,7 @@ class ObsLoggingMiddleware(Middleware):
         output: dict[str, Any],
         context: Any,
     ) -> dict[str, Any] | None:
-        starts = context.data.get("_obs_logging_starts", [])
+        starts = LOGGING_STARTS.get(context, default=[])
         if not starts:
             return None
         start_time = starts.pop()
@@ -156,7 +159,7 @@ class ObsLoggingMiddleware(Middleware):
         return None
 
     def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any) -> dict[str, Any] | None:
-        starts = context.data.get("_obs_logging_starts", [])
+        starts = LOGGING_STARTS.get(context, default=[])
         if not starts:
             return None
         start_time = starts.pop()

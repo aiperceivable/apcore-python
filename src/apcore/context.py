@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, runtime_checkable
@@ -116,6 +117,76 @@ class Context(Generic[T]):
             identity=identity,
             redacted_inputs=data.get("redacted_inputs"),
             data=data.get("data", {}),
+        )
+
+    def serialize(self) -> dict[str, Any]:
+        """Serialize Context to a dict suitable for JSON encoding.
+
+        Includes ``_context_version: 1`` at top level.
+        Excludes: executor, services, cancel_token, global_deadline.
+        Filters ``_``-prefixed keys from data.
+        """
+        result: dict[str, Any] = {
+            "_context_version": 1,
+            "trace_id": self.trace_id,
+            "caller_id": self.caller_id,
+            "call_chain": list(self.call_chain),
+        }
+        if self.identity is not None:
+            result["identity"] = {
+                "id": self.identity.id,
+                "type": self.identity.type,
+                "roles": list(self.identity.roles),
+                "attrs": dict(self.identity.attrs),
+            }
+        else:
+            result["identity"] = None
+        if self.redacted_inputs is not None:
+            result["redacted_inputs"] = dict(self.redacted_inputs)
+        result["data"] = {
+            k: v for k, v in self.data.items() if not k.startswith("_")
+        }
+        return result
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> Context:
+        """Deserialize a dict (from JSON) into a Context.
+
+        Non-serializable fields (executor, services, cancel_token,
+        global_deadline) are set to ``None`` after deserialization.
+        If ``_context_version`` is greater than 1, a warning is logged
+        but deserialization proceeds (forward compatibility).
+        """
+        _logger = logging.getLogger(__name__)
+
+        version = data.get("_context_version", 1)
+        if version > 1:
+            _logger.warning(
+                "Unknown _context_version %d (expected 1). "
+                "Proceeding with best-effort deserialization.",
+                version,
+            )
+
+        identity = None
+        if data.get("identity") is not None:
+            id_data = data["identity"]
+            identity = Identity(
+                id=id_data["id"],
+                type=id_data.get("type", "user"),
+                roles=tuple(id_data.get("roles", ())),
+                attrs=id_data.get("attrs", {}),
+            )
+
+        return cls(
+            trace_id=data.get("trace_id", ""),
+            caller_id=data.get("caller_id"),
+            call_chain=list(data.get("call_chain", [])),
+            executor=None,
+            identity=identity,
+            redacted_inputs=data.get("redacted_inputs"),
+            data=dict(data.get("data", {})),
+            services=None,
+            cancel_token=None,
         )
 
     @property

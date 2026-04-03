@@ -1,0 +1,374 @@
+"""Tests for the ACL conditions redesign — handler registry, dispatch, and compound operators."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+import pytest
+
+from apcore.acl import ACL, ACLRule
+from apcore.acl_handlers import (
+    ACLConditionHandler,
+    AsyncACLConditionHandler,
+    SyncACLConditionHandler,
+    _IdentityTypesHandler,
+    _MaxCallDepthHandler,
+    _NotHandler,
+    _OrHandler,
+    _RolesHandler,
+)
+from apcore.context import Context, Identity
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_context(
+    identity_type: str = "user",
+    roles: list[str] | None = None,
+    call_chain: list[str] | None = None,
+) -> Context:
+    identity = Identity(id="test-user", type=identity_type, roles=roles or [])
+    ctx = Context.create(identity=identity)
+    ctx.call_chain = call_chain or []
+    return ctx
+
+
+def _make_acl_with_condition(condition_key: str, condition_value: Any, effect: str = "allow") -> ACL:
+    rule = ACLRule(
+        callers=["*"],
+        targets=["*"],
+        effect=effect,
+        conditions={condition_key: condition_value},
+    )
+    return ACL(rules=[rule], default_effect="deny")
+
+
+# ---------------------------------------------------------------------------
+# Handler Protocol conformance
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerProtocol:
+    def test_sync_handler_is_runtime_checkable(self) -> None:
+        handler = _IdentityTypesHandler()
+        assert isinstance(handler, SyncACLConditionHandler)
+
+    def test_builtin_handlers_conform_to_sync_protocol(self) -> None:
+        for handler_cls in (_IdentityTypesHandler, _RolesHandler, _MaxCallDepthHandler):
+            handler = handler_cls()
+            assert isinstance(handler, SyncACLConditionHandler)
+
+
+# ---------------------------------------------------------------------------
+# Handler Registry
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerRegistry:
+    def test_register_condition_adds_handler(self) -> None:
+        class _CustomHandler:
+            def evaluate(self, value: Any, context: Context) -> bool:
+                return value is True
+
+        ACL.register_condition("_test_custom", _CustomHandler())
+        assert "_test_custom" in ACL._condition_handlers
+        # Cleanup
+        del ACL._condition_handlers["_test_custom"]
+
+    def test_register_same_key_replaces_handler(self) -> None:
+        """AC-031: Handler replacement."""
+        calls: list[str] = []
+
+        class _HandlerA:
+            def evaluate(self, value: Any, context: Context) -> bool:
+                calls.append("A")
+                return True
+
+        class _HandlerB:
+            def evaluate(self, value: Any, context: Context) -> bool:
+                calls.append("B")
+                return True
+
+        ACL.register_condition("_test_replace", _HandlerA())
+        ACL.register_condition("_test_replace", _HandlerB())
+
+        ctx = _make_context()
+        acl = _make_acl_with_condition("_test_replace", True)
+        acl.check("caller", "target", context=ctx)
+
+        assert calls == ["B"]
+        # Cleanup
+        del ACL._condition_handlers["_test_replace"]
+
+    def test_builtin_handlers_auto_registered(self) -> None:
+        for key in ("identity_types", "roles", "max_call_depth", "$or", "$not"):
+            assert key in ACL._condition_handlers, f"Built-in handler '{key}' not registered"
+
+
+# ---------------------------------------------------------------------------
+# Built-in Handlers — Unit Tests
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityTypesHandler:
+    def test_match_when_type_in_list(self) -> None:
+        handler = _IdentityTypesHandler()
+        ctx = _make_context(identity_type="service")
+        assert handler.evaluate(["service", "admin"], ctx) is True
+
+    def test_no_match_when_type_not_in_list(self) -> None:
+        handler = _IdentityTypesHandler()
+        ctx = _make_context(identity_type="user")
+        assert handler.evaluate(["service", "admin"], ctx) is False
+
+    def test_no_match_when_identity_none(self) -> None:
+        handler = _IdentityTypesHandler()
+        ctx = Context.create()
+        assert handler.evaluate(["user"], ctx) is False
+
+    def test_no_match_when_value_not_list(self) -> None:
+        handler = _IdentityTypesHandler()
+        ctx = _make_context()
+        assert handler.evaluate("user", ctx) is False
+
+
+class TestRolesHandler:
+    def test_match_when_role_overlaps(self) -> None:
+        handler = _RolesHandler()
+        ctx = _make_context(roles=["admin", "viewer"])
+        assert handler.evaluate(["admin"], ctx) is True
+
+    def test_no_match_when_no_overlap(self) -> None:
+        handler = _RolesHandler()
+        ctx = _make_context(roles=["viewer"])
+        assert handler.evaluate(["admin"], ctx) is False
+
+    def test_no_match_when_identity_none(self) -> None:
+        handler = _RolesHandler()
+        ctx = Context.create()
+        assert handler.evaluate(["admin"], ctx) is False
+
+    def test_no_match_when_value_not_list(self) -> None:
+        handler = _RolesHandler()
+        ctx = _make_context(roles=["admin"])
+        assert handler.evaluate(42, ctx) is False
+
+
+class TestMaxCallDepthHandler:
+    def test_within_limit(self) -> None:
+        handler = _MaxCallDepthHandler()
+        ctx = _make_context(call_chain=["a", "b"])
+        assert handler.evaluate(5, ctx) is True
+
+    def test_at_limit(self) -> None:
+        handler = _MaxCallDepthHandler()
+        ctx = _make_context(call_chain=["a", "b", "c"])
+        assert handler.evaluate(3, ctx) is True
+
+    def test_exceeds_limit(self) -> None:
+        handler = _MaxCallDepthHandler()
+        ctx = _make_context(call_chain=["a", "b", "c", "d"])
+        assert handler.evaluate(3, ctx) is False
+
+    def test_no_match_when_value_not_int(self) -> None:
+        handler = _MaxCallDepthHandler()
+        ctx = _make_context()
+        assert handler.evaluate("5", ctx) is False
+
+
+# ---------------------------------------------------------------------------
+# Compound Handlers
+# ---------------------------------------------------------------------------
+
+
+class TestOrHandler:
+    def test_or_passes_when_any_match(self) -> None:
+        """AC-011: $or evaluates with OR logic."""
+        ctx = _make_context(identity_type="user", roles=["admin"])
+        acl = _make_acl_with_condition("$or", [
+            {"roles": ["admin"]},
+            {"identity_types": ["service"]},
+        ])
+        assert acl.check("caller", "target", context=ctx) is True
+
+    def test_or_fails_when_none_match(self) -> None:
+        ctx = _make_context(identity_type="user", roles=["viewer"])
+        acl = _make_acl_with_condition("$or", [
+            {"roles": ["admin"]},
+            {"identity_types": ["service"]},
+        ])
+        assert acl.check("caller", "target", context=ctx) is False
+
+    def test_or_empty_list_returns_false(self) -> None:
+        """AC-029: $or with empty list returns False."""
+        ctx = _make_context()
+        acl = _make_acl_with_condition("$or", [])
+        assert acl.check("caller", "target", context=ctx) is False
+
+    def test_or_non_list_returns_false(self) -> None:
+        ctx = _make_context()
+        acl = _make_acl_with_condition("$or", "invalid")
+        assert acl.check("caller", "target", context=ctx) is False
+
+    def test_or_skips_non_dict_elements(self) -> None:
+        ctx = _make_context(roles=["admin"])
+        acl = _make_acl_with_condition("$or", [
+            "invalid_string",
+            {"roles": ["admin"]},
+        ])
+        assert acl.check("caller", "target", context=ctx) is True
+
+
+class TestNotHandler:
+    def test_not_negates_conditions(self) -> None:
+        """AC-012: $not negates condition set — allows user, denies service."""
+        ctx_user = _make_context(identity_type="user")
+        ctx_service = _make_context(identity_type="service")
+        acl = _make_acl_with_condition("$not", {"identity_types": ["service"]})
+        assert acl.check("caller", "target", context=ctx_user) is True
+        assert acl.check("caller", "target", context=ctx_service) is False
+
+    def test_not_non_dict_returns_false(self) -> None:
+        """AC-030: $not with non-dict value returns False."""
+        ctx = _make_context()
+        acl = _make_acl_with_condition("$not", "invalid")
+        assert acl.check("caller", "target", context=ctx) is False
+
+
+class TestNestedCompound:
+    def test_nested_or_with_and(self) -> None:
+        """AC-032: Nested compound conditions."""
+        ctx = _make_context(identity_type="service", call_chain=["a", "b"])
+        acl = _make_acl_with_condition("$or", [
+            {"roles": ["admin"]},
+            {"identity_types": ["service"], "max_call_depth": 5},
+        ])
+        assert acl.check("caller", "target", context=ctx) is True
+
+    def test_nested_or_with_and_fails_when_depth_exceeded(self) -> None:
+        ctx = _make_context(identity_type="service", call_chain=["a"] * 10)
+        acl = _make_acl_with_condition("$or", [
+            {"roles": ["admin"]},
+            {"identity_types": ["service"], "max_call_depth": 5},
+        ])
+        assert acl.check("caller", "target", context=ctx) is False
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed behavior
+# ---------------------------------------------------------------------------
+
+
+class TestFailClosed:
+    def test_unknown_condition_fails_closed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-010: Unknown condition key fails-closed with WARN log."""
+        ctx = _make_context()
+        acl = _make_acl_with_condition("nonexistent", True)
+        with caplog.at_level(logging.WARNING):
+            result = acl.check("caller", "target", context=ctx)
+        assert result is False
+        assert any("Unknown ACL condition" in r.message for r in caplog.records)
+
+    def test_async_handler_in_sync_context_fails_closed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-014: Sync check() fails-closed on async handlers."""
+
+        class _AsyncHandler:
+            async def evaluate(self, value: Any, context: Context) -> bool:
+                return True
+
+        ACL.register_condition("_test_async", _AsyncHandler())
+        try:
+            ctx = _make_context()
+            acl = _make_acl_with_condition("_test_async", True)
+            with caplog.at_level(logging.WARNING):
+                result = acl.check("caller", "target", context=ctx)
+            assert result is False
+            assert any("Async condition" in r.message for r in caplog.records)
+        finally:
+            del ACL._condition_handlers["_test_async"]
+
+
+# ---------------------------------------------------------------------------
+# Custom handler integration
+# ---------------------------------------------------------------------------
+
+
+class TestCustomHandler:
+    def test_custom_handler_invoked_during_check(self) -> None:
+        """AC-009: register_condition() registers handler invoked during check()."""
+        invoked: list[bool] = []
+
+        class _TestHandler:
+            def evaluate(self, value: Any, context: Context) -> bool:
+                invoked.append(True)
+                return value == "magic"
+
+        ACL.register_condition("_test_magic", _TestHandler())
+        try:
+            ctx = _make_context()
+            acl = _make_acl_with_condition("_test_magic", "magic")
+            assert acl.check("caller", "target", context=ctx) is True
+            assert invoked == [True]
+        finally:
+            del ACL._condition_handlers["_test_magic"]
+
+
+# ---------------------------------------------------------------------------
+# async_check
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncCheck:
+    def test_async_check_basic(self) -> None:
+        ctx = _make_context(roles=["admin"])
+        acl = _make_acl_with_condition("roles", ["admin"])
+        result = asyncio.run(
+            acl.async_check("caller", "target", context=ctx),
+        )
+        assert result is True
+
+    def test_async_check_with_async_handler(self) -> None:
+        """AC-013: async_check() awaits async handlers."""
+
+        class _AsyncHandler:
+            async def evaluate(self, value: Any, context: Context) -> bool:
+                return value == "async_magic"
+
+        ACL.register_condition("_test_async_magic", _AsyncHandler())
+        try:
+            ctx = _make_context()
+            acl = _make_acl_with_condition("_test_async_magic", "async_magic")
+            result = asyncio.run(
+                acl.async_check("caller", "target", context=ctx),
+            )
+            assert result is True
+        finally:
+            del ACL._condition_handlers["_test_async_magic"]
+
+    def test_async_check_default_deny(self) -> None:
+        ctx = _make_context()
+        acl = ACL(rules=[], default_effect="deny")
+        result = asyncio.run(
+            acl.async_check("caller", "target", context=ctx),
+        )
+        assert result is False
+
+    def test_async_check_default_allow(self) -> None:
+        ctx = _make_context()
+        acl = ACL(rules=[], default_effect="allow")
+        result = asyncio.run(
+            acl.async_check("caller", "target", context=ctx),
+        )
+        assert result is True
+
+    def test_async_check_no_context_with_conditions_denies(self) -> None:
+        acl = _make_acl_with_condition("roles", ["admin"])
+        result = asyncio.run(
+            acl.async_check("caller", "target", context=None),
+        )
+        assert result is False

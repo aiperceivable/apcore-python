@@ -6,20 +6,31 @@ pattern-based access control between modules.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import yaml
 
+from apcore.acl_handlers import (
+    ACLConditionHandler,
+    _IdentityTypesHandler,
+    _MaxCallDepthHandler,
+    _NotHandler,
+    _OrHandler,
+    _RolesHandler,
+)
 from apcore.context import Context
 from apcore.errors import ACLRuleError, ConfigNotFoundError
 from apcore.utils.pattern import match_pattern
 
 __all__ = ["ACLRule", "AuditEntry", "ACL"]
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,6 +74,59 @@ class ACL:
         Internally synchronized. All public methods (check, add_rule,
         remove_rule, reload) are safe to call concurrently.
     """
+
+    _condition_handlers: ClassVar[dict[str, ACLConditionHandler]] = {}
+
+    @classmethod
+    def register_condition(cls, key: str, handler: ACLConditionHandler) -> None:
+        """Register a condition handler. Replaces existing handler for same key."""
+        cls._condition_handlers[key] = handler
+
+    @classmethod
+    def _evaluate_conditions(
+        cls, conditions: dict[str, Any], context: Context,
+    ) -> bool:
+        """Evaluate all conditions with AND logic. Fail-closed on unknown."""
+        for key, value in conditions.items():
+            handler = cls._condition_handlers.get(key)
+            if handler is None:
+                _logger.warning("Unknown ACL condition %r — treated as unsatisfied", key)
+                return False
+            try:
+                result = handler.evaluate(value, context)
+            except Exception:
+                _logger.exception("Handler for condition %r raised — treated as unsatisfied", key)
+                return False
+            if inspect.isawaitable(result):
+                result.close()  # prevent "coroutine never awaited" warning
+                _logger.warning(
+                    "Async condition %r in sync context — treated as unsatisfied. Use async_check().", key,
+                )
+                return False
+            if not result:
+                return False
+        return True
+
+    @classmethod
+    async def _evaluate_conditions_async(
+        cls, conditions: dict[str, Any], context: Context,
+    ) -> bool:
+        """Async variant. Awaits async handlers, calls sync handlers directly."""
+        for key, value in conditions.items():
+            handler = cls._condition_handlers.get(key)
+            if handler is None:
+                _logger.warning("Unknown ACL condition %r — treated as unsatisfied", key)
+                return False
+            try:
+                result = handler.evaluate(value, context)
+                if inspect.isawaitable(result):
+                    result = await result
+            except Exception:
+                _logger.exception("Handler for condition %r raised — treated as unsatisfied", key)
+                return False
+            if not result:
+                return False
+        return True
 
     def __init__(
         self,
@@ -224,6 +288,97 @@ class ACL:
             audit_logger(entry)
         return default_decision
 
+    async def async_check(
+        self,
+        caller_id: str | None,
+        target_id: str,
+        context: Context | None = None,
+    ) -> bool:
+        """Async ACL check. Supports both sync and async condition handlers.
+
+        Args:
+            caller_id: The calling module ID, or None for external calls.
+            target_id: The target module ID being called.
+            context: Optional execution context for conditional rules.
+
+        Returns:
+            True if the call is allowed, False if denied.
+        """
+        effective_caller = "@external" if caller_id is None else caller_id
+
+        with self._lock:
+            rules = list(self._rules)
+            default_effect = self._default_effect
+            audit_logger = self._audit_logger
+
+        for idx, rule in enumerate(rules):
+            if await self._matches_rule_async(rule, effective_caller, target_id, context):
+                decision = rule.effect == "allow"
+                self._logger.debug(
+                    "ACL async_check: caller=%s target=%s decision=%s rule=%s",
+                    caller_id,
+                    target_id,
+                    "allow" if decision else "deny",
+                    rule.description or "(no description)",
+                )
+                if audit_logger is not None:
+                    entry = self._build_audit_entry(
+                        caller_id=effective_caller,
+                        target_id=target_id,
+                        decision="allow" if decision else "deny",
+                        reason="rule_match",
+                        matched_rule=rule,
+                        matched_rule_index=idx,
+                        context=context,
+                    )
+                    audit_logger(entry)
+                return decision
+
+        default_decision = default_effect == "allow"
+        self._logger.debug(
+            "ACL async_check: caller=%s target=%s decision=%s rule=default",
+            caller_id,
+            target_id,
+            "allow" if default_decision else "deny",
+        )
+        if audit_logger is not None:
+            reason = "no_rules" if not rules else "default_effect"
+            entry = self._build_audit_entry(
+                caller_id=effective_caller,
+                target_id=target_id,
+                decision="allow" if default_decision else "deny",
+                reason=reason,
+                matched_rule=None,
+                matched_rule_index=None,
+                context=context,
+            )
+            audit_logger(entry)
+        return default_decision
+
+    async def _matches_rule_async(
+        self,
+        rule: ACLRule,
+        caller: str,
+        target: str,
+        context: Context | None,
+    ) -> bool:
+        """Async version of _matches_rule that awaits async condition handlers."""
+        caller_match = any(self._match_pattern(p, caller, context) for p in rule.callers)
+        if not caller_match:
+            return False
+
+        target_match = any(self._match_pattern(p, target, context) for p in rule.targets)
+        if not target_match:
+            return False
+
+        if rule.conditions is not None:
+            if context is None:
+                return False
+            if not await self._evaluate_conditions_async(rule.conditions, context):
+                return False
+
+        return True
+
     def _build_audit_entry(
         self,
         *,
@@ -309,22 +464,7 @@ class ACL:
         """
         if context is None:
             return False
-
-        if "identity_types" in conditions:
-            if context.identity is None or context.identity.type not in conditions["identity_types"]:
-                return False
-
-        if "roles" in conditions:
-            if context.identity is None:
-                return False
-            if not set(context.identity.roles) & set(conditions["roles"]):
-                return False
-
-        if "max_call_depth" in conditions:
-            if len(context.call_chain) > conditions["max_call_depth"]:
-                return False
-
-        return True
+        return self._evaluate_conditions(conditions, context)
 
     def add_rule(self, rule: ACLRule) -> None:
         """Add a rule at position 0 (highest priority).
@@ -366,3 +506,14 @@ class ACL:
         with self._lock:
             self._rules = reloaded._rules
             self._default_effect = reloaded._default_effect
+
+
+# ---------------------------------------------------------------------------
+# Auto-register built-in handlers at module load time
+# ---------------------------------------------------------------------------
+
+ACL.register_condition("identity_types", _IdentityTypesHandler())
+ACL.register_condition("roles", _RolesHandler())
+ACL.register_condition("max_call_depth", _MaxCallDepthHandler())
+ACL.register_condition("$or", _OrHandler(ACL._evaluate_conditions))
+ACL.register_condition("$not", _NotHandler(ACL._evaluate_conditions))

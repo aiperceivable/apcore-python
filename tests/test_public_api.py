@@ -321,6 +321,7 @@ class TestPublicAPIAll:
         "ExecutionCancelledError",
         "Context",
         "ContextFactory",
+        "ContextKey",
         "Identity",
         "Registry",
         "Executor",
@@ -345,6 +346,7 @@ class TestPublicAPIAll:
         "AutoApproveHandler",
         "CallbackApprovalHandler",
         # Module types
+        "DEFAULT_ANNOTATIONS",
         "Module",
         "ModuleAnnotations",
         "ModuleExample",
@@ -503,6 +505,13 @@ class TestPublicAPIAll:
         "ErrorFormatter",
         "ErrorFormatterRegistry",
         "ErrorFormatterDuplicateError",
+        # Built-in context keys
+        "TRACING_SPANS",
+        "TRACING_SAMPLED",
+        "METRICS_STARTS",
+        "LOGGING_START",
+        "REDACTED_OUTPUT",
+        "RETRY_COUNT_BASE",
     }
 
     def test_all_contains_all_expected_names(self):

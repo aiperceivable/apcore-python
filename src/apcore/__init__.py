@@ -18,6 +18,15 @@ from apcore.approval import (
 )
 from apcore.cancel import CancelToken, ExecutionCancelledError
 from apcore.context import Context, ContextFactory, Identity
+from apcore.context_key import ContextKey
+from apcore.context_keys import (
+    LOGGING_START,
+    METRICS_STARTS,
+    REDACTED_OUTPUT,
+    RETRY_COUNT_BASE,
+    TRACING_SAMPLED,
+    TRACING_SPANS,
+)
 from apcore.registry import Registry
 from apcore.client import APCore
 from apcore.registry.registry import (
@@ -33,6 +42,7 @@ from apcore.executor import Executor, redact_sensitive, REDACTED_VALUE
 
 # Module types
 from apcore.module import (
+    DEFAULT_ANNOTATIONS,
     Module,
     ModuleAnnotations,
     ModuleExample,
@@ -322,6 +332,13 @@ __all__ = [
     "ExecutionCancelledError",
     "Context",
     "ContextFactory",
+    "ContextKey",
+    "TRACING_SPANS",
+    "TRACING_SAMPLED",
+    "METRICS_STARTS",
+    "LOGGING_START",
+    "REDACTED_OUTPUT",
+    "RETRY_COUNT_BASE",
     "Identity",
     "Registry",
     "Executor",
@@ -350,6 +367,7 @@ __all__ = [
     "AutoApproveHandler",
     "CallbackApprovalHandler",
     # Module types
+    "DEFAULT_ANNOTATIONS",
     "Module",
     "ModuleAnnotations",
     "ModuleExample",
