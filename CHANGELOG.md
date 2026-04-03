@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-04-03
+
+### Added
+
+- **Config Bus**: `env_style` (auto/nested/flat), `max_depth`, `env_prefix` auto-derivation, `env_map` (namespace + global), `Config.env_map()`, `CONFIG_ENV_MAP_CONFLICT` error.
+- **Context**: `ContextKey[T]` typed accessor with `get()`/`set()`/`delete()`/`exists()`/`scoped()`. Built-in key constants (`TRACING_SPANS`, `METRICS_STARTS`, etc.). `Context.serialize()`/`deserialize()` with `_context_version: 1`.
+- **Annotations**: `extra: dict[str, Any]` extension field on `ModuleAnnotations`. `pagination_style` changed from `Literal` to `str`. `DEFAULT_ANNOTATIONS` constant. `from_dict()` classmethod with unknown key capture.
+- **ACL**: `SyncACLConditionHandler` / `AsyncACLConditionHandler` protocols. `ACL.register_condition()`. `$or`/`$not` compound operators. `async_check()` method. Fail-closed for unknown conditions.
+- **Pipeline**: `Step` protocol, `BaseStep` ABC, `StepResult`, `PipelineContext`, `PipelineTrace`, `ExecutionStrategy`, `PipelineEngine`. 11 `BuiltinStep` classes. Preset strategies (standard/internal/testing/performance). `Executor.strategy` parameter. `call_with_trace()`/`call_async_with_trace()`. `register_strategy()`/`list_strategies()`/`describe_pipeline()`.
+
+### Changed
+
+- Middleware data keys migrated from legacy names (`_metrics_starts` etc.) to `_apcore.mw.*` convention using typed `ContextKey`.
+
+---
+
 ## [0.15.1] - 2026-03-31
 
 ### Changed
