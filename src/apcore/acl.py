@@ -490,6 +490,30 @@ class ACL:
 
         return True
 
+    async def _matches_rule_async(
+        self,
+        rule: ACLRule,
+        caller: str,
+        target: str,
+        context: Context | None,
+    ) -> bool:
+        """Async version of _matches_rule. Uses _evaluate_conditions_async for conditions."""
+        caller_match = any(self._match_pattern(p, caller, context) for p in rule.callers)
+        if not caller_match:
+            return False
+
+        target_match = any(self._match_pattern(p, target, context) for p in rule.targets)
+        if not target_match:
+            return False
+
+        if rule.conditions is not None:
+            if context is None:
+                return False
+            if not await self._evaluate_conditions_async(rule.conditions, context):
+                return False
+
+        return True
+
     def _check_conditions(self, conditions: dict[str, Any], context: Context | None) -> bool:
         """Evaluate conditional rule parameters against the execution context.
 
