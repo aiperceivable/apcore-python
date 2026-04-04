@@ -389,29 +389,6 @@ class ACL:
         # Standard OR behavior for flat list
         return any(self._match_pattern(p, value, context) for p in patterns)
 
-    def _matches_rule(
-        self,
-        rule: ACLRule,
-        caller: str,
-        target: str,
-        context: Context | None,
-    ) -> bool:
-        """Check if a rule matches the given caller, target, and context."""
-        if not self._match_patterns(rule.callers, caller, context):
-            return False
-
-        if not self._match_patterns(rule.targets, target, context):
-            return False
-
-        if rule.conditions is not None:
-            if context is None:
-                return False
-            if not self._evaluate_conditions(rule.conditions, context):
-                return False
-
-        return True
-
-
     def _build_audit_entry(
         self,
         *,
@@ -472,16 +449,14 @@ class ACL:
         """Check if a single rule matches the caller and target.
 
         All of the following must be true for a match:
-        1. At least one caller pattern matches the caller (OR logic).
-        2. At least one target pattern matches the target (OR logic).
+        1. Caller patterns match (supports compound operators $or, $not).
+        2. Target patterns match (supports compound operators $or, $not).
         3. If conditions are present, they must all be satisfied.
         """
-        caller_match = any(self._match_pattern(p, caller, context) for p in rule.callers)
-        if not caller_match:
+        if not self._match_patterns(rule.callers, caller, context):
             return False
 
-        target_match = any(self._match_pattern(p, target, context) for p in rule.targets)
-        if not target_match:
+        if not self._match_patterns(rule.targets, target, context):
             return False
 
         if rule.conditions is not None:
