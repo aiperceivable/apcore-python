@@ -14,6 +14,7 @@ Fixture discovery order:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ from apcore.errors import (
     ErrorCodeCollisionError,
     ErrorCodeRegistry,
 )
+from apcore.schema.loader import SchemaLoader
+from apcore.schema.validator import SchemaValidator
 from apcore.utils.call_chain import guard_call_chain
 from apcore.utils.normalize import normalize_to_canonical_id
 from apcore.utils.pattern import calculate_specificity, match_pattern
@@ -396,4 +399,194 @@ def test_config_env(case: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> No
         assert result == expected, (
             f"config.get({case['expected_path']!r}) = {result!r}, "
             f"expected {expected!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 9. Context Serialization (§5.7)
+# ---------------------------------------------------------------------------
+
+_ctx_ser_data = _load("context_serialization")
+
+
+def _build_context_from_fixture(input_data: dict[str, Any]) -> Context:
+    """Build a Context from fixture input data."""
+    identity = None
+    if input_data.get("identity") is not None:
+        id_data = input_data["identity"]
+        identity = Identity(
+            id=id_data["id"],
+            type=id_data.get("type", "user"),
+            roles=tuple(id_data.get("roles", ())),
+            attrs=id_data.get("attrs", {}),
+        )
+
+    ctx = Context(
+        trace_id=input_data.get("trace_id", ""),
+        caller_id=input_data.get("caller_id"),
+        call_chain=list(input_data.get("call_chain", [])),
+        executor=None,
+        identity=identity,
+        redacted_inputs=input_data.get("redacted_inputs"),
+        data=dict(input_data.get("data", {})),
+        services=None,
+        cancel_token=None,
+    )
+    return ctx
+
+
+# Filter out sub_cases-style tests (handled separately)
+_ctx_ser_standard = [c for c in _ctx_ser_data["test_cases"] if "sub_cases" not in c]
+_ctx_ser_subcases = [c for c in _ctx_ser_data["test_cases"] if "sub_cases" in c]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ctx_ser_standard,
+    ids=[c["id"] for c in _ctx_ser_standard],
+)
+def test_context_serialization(case: dict[str, Any]) -> None:
+    case_id = case["id"]
+    input_data = case["input"]
+    expected = case["expected"]
+
+    if case_id == "deserialization_round_trip":
+        # Deserialize from a serialized dict, verify specific fields
+        ctx = Context.deserialize(input_data)
+        assert ctx.trace_id == expected["trace_id"]
+        assert ctx.caller_id == expected["caller_id"]
+        assert ctx.call_chain == expected["call_chain"]
+        if expected.get("identity_id") is not None:
+            assert ctx.identity is not None
+            assert ctx.identity.id == expected["identity_id"]
+            assert ctx.identity.type == expected["identity_type"]
+        assert expected["data_contains"] in ctx.data
+        return
+
+    if case_id == "unknown_context_version_warns_but_proceeds":
+        # Should warn but succeed
+        ctx = Context.deserialize(input_data)
+        assert expected["should_succeed"] is True
+        assert ctx.trace_id == expected["trace_id"]
+        return
+
+    if case_id == "redacted_inputs_serialized":
+        # Build context with redacted_inputs, verify they appear in serialization
+        ctx = _build_context_from_fixture(input_data)
+        result = ctx.serialize()
+        assert result["trace_id"] == expected["trace_id"]
+        assert result.get("redacted_inputs") == expected["redacted_inputs"]
+        return
+
+    # Standard serialize test: build context → serialize → compare with expected
+    ctx = _build_context_from_fixture(input_data)
+    result = ctx.serialize()
+
+    assert result["_context_version"] == expected["_context_version"]
+    assert result["trace_id"] == expected["trace_id"]
+    assert result["caller_id"] == expected["caller_id"]
+    assert result["call_chain"] == expected["call_chain"]
+    assert result["identity"] == expected["identity"]
+    assert result["data"] == expected["data"]
+
+
+@pytest.mark.parametrize(
+    "sub",
+    _ctx_ser_subcases[0]["sub_cases"] if _ctx_ser_subcases else [],
+    ids=[s["expected_type"] for s in (_ctx_ser_subcases[0]["sub_cases"] if _ctx_ser_subcases else [])],
+)
+def test_context_identity_types_serialize(sub: dict[str, Any]) -> None:
+    """Each identity type round-trips through serialize → deserialize."""
+    id_data = sub["input_identity"]
+    identity = Identity(
+        id=id_data["id"],
+        type=id_data["type"],
+        roles=tuple(id_data.get("roles", ())),
+        attrs=id_data.get("attrs", {}),
+    )
+    ctx = Context.create(identity=identity)
+    serialized = ctx.serialize()
+    assert serialized["identity"]["type"] == sub["expected_type"]
+
+    restored = Context.deserialize(serialized)
+    assert restored.identity is not None
+    assert restored.identity.type == sub["expected_type"]
+
+
+# ---------------------------------------------------------------------------
+# 10. Schema Validation (S4.15)
+# ---------------------------------------------------------------------------
+
+_schema_val_data = _load("schema_validation")
+
+# Cases that require features the Python SDK doesn't yet implement
+_SCHEMA_XFAIL_IDS = {
+    # Pydantic-based models always expect dict input; empty schema {} still
+    # generates a BaseModel which rejects raw strings.
+    "empty_schema_accepts_string",
+    # generate_model doesn't set Pydantic extra="forbid" for
+    # additionalProperties: false
+    "additional_properties_rejected_when_false",
+}
+
+
+@pytest.fixture(scope="module")
+def _schema_tools() -> tuple[SchemaLoader, SchemaValidator]:
+    """Shared SchemaLoader and SchemaValidator for schema validation tests."""
+    with _GLOBAL_NS_REGISTRY_LOCK:
+        _GLOBAL_NS_REGISTRY.clear()
+        _GLOBAL_ENV_MAP.clear()
+        _GLOBAL_ENV_MAP_CLAIMED.clear()
+    config = Config(data={})
+    return SchemaLoader(config), SchemaValidator()
+
+
+@pytest.mark.parametrize(
+    "case",
+    _schema_val_data["test_cases"],
+    ids=[c["id"] for c in _schema_val_data["test_cases"]],
+)
+def test_schema_validation(
+    case: dict[str, Any],
+    _schema_tools: tuple[SchemaLoader, SchemaValidator],
+) -> None:
+    if case["id"] in _SCHEMA_XFAIL_IDS:
+        pytest.xfail(f"Known gap: {case['id']}")
+
+    loader, validator = _schema_tools
+    schema = case["schema"]
+    input_data = case["input"]
+
+    # Empty schema with no properties — Pydantic model accepts any dict
+    if not schema.get("properties"):
+        model = loader.generate_model(schema, f"Model_{case['id']}")
+        if not isinstance(input_data, dict):
+            pytest.xfail("Pydantic models only accept dict input")
+        result = validator.validate(input_data, model)
+        assert result.valid == case.get("expected_valid", True)
+        return
+
+    model = loader.generate_model(schema, f"Model_{case['id']}")
+
+    # Determine expected validity
+    if "expected_valid" in case:
+        expected_valid = case["expected_valid"]
+    elif "expected_valid_strict" in case:
+        # Pydantic default is coerce mode
+        expected_valid = case["expected_valid_coerce"]
+    else:
+        expected_valid = True
+
+    result = validator.validate(input_data, model)
+    assert result.valid == expected_valid, (
+        f"schema_validate({case['id']}) valid={result.valid}, "
+        f"expected={expected_valid}, errors={result.errors}"
+    )
+
+    # Verify error path when expected
+    if not expected_valid and "expected_error_path" in case:
+        error_paths = [e.path for e in result.errors]
+        expected_path = "/" + case["expected_error_path"].replace(".", "/").replace("[", "/").replace("]", "")
+        assert any(expected_path in p for p in error_paths), (
+            f"Expected error at {expected_path}, got {error_paths}"
         )
