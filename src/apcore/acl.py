@@ -574,4 +574,3 @@ class ACL:
 # ---------------------------------------------------------------------------
 ACL.register_condition("$or", _OrHandler(ACL._evaluate_conditions))
 ACL.register_condition("$not", _NotHandler(ACL._evaluate_conditions))
-

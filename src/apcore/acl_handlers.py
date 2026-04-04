@@ -44,24 +44,31 @@ _EvalFn = Callable[[dict[str, Any], Context], bool]
 
 
 class _IdentityTypesHandler:
-    """Check context.identity.type matches allowed value(s)."""
+    """Check context.identity.type matches allowed value(s).
+
+    Per spec, identity_types condition value MUST be a list.
+    """
 
     def evaluate(self, value: Any, context: Context) -> bool:
         if context.identity is None:
             return False
-        if isinstance(value, list):
-            return context.identity.type in value
-        return context.identity.type == value
+        if not isinstance(value, list):
+            return False
+        return context.identity.type in value
 
 
 class _RolesHandler:
-    """Check role overlap between identity and required roles."""
+    """Check role overlap between identity and required roles.
+
+    Per spec, roles condition value MUST be a list.
+    """
 
     def evaluate(self, value: Any, context: Context) -> bool:
         if context.identity is None:
             return False
-        required = {value} if isinstance(value, str) else set(value)
-        return bool(set(context.identity.roles) & required)
+        if not isinstance(value, list):
+            return False
+        return bool(set(context.identity.roles) & set(value))
 
 
 class _MaxCallDepthHandler:

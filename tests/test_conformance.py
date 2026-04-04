@@ -14,7 +14,6 @@ Fixture discovery order:
 from __future__ import annotations
 
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -123,8 +122,7 @@ _pattern_data = _load("pattern_matching")
 def test_pattern_matching(case: dict[str, Any]) -> None:
     result = match_pattern(case["pattern"], case["value"])
     assert result == case["expected"], (
-        f"match_pattern({case['pattern']!r}, {case['value']!r}) "
-        f"returned {result}, expected {case['expected']}"
+        f"match_pattern({case['pattern']!r}, {case['value']!r}) " f"returned {result}, expected {case['expected']}"
     )
 
 
@@ -143,8 +141,7 @@ _specificity_data = _load("specificity")
 def test_specificity(case: dict[str, Any]) -> None:
     score = calculate_specificity(case["pattern"])
     assert score == case["expected_score"], (
-        f"calculate_specificity({case['pattern']!r}) "
-        f"returned {score}, expected {case['expected_score']}"
+        f"calculate_specificity({case['pattern']!r}) " f"returned {score}, expected {case['expected_score']}"
     )
 
 
@@ -396,10 +393,7 @@ def test_config_env(case: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> No
             result = str(result).lower()
         if expected is not None:
             expected = str(expected).lower()
-        assert result == expected, (
-            f"config.get({case['expected_path']!r}) = {result!r}, "
-            f"expected {expected!r}"
-        )
+        assert result == expected, f"config.get({case['expected_path']!r}) = {result!r}, " f"expected {expected!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -579,14 +573,11 @@ def test_schema_validation(
 
     result = validator.validate(input_data, model)
     assert result.valid == expected_valid, (
-        f"schema_validate({case['id']}) valid={result.valid}, "
-        f"expected={expected_valid}, errors={result.errors}"
+        f"schema_validate({case['id']}) valid={result.valid}, " f"expected={expected_valid}, errors={result.errors}"
     )
 
     # Verify error path when expected
     if not expected_valid and "expected_error_path" in case:
         error_paths = [e.path for e in result.errors]
         expected_path = "/" + case["expected_error_path"].replace(".", "/").replace("[", "/").replace("]", "")
-        assert any(expected_path in p for p in error_paths), (
-            f"Expected error at {expected_path}, got {error_paths}"
-        )
+        assert any(expected_path in p for p in error_paths), f"Expected error at {expected_path}, got {error_paths}"

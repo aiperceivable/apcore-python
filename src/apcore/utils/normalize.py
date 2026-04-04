@@ -50,7 +50,7 @@ def _to_snake_case(segment: str) -> str:
                 if i + 1 < len(segment) and segment[i + 1].islower():
                     res.append("_")
         res.append(char.lower())
-    
+
     return "".join(res).replace("__", "_")
 
 
