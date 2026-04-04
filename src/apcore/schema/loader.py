@@ -327,7 +327,7 @@ class SchemaLoader:
         if module_id in self._model_cache:
             return self._model_cache[module_id]
 
-        strategy = SchemaStrategy(self._config.get("schema.strategy", "native_first"))
+        strategy = SchemaStrategy(self._config.get("schema.strategy", "yaml_first"))
         result: tuple[ResolvedSchema, ResolvedSchema] | None = None
 
         if strategy == SchemaStrategy.YAML_FIRST:

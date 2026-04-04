@@ -263,7 +263,7 @@ class TestConfigFromDefaults:
         config = Config.from_defaults()
         assert config.get("executor.default_timeout") == 30000
         assert config.get("executor.max_call_depth") == 32
-        assert config.get("schema.strategy") == "native_first"
+        assert config.get("schema.strategy") == "yaml_first"
 
     def test_env_applied(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("APCORE_EXECUTOR_DEFAULT__TIMEOUT", "7777")
