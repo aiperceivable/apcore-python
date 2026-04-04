@@ -1,0 +1,72 @@
+{
+  "description": "Error code collision detection (Algorithm A17, spec §8.4)",
+  "test_cases": [
+    {
+      "id": "register_custom_code",
+      "action": "register",
+      "module_id": "my_module",
+      "error_code": "MY_CUSTOM_ERROR",
+      "expected": "ok"
+    },
+    {
+      "id": "framework_prefix_collision",
+      "action": "register",
+      "module_id": "my_module",
+      "error_code": "MODULE_TIMEOUT",
+      "expected_error": "ERROR_CODE_COLLISION"
+    },
+    {
+      "id": "framework_prefix_general",
+      "action": "register",
+      "module_id": "my_module",
+      "error_code": "GENERAL_MY_ERROR",
+      "expected_error": "ERROR_CODE_COLLISION"
+    },
+    {
+      "id": "cross_module_collision",
+      "action": "register_sequence",
+      "steps": [
+        {"module_id": "mod_a", "error_code": "SHARED_CODE"},
+        {"module_id": "mod_b", "error_code": "SHARED_CODE"}
+      ],
+      "expected_error": "ERROR_CODE_COLLISION"
+    },
+    {
+      "id": "same_module_same_code_ok",
+      "action": "register_sequence",
+      "steps": [
+        {"module_id": "mod_a", "error_code": "MY_CODE"},
+        {"module_id": "mod_a", "error_code": "MY_CODE"}
+      ],
+      "expected": "ok"
+    },
+    {
+      "id": "unregister_allows_reuse",
+      "action": "register_unregister_register",
+      "steps": [
+        {"action": "register", "module_id": "mod_a", "error_code": "TEMP_CODE"},
+        {"action": "unregister", "module_id": "mod_a"},
+        {"action": "register", "module_id": "mod_b", "error_code": "TEMP_CODE"}
+      ],
+      "expected": "ok"
+    }
+  ],
+  "framework_prefixes": [
+    "CONFIG_",
+    "ACL_",
+    "MODULE_",
+    "SCHEMA_",
+    "CALL_",
+    "CIRCULAR_",
+    "GENERAL_",
+    "FUNC_",
+    "BINDING_",
+    "MIDDLEWARE_",
+    "APPROVAL_",
+    "VERSION_",
+    "ERROR_CODE_",
+    "DEPENDENCY_",
+    "EXECUTION_",
+    "RELOAD_"
+  ]
+}

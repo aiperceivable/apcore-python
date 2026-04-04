@@ -5,14 +5,17 @@ protocol specification repo. All SDK implementations (Python, TypeScript,
 Rust) consume the same fixtures to ensure cross-language consistency.
 
 Fixture source: apcore/conformance/fixtures/*.json (single source of truth).
+
+Fixture discovery order:
+  1. $APCORE_SPEC_REPO env var (explicit override)
+  2. Sibling ../apcore/ directory (standard workspace layout)
+  3. Vendored tests/conformance/fixtures/ (committed copy for CI)
 """
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -47,11 +50,12 @@ _APCORE_REPO_ENV = "APCORE_SPEC_REPO"
 
 
 def _find_apcore_fixtures() -> Path:
-    """Locate the canonical conformance fixtures directory.
+    """Locate the conformance fixtures directory.
 
-    Search order:
-    1. $APCORE_SPEC_REPO environment variable
+    Search order (first match wins):
+    1. $APCORE_SPEC_REPO environment variable (explicit override)
     2. Sibling directory: ../apcore/ relative to the apcore-python repo root
+    3. Vendored copy: tests/conformance/fixtures/ (committed for CI)
     """
     # 1. Environment variable override
     env_path = os.environ.get(_APCORE_REPO_ENV)
@@ -64,18 +68,23 @@ def _find_apcore_fixtures() -> Path:
             f"Ensure the apcore protocol spec repo is at that path."
         )
 
-    # 2. Sibling directory (standard workspace layout)
+    # 2. Sibling directory (standard workspace layout — live canonical source)
     repo_root = Path(__file__).resolve().parent.parent.parent  # apcore-python/
     sibling = repo_root.parent / "apcore" / "conformance" / "fixtures"
     if sibling.is_dir():
         return sibling
 
-    # Not found — fail with actionable message
+    # 3. Vendored fixtures (committed copy — works in CI without sibling repo)
+    vendored = Path(__file__).resolve().parent / "fixtures"
+    if vendored.is_dir():
+        return vendored
+
     pytest.fail(
-        "Cannot find apcore protocol spec repo. Conformance fixtures not available.\n\n"
+        "Cannot find conformance fixtures.\n\n"
         "Fix one of:\n"
-        f"  1. Set ${_APCORE_REPO_ENV} to the apcore repo path\n"
+        f"  1. Set ${_APCORE_REPO_ENV} to the apcore spec repo path\n"
         f"  2. Clone apcore as a sibling: git clone <apcore-url> {repo_root.parent / 'apcore'}\n"
+        "  3. Run scripts/sync-fixtures.sh to vendor fixtures locally\n"
     )
 
 
