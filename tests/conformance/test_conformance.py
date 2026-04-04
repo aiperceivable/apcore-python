@@ -84,7 +84,7 @@ def _find_apcore_fixtures() -> Path:
         "Fix one of:\n"
         f"  1. Set ${_APCORE_REPO_ENV} to the apcore spec repo path\n"
         f"  2. Clone apcore as a sibling: git clone <apcore-url> {repo_root.parent / 'apcore'}\n"
-        "  3. Run scripts/sync-fixtures.sh to vendor fixtures locally\n"
+        "  3. From the apcore spec repo, run: ./scripts/sync-fixtures.sh\n"
     )
 
 
