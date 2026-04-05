@@ -262,7 +262,10 @@ class BuiltinApprovalGate(BaseStep):
             result = await self._handler.check_approval(token)
         elif self._executor is not None and hasattr(self._executor, "_check_approval_async"):
             await self._executor._check_approval_async(
-                module, ctx.module_id, ctx.inputs, ctx.context,
+                module,
+                ctx.module_id,
+                ctx.inputs,
+                ctx.context,
             )
             return StepResult(action="continue")
         else:
@@ -317,11 +320,15 @@ class BuiltinMiddlewareBefore(BaseStep):
             try:
                 if hasattr(self._middleware_manager, "execute_before_async"):
                     inputs, executed = await self._middleware_manager.execute_before_async(
-                        ctx.module_id, ctx.inputs, ctx.context,
+                        ctx.module_id,
+                        ctx.inputs,
+                        ctx.context,
                     )
                 else:
                     inputs, executed = self._middleware_manager.execute_before(
-                        ctx.module_id, ctx.inputs, ctx.context,
+                        ctx.module_id,
+                        ctx.inputs,
+                        ctx.context,
                     )
                 ctx.inputs = inputs
                 ctx.executed_middlewares = list(executed)
@@ -333,11 +340,19 @@ class BuiltinMiddlewareBefore(BaseStep):
                 # on_error recovery for non-chain errors
                 if hasattr(self._middleware_manager, "execute_on_error_async"):
                     recovery = await self._middleware_manager.execute_on_error_async(
-                        ctx.module_id, ctx.inputs, exc, ctx.context, ctx.executed_middlewares,
+                        ctx.module_id,
+                        ctx.inputs,
+                        exc,
+                        ctx.context,
+                        ctx.executed_middlewares,
                     )
                 elif hasattr(self._middleware_manager, "execute_on_error"):
                     recovery = self._middleware_manager.execute_on_error(
-                        ctx.module_id, ctx.inputs, exc, ctx.context, ctx.executed_middlewares,
+                        ctx.module_id,
+                        ctx.inputs,
+                        exc,
+                        ctx.context,
+                        ctx.executed_middlewares,
                     )
                 else:
                     recovery = None
@@ -415,7 +430,7 @@ class BuiltinInputValidation(BaseStep):
         # Redact sensitive fields after successful validation
         schema_dict_fn = getattr(input_schema, "model_json_schema", None)
         if schema_dict_fn is not None and callable(schema_dict_fn):
-            from apcore.executor import redact_sensitive
+            from apcore.utils.redaction import redact_sensitive
 
             schema = schema_dict_fn()
             redacted = redact_sensitive(ctx.inputs, schema)
@@ -512,7 +527,8 @@ class BuiltinExecute(BaseStep):
         except asyncio.TimeoutError:
             timeout_ms = int((timeout_s or 0) * 1000)
             raise ModuleTimeoutError(
-                module_id=ctx.module_id, timeout_ms=timeout_ms,
+                module_id=ctx.module_id,
+                timeout_ms=timeout_ms,
             ) from None
         except (ExecutionCancelledError, ModuleTimeoutError, InvalidInputError):
             raise
@@ -568,7 +584,7 @@ class BuiltinOutputValidation(BaseStep):
         if ctx.context is not None and hasattr(ctx.context, "data"):
             schema_dict_fn = getattr(output_schema, "model_json_schema", None)
             if schema_dict_fn is not None and callable(schema_dict_fn):
-                from apcore.executor import redact_sensitive
+                from apcore.utils.redaction import redact_sensitive
 
                 schema = schema_dict_fn()
                 redacted = redact_sensitive(ctx.output, schema)
@@ -605,11 +621,17 @@ class BuiltinMiddlewareAfter(BaseStep):
         if self._middleware_manager is not None:
             if hasattr(self._middleware_manager, "execute_after_async"):
                 output = await self._middleware_manager.execute_after_async(
-                    ctx.module_id, ctx.inputs, ctx.output or {}, ctx.context,
+                    ctx.module_id,
+                    ctx.inputs,
+                    ctx.output or {},
+                    ctx.context,
                 )
             else:
                 output = self._middleware_manager.execute_after(
-                    ctx.module_id, ctx.inputs, ctx.output or {}, ctx.context,
+                    ctx.module_id,
+                    ctx.inputs,
+                    ctx.output or {},
+                    ctx.context,
                 )
             ctx.output = output
             return StepResult(action="continue")

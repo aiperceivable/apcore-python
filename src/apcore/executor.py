@@ -8,19 +8,15 @@ Supports sync, async, and streaming execution modes.
 from __future__ import annotations
 
 import asyncio
-import copy
 import dataclasses
-import inspect
 import logging
 import threading
-import time
 from collections.abc import AsyncIterator
 from typing import Any, Callable
 
 import pydantic
 
 from apcore.acl import ACL
-from apcore.context_keys import REDACTED_OUTPUT
 from apcore.approval import ApprovalHandler, ApprovalRequest, ApprovalResult
 from apcore.cancel import ExecutionCancelledError
 from apcore.config import Config
@@ -51,11 +47,10 @@ from apcore.pipeline import (
     StrategyNotFoundError,
 )
 from apcore.registry import MODULE_ID_PATTERN, Registry
-from apcore.utils.call_chain import guard_call_chain
+
+from apcore.utils.redaction import REDACTED_VALUE, redact_sensitive
 
 __all__ = ["redact_sensitive", "REDACTED_VALUE", "Executor"]
-
-REDACTED_VALUE: str = "***REDACTED***"
 
 _logger = logging.getLogger(__name__)
 
@@ -123,71 +118,8 @@ def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str
 # =============================================================================
 
 
-def redact_sensitive(data: dict[str, Any], schema_dict: dict[str, Any]) -> dict[str, Any]:
-    """Redact fields marked with x-sensitive in the schema.
-
-    Implements Algorithm A13 from PROTOCOL_SPEC section 9.5.
-    Returns a deep copy of data with sensitive values replaced by "***REDACTED***".
-    Also redacts any keys starting with "_secret_" regardless of schema.
-
-    Args:
-        data: The data dict to redact.
-        schema_dict: A JSON Schema dict that may contain "x-sensitive": true
-            on individual properties.
-
-    Returns:
-        A new dict with sensitive values replaced. Original data is not modified.
-    """
-    redacted = copy.deepcopy(data)
-    _redact_fields(redacted, schema_dict)
-    _redact_secret_prefix(redacted)
-    return redacted
-
-
-def _redact_fields(data: dict[str, Any], schema_dict: dict[str, Any]) -> None:
-    """In-place redaction based on schema x-sensitive markers."""
-    properties = schema_dict.get("properties")
-    if not properties:
-        return
-
-    for field_name, field_schema in properties.items():
-        if field_name not in data:
-            continue
-
-        value = data[field_name]
-
-        # x-sensitive: true on this property
-        if field_schema.get("x-sensitive") is True:
-            if value is not None:
-                data[field_name] = REDACTED_VALUE
-            continue
-
-        # Nested object: recurse
-        if field_schema.get("type") == "object" and "properties" in field_schema and isinstance(value, dict):
-            _redact_fields(value, field_schema)
-            continue
-
-        # Array: redact items
-        if field_schema.get("type") == "array" and "items" in field_schema and isinstance(value, list):
-            items_schema = field_schema["items"]
-            if items_schema.get("x-sensitive") is True:
-                for i, item in enumerate(value):
-                    if item is not None:
-                        value[i] = REDACTED_VALUE
-            elif items_schema.get("type") == "object" and "properties" in items_schema:
-                for item in value:
-                    if isinstance(item, dict):
-                        _redact_fields(item, items_schema)
-
-
-def _redact_secret_prefix(data: dict[str, Any]) -> None:
-    """In-place redaction of keys starting with _secret_."""
-    for key in data:
-        value = data[key]
-        if key.startswith("_secret_") and value is not None:
-            data[key] = REDACTED_VALUE
-        elif isinstance(value, dict):
-            _redact_secret_prefix(value)
+# redact_sensitive and REDACTED_VALUE moved to apcore.utils.redaction in v0.17
+# Re-exported here for backward compatibility.
 
 
 # =============================================================================
@@ -480,12 +412,8 @@ class Executor:
         if loop is None:
             if self._sync_loop is None or self._sync_loop.is_closed():
                 self._sync_loop = asyncio.new_event_loop()
-            return self._sync_loop.run_until_complete(
-                self._validate_async(module_id, inputs, context)
-            )
-        return self._run_in_new_thread(
-            self._validate_async(module_id, inputs, context), module_id, None
-        )
+            return self._sync_loop.run_until_complete(self._validate_async(module_id, inputs, context))
+        return self._run_in_new_thread(self._validate_async(module_id, inputs, context), module_id, None)
 
     async def _validate_async(
         self,
@@ -550,7 +478,11 @@ class Executor:
             requires_approval = self._needs_approval(pipe_ctx.module)
 
         # Module-level preflight (optional)
-        if pipe_ctx.module is not None and hasattr(pipe_ctx.module, "preflight") and callable(pipe_ctx.module.preflight):
+        if (
+            pipe_ctx.module is not None
+            and hasattr(pipe_ctx.module, "preflight")
+            and callable(pipe_ctx.module.preflight)
+        ):
             try:
                 preflight_warnings = pipe_ctx.module.preflight(inputs, pipe_ctx.context)
                 if isinstance(preflight_warnings, list) and preflight_warnings:
@@ -719,6 +651,7 @@ class Executor:
         if step == "execute":
             if "cancelled" in explanation.lower():
                 from apcore.cancel import ExecutionCancelledError
+
                 return ExecutionCancelledError()
             if "deadline" in explanation.lower() or "timed out" in explanation.lower():
                 return ModuleTimeoutError(module_id="", timeout_ms=0)
@@ -876,7 +809,10 @@ class Executor:
             wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
             if pipe_ctx.executed_middlewares:
                 recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, pipe_ctx.inputs, wrapped, ctx_obj,
+                    module_id,
+                    pipe_ctx.inputs,
+                    wrapped,
+                    ctx_obj,
                     pipe_ctx.executed_middlewares,
                 )
                 if recovery is not None:
@@ -902,7 +838,10 @@ class Executor:
             wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
             if pipe_ctx.executed_middlewares:
                 recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, pipe_ctx.inputs, wrapped, ctx_obj,
+                    module_id,
+                    pipe_ctx.inputs,
+                    wrapped,
+                    ctx_obj,
                     pipe_ctx.executed_middlewares,
                 )
                 if recovery is not None:
@@ -912,8 +851,9 @@ class Executor:
 
         # Phase 3: Output validation + middleware_after on accumulated result
         pipe_ctx.output = accumulated
-        post_steps = [s for s in self._strategy.steps
-                      if s.name in ("output_validation", "middleware_after", "return_result")]
+        post_steps = [
+            s for s in self._strategy.steps if s.name in ("output_validation", "middleware_after", "return_result")
+        ]
         if post_steps:
             post_strategy = ExecutionStrategy("post_stream", post_steps)
             try:

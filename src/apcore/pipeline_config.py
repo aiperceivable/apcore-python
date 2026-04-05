@@ -115,9 +115,7 @@ def _resolve_step(step_def: dict[str, Any]) -> BaseStep:
 def _import_step(handler_path: str, name: str, config: dict[str, Any]) -> BaseStep:
     """Import a step class from a handler path like 'myapp.steps:RateLimitStep'."""
     if ":" not in handler_path:
-        raise ValueError(
-            f"Invalid handler path '{handler_path}'. Expected format: 'module.path:ClassName'"
-        )
+        raise ValueError(f"Invalid handler path '{handler_path}'. Expected format: 'module.path:ClassName'")
     module_path, class_name = handler_path.split(":", 1)
 
     import importlib
@@ -193,9 +191,7 @@ def build_strategy_from_config(
                     if hasattr(step, key):
                         setattr(step, key, value)
                     else:
-                        _logger.warning(
-                            "Step '%s' has no field '%s'", step_name, key
-                        )
+                        _logger.warning("Step '%s' has no field '%s'", step_name, key)
                 break
 
     # (3) Resolve and insert custom steps

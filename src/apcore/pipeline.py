@@ -226,9 +226,7 @@ class PipelineEngine:
             timeout_ms = getattr(step, "timeout_ms", 0)
 
             # (1) match_modules filter
-            if match_modules is not None and not _any_match(
-                match_modules, ctx.module_id
-            ):
+            if match_modules is not None and not _any_match(match_modules, ctx.module_id):
                 trace.steps.append(
                     StepTrace(
                         name=step.name,
@@ -306,9 +304,7 @@ class PipelineEngine:
                 duration = (time.monotonic() - step_start) * 1000
                 # (4) ignore_errors: log and continue
                 if ignore_errors:
-                    _logger.warning(
-                        "Step '%s' failed (ignored): %s", step.name, exc
-                    )
+                    _logger.warning("Step '%s' failed (ignored): %s", step.name, exc)
                     trace.steps.append(
                         StepTrace(
                             name=step.name,
@@ -327,9 +323,7 @@ class PipelineEngine:
                     StepTrace(
                         name=step.name,
                         duration_ms=duration,
-                        result=StepResult(
-                            action="abort", explanation=str(exc)
-                        ),
+                        result=StepResult(action="abort", explanation=str(exc)),
                     )
                 )
                 trace.total_duration_ms = (time.monotonic() - start) * 1000
