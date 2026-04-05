@@ -258,14 +258,15 @@ class TestApprovalGateSync:
             executor.call("test.approval_required")
 
     def test_handler_exception_propagates(self, registry: Registry) -> None:
-        """If the handler itself raises, the exception propagates to the caller."""
+        """If the handler itself raises, the exception propagates (wrapped by A11)."""
+        from apcore.errors import ModuleError
 
         async def broken_handler(request: ApprovalRequest) -> ApprovalResult:
             raise RuntimeError("handler crashed")
 
         handler = CallbackApprovalHandler(broken_handler)
         executor = Executor(registry=registry, approval_handler=handler)
-        with pytest.raises(RuntimeError, match="handler crashed"):
+        with pytest.raises(ModuleError, match="handler crashed"):
             executor.call("test.approval_required")
 
 

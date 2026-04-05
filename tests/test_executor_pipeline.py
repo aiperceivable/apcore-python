@@ -81,7 +81,7 @@ class TestExecutorStrategyParam:
         step_names = ex.current_strategy.step_names()
         assert "acl_check" not in step_names
         assert "approval_gate" not in step_names
-        assert "safety_check" not in step_names
+        assert "call_chain_guard" not in step_names
         assert len(step_names) == 8
 
     def test_strategy_string_performance(self) -> None:
@@ -148,7 +148,7 @@ class TestPresetStrategies:
         names = s.step_names()
         assert "acl_check" not in names
         assert "approval_gate" not in names
-        assert "safety_check" not in names
+        assert "call_chain_guard" not in names
 
     def test_performance_strategy_steps(self) -> None:
         """Performance strategy removes middleware_before and middleware_after."""

@@ -221,17 +221,14 @@ class TestModuleTypeCaching:
     """Tests for _is_async_module caching."""
 
     @pytest.mark.asyncio
-    async def test_async_detection_cached(self) -> None:
-        """After first call, module async status is cached in _async_cache."""
+    async def test_async_module_executes_correctly(self) -> None:
+        """Async module executes via pipeline without issues."""
         ex = _make_executor(module=AsyncModule())
-        assert "test.module" not in ex._async_cache
-        await ex.call_async("test.module", {"name": "test"})
-        assert "test.module" in ex._async_cache
-        assert ex._async_cache["test.module"] is True
+        result = await ex.call_async("test.module", {"name": "test"})
+        assert result is not None
 
-    def test_sync_detection_cached(self) -> None:
-        """Sync module detection is also cached."""
+    def test_sync_module_executes_correctly(self) -> None:
+        """Sync module executes via pipeline without issues."""
         ex = _make_executor(module=SyncModule())
-        ex.call("test.module", {"name": "test"})
-        assert "test.module" in ex._async_cache
-        assert ex._async_cache["test.module"] is False
+        result = ex.call("test.module", {"name": "test"})
+        assert result is not None

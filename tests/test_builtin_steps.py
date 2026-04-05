@@ -18,7 +18,7 @@ from apcore.builtin_steps import (
     BuiltinModuleLookup,
     BuiltinOutputValidation,
     BuiltinReturnResult,
-    BuiltinSafetyCheck,
+    BuiltinCallChainGuard,
     build_standard_strategy,
 )
 from apcore.pipeline import (
@@ -104,9 +104,9 @@ class TestStepInstantiation:
         assert step.name == "context_creation"
 
     def test_safety_check(self) -> None:
-        step = BuiltinSafetyCheck()
+        step = BuiltinCallChainGuard()
         assert isinstance(step, BaseStep)
-        assert step.name == "safety_check"
+        assert step.name == "call_chain_guard"
 
     def test_module_lookup(self) -> None:
         step = BuiltinModuleLookup(registry=FakeRegistry())
@@ -166,7 +166,7 @@ class TestStepFlags:
         "step_factory,expected_removable,expected_replaceable",
         [
             (lambda: BuiltinContextCreation(), False, False),
-            (lambda: BuiltinSafetyCheck(), True, True),
+            (lambda: BuiltinCallChainGuard(), True, True),
             (lambda: BuiltinModuleLookup(registry=FakeRegistry()), False, False),
             (lambda: BuiltinACLCheck(), True, True),
             (lambda: BuiltinApprovalGate(), True, True),
@@ -179,7 +179,7 @@ class TestStepFlags:
         ],
         ids=[
             "context_creation",
-            "safety_check",
+            "call_chain_guard",
             "module_lookup",
             "acl_check",
             "approval_gate",
@@ -219,12 +219,12 @@ class TestBuildStandardStrategy:
         strategy = build_standard_strategy(registry=FakeRegistry())
         expected = [
             "context_creation",
-            "safety_check",
+            "call_chain_guard",
             "module_lookup",
             "acl_check",
             "approval_gate",
-            "input_validation",
             "middleware_before",
+            "input_validation",
             "execute",
             "output_validation",
             "middleware_after",
@@ -261,12 +261,12 @@ class TestContextCreationStep:
 
 
 class TestSafetyCheckStep:
-    """Test BuiltinSafetyCheck execute."""
+    """Test BuiltinCallChainGuard execute."""
 
     async def test_passes_normal(self) -> None:
         fake_ctx = FakeContext()
         ctx = _make_ctx(context=fake_ctx)
-        step = BuiltinSafetyCheck()
+        step = BuiltinCallChainGuard()
         result = await step.execute(ctx)
         assert result.action == "continue"
 
@@ -283,13 +283,14 @@ class TestModuleLookupStep:
         assert result.action == "continue"
         assert ctx.module is module
 
-    async def test_aborts_on_not_found(self) -> None:
+    async def test_raises_on_not_found(self) -> None:
+        from apcore.errors import ModuleNotFoundError
+
         registry = FakeRegistry({})
         ctx = _make_ctx(module_id="missing.module")
         step = BuiltinModuleLookup(registry=registry)
-        result = await step.execute(ctx)
-        assert result.action == "abort"
-        assert "not found" in (result.explanation or "").lower()
+        with pytest.raises(ModuleNotFoundError):
+            await step.execute(ctx)
 
 
 class TestACLCheckStep:
@@ -309,14 +310,15 @@ class TestACLCheckStep:
         result = await step.execute(ctx)
         assert result.action == "continue"
 
-    async def test_aborts_when_denied(self) -> None:
+    async def test_raises_when_denied(self) -> None:
+        from apcore.errors import ACLDeniedError
+
         acl = MagicMock(spec=["check"])
         acl.check.return_value = False
         ctx = _make_ctx(context=FakeContext())
         step = BuiltinACLCheck(acl=acl)
-        result = await step.execute(ctx)
-        assert result.action == "abort"
-        assert "denied" in (result.explanation or "").lower()
+        with pytest.raises(ACLDeniedError):
+            await step.execute(ctx)
 
 
 class TestApprovalGateStep:

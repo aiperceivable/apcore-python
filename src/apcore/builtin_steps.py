@@ -1,22 +1,35 @@
-"""Built-in pipeline steps extracted from the executor's 11-step call flow.
+"""Built-in pipeline steps for the v0.17 Pipeline v2 execution model.
 
 Each class wraps one step of the executor pipeline, receiving its
 dependencies via constructor injection.  Steps read from and write to
 PipelineContext fields, returning StepResult to control pipeline flow.
 
-NOTE: These contain *simplified* logic sufficient for integration testing.
-The full executor refactor task will wire these into the actual executor.
+Pipeline v2 steps raise domain errors directly instead of returning
+abort results, enabling the executor to propagate typed exceptions.
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import time
 from typing import Any
 
 import pydantic
 
+from apcore.cancel import ExecutionCancelledError
 from apcore.context import Context
+from apcore.context_keys import REDACTED_OUTPUT
+from apcore.errors import (
+    ACLDeniedError,
+    ApprovalDeniedError,
+    ApprovalPendingError,
+    InvalidInputError,
+    ModuleNotFoundError,
+    ModuleTimeoutError,
+    SchemaValidationError,
+)
 from apcore.pipeline import (
     BaseStep,
     ExecutionStrategy,
@@ -27,7 +40,7 @@ from apcore.utils.call_chain import guard_call_chain
 
 __all__ = [
     "BuiltinContextCreation",
-    "BuiltinSafetyCheck",
+    "BuiltinCallChainGuard",
     "BuiltinModuleLookup",
     "BuiltinACLCheck",
     "BuiltinApprovalGate",
@@ -66,14 +79,21 @@ def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str
 class BuiltinContextCreation(BaseStep):
     """Create or inherit execution context and set global deadline."""
 
-    def __init__(self, *, config: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        config: Any | None = None,
+        executor: Any | None = None,
+    ) -> None:
         super().__init__(
             name="context_creation",
             description="Create execution context and set global deadline",
             removable=False,
             replaceable=False,
+            pure=True,
         )
         self._config = config
+        self._executor = executor
         if config is not None:
             val = config.get("executor.global_timeout")
             self._global_timeout: int = val if val is not None else 60000
@@ -82,30 +102,33 @@ class BuiltinContextCreation(BaseStep):
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         if ctx.context is None:
-            new_ctx = Context.create()
+            new_ctx = Context.create(executor=self._executor)
             new_ctx = new_ctx.child(ctx.module_id)
             if self._global_timeout > 0:
                 new_ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
             ctx.context = new_ctx
-        elif not hasattr(ctx.context, "call_chain"):
-            ctx.context = ctx.context.child(ctx.module_id)
+        else:
+            # Derive child context to add module_id to call chain
+            child = ctx.context.child(ctx.module_id)
+            ctx.context = child
         return StepResult(action="continue")
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Safety Check
+# Step 2: Call Chain Guard
 # ---------------------------------------------------------------------------
 
 
-class BuiltinSafetyCheck(BaseStep):
+class BuiltinCallChainGuard(BaseStep):
     """Call chain guard: depth, repeat limits, cancel token."""
 
     def __init__(self, *, config: Any | None = None) -> None:
         super().__init__(
-            name="safety_check",
+            name="call_chain_guard",
             description="Validate call chain depth and repeat limits",
             removable=True,
             replaceable=True,
+            pure=True,
         )
         self._config = config
         if config is not None:
@@ -118,16 +141,13 @@ class BuiltinSafetyCheck(BaseStep):
             self._max_module_repeat = 3
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
-        try:
-            call_chain = getattr(ctx.context, "call_chain", [])
-            guard_call_chain(
-                ctx.module_id,
-                call_chain,
-                max_call_depth=self._max_call_depth,
-                max_module_repeat=self._max_module_repeat,
-            )
-        except Exception as exc:
-            return StepResult(action="abort", explanation=str(exc))
+        call_chain = getattr(ctx.context, "call_chain", [])
+        guard_call_chain(
+            ctx.module_id,
+            call_chain,
+            max_call_depth=self._max_call_depth,
+            max_module_repeat=self._max_module_repeat,
+        )
         return StepResult(action="continue")
 
 
@@ -137,7 +157,7 @@ class BuiltinSafetyCheck(BaseStep):
 
 
 class BuiltinModuleLookup(BaseStep):
-    """Resolve module from registry by ID."""
+    """Resolve module from registry by ID with optional version hint."""
 
     def __init__(self, *, registry: Any) -> None:
         super().__init__(
@@ -145,16 +165,18 @@ class BuiltinModuleLookup(BaseStep):
             description="Look up module in registry",
             removable=False,
             replaceable=False,
+            pure=True,
         )
         self._registry = registry
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
-        module = self._registry.get(ctx.module_id)
+        version_hint = getattr(ctx, "version_hint", None)
+        if version_hint is not None:
+            module = self._registry.get(ctx.module_id, version_hint=version_hint)
+        else:
+            module = self._registry.get(ctx.module_id)
         if module is None:
-            return StepResult(
-                action="abort",
-                explanation=f"Module not found: {ctx.module_id}",
-            )
+            raise ModuleNotFoundError(module_id=ctx.module_id)
         ctx.module = module
         return StepResult(action="continue")
 
@@ -173,6 +195,7 @@ class BuiltinACLCheck(BaseStep):
             description="Enforce access control policies",
             removable=True,
             replaceable=True,
+            pure=True,
         )
         self._acl = acl
 
@@ -189,10 +212,7 @@ class BuiltinACLCheck(BaseStep):
             allowed = self._acl.check(caller_id, ctx.module_id, ctx.context)
 
         if not allowed:
-            return StepResult(
-                action="abort",
-                explanation=f"Access denied: {caller_id} -> {ctx.module_id}",
-            )
+            raise ACLDeniedError(caller_id=caller_id, target_id=ctx.module_id)
         return StepResult(action="continue")
 
 
@@ -204,14 +224,21 @@ class BuiltinACLCheck(BaseStep):
 class BuiltinApprovalGate(BaseStep):
     """Approval handler flow for modules requiring approval."""
 
-    def __init__(self, *, handler: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        handler: Any | None = None,
+        executor: Any | None = None,
+    ) -> None:
         super().__init__(
             name="approval_gate",
             description="Request and verify module approval",
             removable=True,
             replaceable=True,
+            pure=False,
         )
         self._handler = handler
+        self._executor = executor
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         if self._handler is None:
@@ -229,8 +256,16 @@ class BuiltinApprovalGate(BaseStep):
         if not requires_approval:
             return StepResult(action="continue")
 
-        # Simplified: delegate to handler
-        try:
+        # Phase B token support: if inputs contain _approval_token, delegate
+        if "_approval_token" in ctx.inputs:
+            token = ctx.inputs.pop("_approval_token")
+            result = await self._handler.check_approval(token)
+        elif self._executor is not None and hasattr(self._executor, "_check_approval_async"):
+            await self._executor._check_approval_async(
+                module, ctx.module_id, ctx.inputs, ctx.context,
+            )
+            return StepResult(action="continue")
+        else:
             from apcore.approval import ApprovalRequest
 
             request = ApprovalRequest(
@@ -239,18 +274,108 @@ class BuiltinApprovalGate(BaseStep):
                 context=ctx.context,
             )
             result = await self._handler.request_approval(request)
-            if result.status == "approved":
-                return StepResult(action="continue")
-            return StepResult(
-                action="abort",
-                explanation=f"Approval {result.status}: {result.reason or 'no reason'}",
+
+        if result.status == "approved":
+            return StepResult(action="continue")
+        if result.status == "pending":
+            raise ApprovalPendingError(
+                message=f"Approval pending: {result.reason or 'awaiting review'}",
             )
-        except Exception as exc:
-            return StepResult(action="abort", explanation=f"Approval error: {exc}")
+        raise ApprovalDeniedError(
+            message=f"Approval {result.status}: {result.reason or 'no reason'}",
+        )
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Input Validation
+# Step 6: Middleware Before
+# ---------------------------------------------------------------------------
+
+
+class BuiltinMiddlewareBefore(BaseStep):
+    """Execute middleware before-chain."""
+
+    def __init__(
+        self,
+        *,
+        middlewares: list[Any] | None = None,
+        middleware_manager: Any | None = None,
+    ) -> None:
+        super().__init__(
+            name="middleware_before",
+            description="Run before-middleware chain",
+            removable=True,
+            replaceable=False,
+            pure=False,
+        )
+        self._middlewares = middlewares or []
+        self._middleware_manager = middleware_manager
+
+    async def execute(self, ctx: PipelineContext) -> StepResult:
+        if self._middleware_manager is not None:
+            from apcore.middleware.manager import MiddlewareChainError
+
+            try:
+                if hasattr(self._middleware_manager, "execute_before_async"):
+                    inputs, executed = await self._middleware_manager.execute_before_async(
+                        ctx.module_id, ctx.inputs, ctx.context,
+                    )
+                else:
+                    inputs, executed = self._middleware_manager.execute_before(
+                        ctx.module_id, ctx.inputs, ctx.context,
+                    )
+                ctx.inputs = inputs
+                ctx.executed_middlewares = list(executed)
+            except MiddlewareChainError as exc:
+                # Store executed middlewares for the executor's on_error recovery
+                ctx.executed_middlewares = list(exc.executed_middlewares)
+                raise
+            except Exception as exc:
+                # on_error recovery for non-chain errors
+                if hasattr(self._middleware_manager, "execute_on_error_async"):
+                    recovery = await self._middleware_manager.execute_on_error_async(
+                        ctx.module_id, ctx.inputs, exc, ctx.context, ctx.executed_middlewares,
+                    )
+                elif hasattr(self._middleware_manager, "execute_on_error"):
+                    recovery = self._middleware_manager.execute_on_error(
+                        ctx.module_id, ctx.inputs, exc, ctx.context, ctx.executed_middlewares,
+                    )
+                else:
+                    recovery = None
+                # Clear executed_middlewares after on_error to prevent double invocation
+                ctx.executed_middlewares = []
+                if recovery is not None:
+                    ctx.output = recovery
+                    return StepResult(action="skip_to", skip_to="return_result")
+                raise
+            return StepResult(action="continue")
+
+        executed: list[Any] = []
+        for mw in self._middlewares:
+            try:
+                if hasattr(mw, "before"):
+                    result = mw.before(ctx.module_id, ctx.inputs, ctx.context)
+                    if result is not None:
+                        ctx.inputs = result if isinstance(result, dict) else ctx.inputs
+                    executed.append(mw)
+            except Exception as exc:
+                ctx.executed_middlewares = executed
+                for recovery_mw in reversed(executed):
+                    if hasattr(recovery_mw, "on_error"):
+                        try:
+                            recovery = recovery_mw.on_error(ctx.module_id, ctx.inputs, exc, ctx.context)
+                            if recovery is not None:
+                                ctx.output = recovery
+                                return StepResult(action="skip_to", skip_to="return_result")
+                        except Exception:
+                            pass
+                ctx.executed_middlewares = []  # Clear to prevent double on_error in executor
+                raise
+        ctx.executed_middlewares = executed
+        return StepResult(action="continue")
+
+
+# ---------------------------------------------------------------------------
+# Step 7: Input Validation
 # ---------------------------------------------------------------------------
 
 
@@ -263,6 +388,7 @@ class BuiltinInputValidation(BaseStep):
             description="Validate inputs against schema and redact sensitive fields",
             removable=True,
             replaceable=True,
+            pure=True,
         )
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
@@ -279,44 +405,23 @@ class BuiltinInputValidation(BaseStep):
             input_schema.model_validate(ctx.inputs)
         except pydantic.ValidationError as exc:
             errors = _convert_validation_errors(exc)
-            return StepResult(
-                action="abort",
-                explanation=f"Input validation failed: {errors}",
-            )
+            raise SchemaValidationError(
+                message=f"Input validation failed: {errors}",
+                errors=errors,
+            ) from exc
 
         ctx.validated_inputs = ctx.inputs
-        return StepResult(action="continue")
 
+        # Redact sensitive fields after successful validation
+        schema_dict_fn = getattr(input_schema, "model_json_schema", None)
+        if schema_dict_fn is not None and callable(schema_dict_fn):
+            from apcore.executor import redact_sensitive
 
-# ---------------------------------------------------------------------------
-# Step 7: Middleware Before
-# ---------------------------------------------------------------------------
+            schema = schema_dict_fn()
+            redacted = redact_sensitive(ctx.inputs, schema)
+            if ctx.context is not None and hasattr(ctx.context, "redacted_inputs"):
+                ctx.context.redacted_inputs = redacted
 
-
-class BuiltinMiddlewareBefore(BaseStep):
-    """Execute middleware before-chain."""
-
-    def __init__(self, *, middlewares: list[Any] | None = None) -> None:
-        super().__init__(
-            name="middleware_before",
-            description="Run before-middleware chain",
-            removable=True,
-            replaceable=False,
-        )
-        self._middlewares = middlewares or []
-
-    async def execute(self, ctx: PipelineContext) -> StepResult:
-        for mw in self._middlewares:
-            try:
-                if hasattr(mw, "before"):
-                    result = mw.before(ctx.module_id, ctx.inputs, ctx.context)
-                    if result is not None:
-                        ctx.inputs = result if isinstance(result, dict) else ctx.inputs
-            except Exception as exc:
-                return StepResult(
-                    action="abort",
-                    explanation=f"Middleware before error: {exc}",
-                )
         return StepResult(action="continue")
 
 
@@ -334,6 +439,7 @@ class BuiltinExecute(BaseStep):
             description="Execute module with timeout",
             removable=False,
             replaceable=True,
+            pure=False,
         )
         self._config = config
         if config is not None:
@@ -347,20 +453,71 @@ class BuiltinExecute(BaseStep):
         if module is None:
             return StepResult(action="abort", explanation="No module set on context")
 
+        # Check cancel token
+        cancel_token = getattr(ctx.context, "cancel_token", None)
+        if cancel_token is not None and cancel_token.is_cancelled:
+            raise ExecutionCancelledError()
+
+        # Check global deadline
+        global_deadline = getattr(ctx.context, "_global_deadline", None)
+        if global_deadline is not None and time.monotonic() > global_deadline:
+            timeout_ms = int(self._default_timeout)
+            raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms)
+
         inputs = ctx.validated_inputs if ctx.validated_inputs is not None else ctx.inputs
 
-        try:
-            import asyncio
-            import inspect
+        # Stream mode: set up output_stream if module has stream()
+        if ctx.stream and hasattr(module, "stream") and callable(module.stream):
+            ctx.output_stream = module.stream(inputs, ctx.context)
+            return StepResult(action="skip_to", skip_to="return_result")
 
+        # Determine per-module timeout
+        module_timeout_ms = getattr(module, "timeout_ms", None)
+        if module_timeout_ms is not None:
+            if module_timeout_ms < 0:
+                raise InvalidInputError(
+                    message=f"Negative timeout: {module_timeout_ms}",
+                )
+            timeout_s = module_timeout_ms / 1000.0
+        elif self._default_timeout > 0:
+            timeout_s = self._default_timeout / 1000.0
+        else:
+            timeout_s = None
+
+        # Clamp to global deadline if set
+        if global_deadline is not None:
+            remaining = global_deadline - time.monotonic()
+            if remaining <= 0:
+                raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=int(self._default_timeout))
+            if timeout_s is None or remaining < timeout_s:
+                timeout_s = remaining
+
+        # Stream mode: set output_stream and skip to return_result (no execution)
+        if getattr(ctx, "stream", False) and hasattr(module, "stream") and module.stream is not None:
+            ctx.output_stream = module.stream(inputs, ctx.context)
+            return StepResult(action="skip_to", skip_to="return_result")
+
+        try:
             if inspect.iscoroutinefunction(module.execute):
-                output = await module.execute(inputs, ctx.context)
+                coro = module.execute(inputs, ctx.context)
             else:
                 loop = asyncio.get_event_loop()
-                output = await loop.run_in_executor(None, module.execute, inputs, ctx.context)
+                coro = loop.run_in_executor(None, module.execute, inputs, ctx.context)
+
+            if timeout_s is not None:
+                output = await asyncio.wait_for(coro, timeout=timeout_s)
+            else:
+                output = await coro
             ctx.output = output
-        except Exception as exc:
-            return StepResult(action="abort", explanation=f"Execution error: {exc}")
+        except asyncio.TimeoutError:
+            timeout_ms = int((timeout_s or 0) * 1000)
+            raise ModuleTimeoutError(
+                module_id=ctx.module_id, timeout_ms=timeout_ms,
+            ) from None
+        except (ExecutionCancelledError, ModuleTimeoutError, InvalidInputError):
+            raise
+        except Exception:
+            raise
 
         return StepResult(action="continue")
 
@@ -379,6 +536,7 @@ class BuiltinOutputValidation(BaseStep):
             description="Validate output against schema and redact sensitive fields",
             removable=True,
             replaceable=True,
+            pure=True,
         )
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
@@ -399,12 +557,23 @@ class BuiltinOutputValidation(BaseStep):
             output_schema.model_validate(ctx.output)
         except pydantic.ValidationError as exc:
             errors = _convert_validation_errors(exc)
-            return StepResult(
-                action="abort",
-                explanation=f"Output validation failed: {errors}",
-            )
+            raise SchemaValidationError(
+                message=f"Output validation failed: {errors}",
+                errors=errors,
+            ) from exc
 
         ctx.validated_output = ctx.output
+
+        # Store redacted output in context
+        if ctx.context is not None and hasattr(ctx.context, "data"):
+            schema_dict_fn = getattr(output_schema, "model_json_schema", None)
+            if schema_dict_fn is not None and callable(schema_dict_fn):
+                from apcore.executor import redact_sensitive
+
+                schema = schema_dict_fn()
+                redacted = redact_sensitive(ctx.output, schema)
+                ctx.context.data[REDACTED_OUTPUT.name] = redacted
+
         return StepResult(action="continue")
 
 
@@ -416,16 +585,35 @@ class BuiltinOutputValidation(BaseStep):
 class BuiltinMiddlewareAfter(BaseStep):
     """Execute middleware after-chain."""
 
-    def __init__(self, *, middlewares: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        middlewares: list[Any] | None = None,
+        middleware_manager: Any | None = None,
+    ) -> None:
         super().__init__(
             name="middleware_after",
             description="Run after-middleware chain",
             removable=True,
             replaceable=False,
+            pure=False,
         )
         self._middlewares = middlewares or []
+        self._middleware_manager = middleware_manager
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
+        if self._middleware_manager is not None:
+            if hasattr(self._middleware_manager, "execute_after_async"):
+                output = await self._middleware_manager.execute_after_async(
+                    ctx.module_id, ctx.inputs, ctx.output or {}, ctx.context,
+                )
+            else:
+                output = self._middleware_manager.execute_after(
+                    ctx.module_id, ctx.inputs, ctx.output or {}, ctx.context,
+                )
+            ctx.output = output
+            return StepResult(action="continue")
+
         for mw in self._middlewares:
             try:
                 if hasattr(mw, "after"):
@@ -454,6 +642,7 @@ class BuiltinReturnResult(BaseStep):
             description="Finalize pipeline result",
             removable=False,
             replaceable=False,
+            pure=True,
         )
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
@@ -472,6 +661,8 @@ def build_standard_strategy(
     acl: Any | None = None,
     approval_handler: Any | None = None,
     middlewares: list[Any] | None = None,
+    middleware_manager: Any | None = None,
+    executor: Any | None = None,
 ) -> ExecutionStrategy:
     """Build the standard 11-step execution strategy.
 
@@ -481,6 +672,8 @@ def build_standard_strategy(
         acl: Optional ACL for access control enforcement.
         approval_handler: Optional approval handler for the approval gate.
         middlewares: Optional list of middleware instances.
+        middleware_manager: Optional MiddlewareManager for production parity.
+        executor: Optional executor reference for context creation and approval.
 
     Returns:
         An ExecutionStrategy containing the 11 built-in steps.
@@ -488,16 +681,22 @@ def build_standard_strategy(
     return ExecutionStrategy(
         "standard",
         [
-            BuiltinContextCreation(config=config),
-            BuiltinSafetyCheck(config=config),
+            BuiltinContextCreation(config=config, executor=executor),
+            BuiltinCallChainGuard(config=config),
             BuiltinModuleLookup(registry=registry),
             BuiltinACLCheck(acl=acl),
-            BuiltinApprovalGate(handler=approval_handler),
+            BuiltinApprovalGate(handler=approval_handler, executor=executor),
+            BuiltinMiddlewareBefore(
+                middlewares=middlewares or [],
+                middleware_manager=middleware_manager,
+            ),
             BuiltinInputValidation(),
-            BuiltinMiddlewareBefore(middlewares=middlewares or []),
             BuiltinExecute(config=config),
             BuiltinOutputValidation(),
-            BuiltinMiddlewareAfter(middlewares=middlewares or []),
+            BuiltinMiddlewareAfter(
+                middlewares=middlewares or [],
+                middleware_manager=middleware_manager,
+            ),
             BuiltinReturnResult(),
         ],
     )
@@ -522,7 +721,7 @@ def build_internal_strategy(**kwargs: Any) -> ExecutionStrategy:
 
 
 def build_testing_strategy(**kwargs: Any) -> ExecutionStrategy:
-    """Build a testing strategy: standard minus acl, approval, and safety.
+    """Build a testing strategy: standard minus acl, approval, and call chain guard.
 
     Suitable for unit/integration tests that need minimal overhead.
 
@@ -535,7 +734,7 @@ def build_testing_strategy(**kwargs: Any) -> ExecutionStrategy:
     s = build_standard_strategy(**kwargs)
     s.remove("acl_check")
     s.remove("approval_gate")
-    s.remove("safety_check")
+    s.remove("call_chain_guard")
     object.__setattr__(s, "name", "testing")
     return s
 

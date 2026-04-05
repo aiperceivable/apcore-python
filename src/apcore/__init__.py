@@ -198,6 +198,14 @@ from apcore.pipeline import (
     StrategyNotFoundError,
 )
 
+# Pipeline Configuration
+from apcore.pipeline_config import (
+    build_strategy_from_config,
+    register_step_type,
+    registered_step_types,
+    unregister_step_type,
+)
+
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
@@ -544,6 +552,11 @@ __all__ = [
     "StepNotReplaceableError",
     "StepNameDuplicateError",
     "StrategyNotFoundError",
+    # Pipeline Configuration
+    "register_step_type",
+    "unregister_step_type",
+    "registered_step_types",
+    "build_strategy_from_config",
     # System Modules
     "register_sys_modules",
     "register_subscriber_type",

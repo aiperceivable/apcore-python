@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-04-05
+
+### Added
+
+- **Step Metadata**: Four declarative fields on `BaseStep`: `match_modules` (glob patterns for selective execution), `ignore_errors` (fault-tolerant steps), `pure` (safe for `validate()` dry-run), `timeout_ms` (per-step timeout).
+- **YAML Pipeline Configuration**: `register_step_type()`, `unregister_step_type()`, `registered_step_types()`, `build_strategy_from_config()` — configure pipeline steps via `apcore.yaml` at startup.
+- **PipelineContext fields**: `dry_run`, `version_hint`, `executed_middlewares` for pipeline-aware execution.
+- **StepTrace**: `skip_reason` field for understanding why steps were skipped ("no_match", "dry_run", "error_ignored").
+
+### Changed
+
+- **Step order**: `middleware_before` now runs BEFORE `input_validation` (was after). Middleware input transforms are now validated by the schema check.
+- **Executor delegation**: `call()`, `call_async()`, `validate()`, and `stream()` fully delegate to `PipelineEngine.run()`. Removed ~300 lines of duplicated inline step code.
+- **Renamed**: `safety_check` step → `call_chain_guard` (accurately describes call-chain depth/cycle/repeat checking).
+- **Renamed**: `BuiltinSafetyCheck` class → `BuiltinCallChainGuard`.
+
+### Fixed
+
+- Middleware input transforms were never re-validated against the schema (now validated after middleware runs).
+- `validate()` was hardcoded to 7 inline checks; now uses `dry_run=True` pipeline mode — user-added `pure=True` steps automatically participate.
+
+---
+
 ## [0.16.0] - 2026-04-05
 
 ### Added

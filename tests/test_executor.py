@@ -654,7 +654,7 @@ class TestTimeout:
         assert result == {"result": "quick"}
 
     def test_timeout_negative_raises(self) -> None:
-        """timeout < 0 raises InvalidInputError."""
+        """timeout < 0 raises InvalidInputError at construction time."""
         from apcore.errors import InvalidInputError
 
         class QuickModule:
@@ -665,9 +665,8 @@ class TestTimeout:
                 return {"result": "quick"}
 
         config = Config(data={"executor": {"default_timeout": -100}})
-        ex = _make_executor(module=QuickModule(), config=config)
         with pytest.raises(InvalidInputError):
-            ex.call("test.module", {})
+            _make_executor(module=QuickModule(), config=config)
 
     def test_timeout_cooperative_cancel(self) -> None:
         """Module that checks cancel_token should exit gracefully during grace period."""
@@ -696,23 +695,23 @@ class TestTimeout:
 # === Thread Safety Tests ===
 
 
-class TestAsyncCacheThreadSafety:
-    """Tests for thread-safe async cache access."""
+class TestPipelineThreadSafety:
+    """Tests for thread-safe pipeline execution."""
 
-    def test_concurrent_is_async_module_no_error(self) -> None:
-        """Concurrent _is_async_module() calls should not raise."""
+    def test_concurrent_sync_calls_no_error(self) -> None:
+        """Concurrent sync call() invocations should not raise."""
         mod = MockModule()
         ex = _make_executor(module=mod)
         errors: list[Exception] = []
 
-        def checker() -> None:
+        def caller() -> None:
             try:
-                for _ in range(100):
-                    ex._is_async_module("test.module", mod)
+                for _ in range(20):
+                    ex.call("test.module", {"name": "test"})
             except Exception as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=checker) for _ in range(10)]
+        threads = [threading.Thread(target=caller) for _ in range(4)]
         for t in threads:
             t.start()
         for t in threads:
@@ -720,8 +719,8 @@ class TestAsyncCacheThreadSafety:
 
         assert errors == []
 
-    def test_daemon_thread_in_execute_with_timeout(self) -> None:
-        """Timeout threads should be daemonic so they don't block shutdown."""
+    def test_slow_module_timeout_via_pipeline(self) -> None:
+        """Slow module should timeout through pipeline BuiltinExecute."""
 
         class SlowModule:
             input_schema = None

@@ -32,6 +32,7 @@ from apcore.errors import (
     ApprovalTimeoutError,
     InvalidInputError,
     ModuleError,
+    ModuleExecuteError,
     ModuleNotFoundError,
     ModuleTimeoutError,
     SchemaValidationError,
@@ -42,6 +43,7 @@ from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
 from apcore.module import ModuleAnnotations, PreflightCheckResult, PreflightResult
 from apcore.pipeline import (
     ExecutionStrategy,
+    PipelineAbortError,
     PipelineContext,
     PipelineEngine,
     PipelineTrace,
@@ -56,6 +58,32 @@ __all__ = ["redact_sensitive", "REDACTED_VALUE", "Executor"]
 REDACTED_VALUE: str = "***REDACTED***"
 
 _logger = logging.getLogger(__name__)
+
+# Map pipeline step names to PreflightResult check names
+_STEP_TO_CHECK: dict[str, str] = {
+    "context_creation": "context",
+    "call_chain_guard": "call_chain",
+    "module_lookup": "module_lookup",
+    "acl_check": "acl",
+    "approval_gate": "approval",
+    "middleware_before": "middleware",
+    "input_validation": "schema",
+}
+
+
+def _trace_to_checks(trace: PipelineTrace) -> list[PreflightCheckResult]:
+    """Convert PipelineTrace steps to PreflightCheckResult list."""
+    checks: list[PreflightCheckResult] = []
+    for st in trace.steps:
+        if st.skipped:
+            continue
+        check_name = _STEP_TO_CHECK.get(st.name, st.name)
+        passed = st.result.action != "abort"
+        error = None
+        if not passed and st.result.explanation:
+            error = {"code": f"STEP_{st.name.upper()}_FAILED", "message": st.result.explanation}
+        checks.append(PreflightCheckResult(check=check_name, passed=passed, error=error))
+    return checks
 
 
 _MAX_MERGE_DEPTH = 32
@@ -206,13 +234,19 @@ class Executor:
         self._config = config
         self._approval_handler = approval_handler
 
-        # Resolve strategy
+        if middlewares:
+            for mw in middlewares:
+                self._middleware_manager.add(mw)
+
+        # Resolve strategy (pass middleware_manager and executor for production parity)
         strategy_kwargs = dict(
             registry=registry,
             config=config,
             acl=acl,
             approval_handler=approval_handler,
             middlewares=middlewares,
+            middleware_manager=self._middleware_manager,
+            executor=self,
         )
         if strategy is None:
             from apcore.builtin_steps import build_standard_strategy
@@ -223,9 +257,7 @@ class Executor:
         else:
             self._strategy = strategy
 
-        if middlewares:
-            for mw in middlewares:
-                self._middleware_manager.add(mw)
+        self._pipeline_engine = PipelineEngine()
 
         if config is not None:
             val = config.get("executor.default_timeout")
@@ -242,8 +274,15 @@ class Executor:
             self._max_call_depth = 32
             self._max_module_repeat = 3
 
+        if self._default_timeout < 0:
+            raise InvalidInputError(
+                message=f"Negative default_timeout: {self._default_timeout}",
+            )
+
         self._async_cache: dict[str, bool] = {}
         self._async_cache_lock = threading.Lock()
+        # Cached event loop for sync call() to avoid asyncio.run() overhead
+        self._sync_loop: asyncio.AbstractEventLoop | None = None
 
     @classmethod
     def from_registry(
@@ -291,18 +330,31 @@ class Executor:
     def set_acl(self, acl: ACL) -> None:
         """Set the access control provider.
 
+        Updates both the executor field and the strategy's ACL step.
+
         Args:
             acl: The ACL instance to use for access control enforcement.
         """
         self._acl = acl
+        for step in self._strategy.steps:
+            if step.name == "acl_check":
+                step._acl = acl
+                break
 
     def set_approval_handler(self, handler: ApprovalHandler) -> None:
         """Set the approval handler for Step 5 gate.
+
+        Updates both the executor field and the strategy's approval step.
 
         Args:
             handler: The ApprovalHandler instance to use for approval enforcement.
         """
         self._approval_handler = handler
+        # Update the existing approval_gate step in the strategy
+        for step in self._strategy.steps:
+            if step.name == "approval_gate":
+                step._handler = handler
+                break
 
     def use(self, middleware: Middleware) -> Executor:
         """Add class-based middleware and return self for chaining."""
@@ -332,6 +384,8 @@ class Executor:
     ) -> dict[str, Any]:
         """Execute a module through the execution pipeline.
 
+        Delegates to PipelineEngine.run() with the configured strategy.
+
         Args:
             module_id: The module to execute.
             inputs: Input data dict. None is treated as {}.
@@ -343,99 +397,59 @@ class Executor:
         """
         self._validate_module_id(module_id)
 
-        if inputs is None:
-            inputs = {}
-
-        # Step 1 -- Context
-        if context is None:
-            ctx = Context.create(executor=self)
-            ctx = ctx.child(module_id)
-            if self._global_timeout > 0:
-                ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
-        else:
-            ctx = context.child(module_id)
-
-        # Step 2 -- Safety Checks
-        self._check_safety(module_id, ctx)
-
-        # Step 3 -- Lookup (with version negotiation)
-        module = self._registry.get(module_id, version_hint=version_hint)
-        if module is None:
-            raise ModuleNotFoundError(module_id=module_id)
-
-        # Step 4 -- ACL
-        if self._acl is not None:
-            allowed = self._acl.check(ctx.caller_id, module_id, ctx)
-            if not allowed:
-                raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
-
-        # Step 5 -- Approval Gate
-        self._check_approval_sync(module, module_id, inputs, ctx)
-
-        # Step 6 -- Input Validation and Redaction
-        if hasattr(module, "input_schema") and module.input_schema is not None:
-            try:
-                module.input_schema.model_validate(inputs)
-            except pydantic.ValidationError as e:
-                raise SchemaValidationError(
-                    message="Input validation failed",
-                    errors=_convert_validation_errors(e),
-                ) from e
-
-            ctx.redacted_inputs = redact_sensitive(inputs, module.input_schema.model_json_schema())
-
-        executed_middlewares: list[Middleware] = []
+        pipe_ctx = PipelineContext(
+            module_id=module_id,
+            inputs=inputs or {},
+            context=context,
+            version_hint=version_hint,
+        )
 
         try:
-            # Step 7 -- Middleware Before
-            try:
-                inputs, executed_middlewares = self._middleware_manager.execute_before(module_id, inputs, ctx)
-            except MiddlewareChainError as mce:
-                executed_middlewares = mce.executed_middlewares
-                recovery = self._middleware_manager.execute_on_error(
-                    module_id, inputs, mce.original, ctx, executed_middlewares
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        try:
+            if loop is None:
+                # Use cached event loop for sync calls (avoids asyncio.run() overhead)
+                if self._sync_loop is None or self._sync_loop.is_closed():
+                    self._sync_loop = asyncio.new_event_loop()
+                if self._sync_loop.is_running():
+                    # Nested sync call inside async execution — use thread bridge
+                    output, _trace = self._run_in_new_thread(
+                        self._pipeline_engine.run(self._strategy, pipe_ctx),
+                        module_id,
+                        None,
+                    )
+                else:
+                    output, _trace = self._sync_loop.run_until_complete(
+                        self._pipeline_engine.run(self._strategy, pipe_ctx)
+                    )
+            else:
+                output, _trace = self._run_in_new_thread(
+                    self._pipeline_engine.run(self._strategy, pipe_ctx),
+                    module_id,
+                    None,
                 )
-                if recovery is not None:
-                    return recovery
-                executed_middlewares = []  # Prevent double on_error in outer except
-                raise mce.original from mce
-
-            # Cancel check before execution
-            if ctx.cancel_token is not None:
-                ctx.cancel_token.check()
-
-            # Step 8 -- Execute with timeout
-            output = self._execute_with_timeout(module, module_id, inputs, ctx)
-
-            # Step 9 -- Output Validation and Redaction
-            if hasattr(module, "output_schema") and module.output_schema is not None:
-                try:
-                    module.output_schema.model_validate(output)
-                except pydantic.ValidationError as e:
-                    raise SchemaValidationError(
-                        message="Output validation failed",
-                        errors=_convert_validation_errors(e),
-                    ) from e
-
-                REDACTED_OUTPUT.set(ctx, redact_sensitive(output, module.output_schema.model_json_schema()))
-
-            # Step 10 -- Middleware After
-            output = self._middleware_manager.execute_after(module_id, inputs, output, ctx)
-
+        except PipelineAbortError as e:
+            raise self._translate_abort(e) from e
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # Error handling (A11): wrap and propagate
-            wrapped = propagate_error(exc, module_id, ctx)
-            if executed_middlewares:
+            # A11 error propagation + middleware on_error recovery
+            ctx_obj = pipe_ctx.context
+            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
+            executed_mw = pipe_ctx.executed_middlewares
+            if executed_mw:
                 recovery = self._middleware_manager.execute_on_error(
-                    module_id, inputs, wrapped, ctx, executed_middlewares
+                    module_id, pipe_ctx.inputs, wrapped, ctx_obj, executed_mw
                 )
                 if recovery is not None:
                     return recovery
+            # Wrap non-ModuleExecuteError into ModuleExecuteError for uniform error type
+            if isinstance(exc, MiddlewareChainError):
+                raise ModuleExecuteError(module_id=module_id, message=str(exc)) from exc
             raise wrapped from exc
-
-        # Step 11 -- Return
         return output
 
     def validate(
@@ -444,11 +458,11 @@ class Executor:
         inputs: dict[str, Any] | None = None,
         context: Context | None = None,
     ) -> PreflightResult:
-        """Non-destructive preflight check through Steps 1-6 without execution.
+        """Non-destructive preflight check using pipeline dry_run mode.
 
-        Runs context creation, safety checks, module lookup, ACL enforcement,
-        approval detection (report only), and input schema validation.
-        All check failures are collected rather than thrown.
+        Runs all pure steps (context creation, call chain guard, module lookup,
+        ACL, input validation). Steps with pure=False (approval, middleware,
+        execute) are automatically skipped. User-added pure steps are included.
 
         Args:
             module_id: The module to validate against.
@@ -456,16 +470,36 @@ class Executor:
             context: Optional context for call-chain checks.
 
         Returns:
-            PreflightResult with per-check status. Duck-type compatible
-            with the old ValidationResult (.valid and .errors).
+            PreflightResult with per-check status.
         """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is None:
+            if self._sync_loop is None or self._sync_loop.is_closed():
+                self._sync_loop = asyncio.new_event_loop()
+            return self._sync_loop.run_until_complete(
+                self._validate_async(module_id, inputs, context)
+            )
+        return self._run_in_new_thread(
+            self._validate_async(module_id, inputs, context), module_id, None
+        )
+
+    async def _validate_async(
+        self,
+        module_id: str,
+        inputs: dict[str, Any] | None = None,
+        context: Context | None = None,
+    ) -> PreflightResult:
+        """Async implementation of validate()."""
         if inputs is None:
             inputs = {}
 
         checks: list[PreflightCheckResult] = []
-        requires_approval = False
 
-        # Check 1: module_id format
+        # Check 0: module_id format (before pipeline)
         try:
             self._validate_module_id(module_id)
             checks.append(PreflightCheckResult(check="module_id", passed=True))
@@ -473,83 +507,59 @@ class Executor:
             checks.append(PreflightCheckResult(check="module_id", passed=False, error=e.to_dict()))
             return PreflightResult(valid=False, checks=checks)
 
-        # Check 2: module lookup
-        module = self._registry.get(module_id)
-        if module is None:
-            checks.append(
-                PreflightCheckResult(
-                    check="module_lookup",
-                    passed=False,
-                    error={"code": "MODULE_NOT_FOUND", "message": f"Module not found: {module_id}"},
-                )
-            )
-            return PreflightResult(valid=False, checks=checks)
-        checks.append(PreflightCheckResult(check="module_lookup", passed=True))
+        # Run pipeline in dry_run mode — pure=False steps are skipped
+        pipe_ctx = PipelineContext(
+            module_id=module_id,
+            inputs=inputs,
+            context=context,
+            dry_run=True,
+        )
 
-        # Check 3: call chain safety
-        if context is not None:
-            ctx = context.child(module_id)
-        else:
-            ctx = Context.create(executor=self).child(module_id)
+        trace = None
         try:
-            self._check_safety(module_id, ctx)
-            checks.append(PreflightCheckResult(check="call_chain", passed=True))
-        except ModuleError as e:
-            checks.append(PreflightCheckResult(check="call_chain", passed=False, error=e.to_dict()))
+            _, trace = await self._pipeline_engine.run(self._strategy, pipe_ctx)
+        except PipelineAbortError as e:
+            trace = e.pipeline_trace
+        except Exception as e:
+            # Step raised an error (e.g., ModuleNotFoundError, ACLDeniedError)
+            # Convert to a failed check using the error's own code/dict
+            error_dict = e.to_dict() if hasattr(e, "to_dict") else {"code": type(e).__name__, "message": str(e)}
+            code = getattr(e, "code", type(e).__name__)
 
-        # Check 4: ACL
-        if self._acl is not None:
-            allowed = self._acl.check(ctx.caller_id, module_id, ctx)
-            if not allowed:
-                checks.append(
-                    PreflightCheckResult(
-                        check="acl",
-                        passed=False,
-                        error={"code": "ACL_DENIED", "message": f"Access denied: {ctx.caller_id} -> {module_id}"},
-                    )
-                )
+            # Determine which check failed based on error type
+            if code == "MODULE_NOT_FOUND":
+                check_name = "module_lookup"
+            elif code == "ACL_DENIED":
+                check_name = "acl"
+            elif code in ("SCHEMA_VALIDATION_ERROR", "INVALID_INPUT"):
+                check_name = "schema"
+            elif code in ("CALL_DEPTH_EXCEEDED", "CIRCULAR_CALL", "CALL_FREQUENCY_EXCEEDED"):
+                check_name = "call_chain"
             else:
-                checks.append(PreflightCheckResult(check="acl", passed=True))
-        else:
-            checks.append(PreflightCheckResult(check="acl", passed=True))
+                check_name = "unknown"
 
-        # Check 5: approval detection (report only, no handler invocation)
-        if self._needs_approval(module):
-            requires_approval = True
-        checks.append(PreflightCheckResult(check="approval", passed=True))
+            checks.append(PreflightCheckResult(check=check_name, passed=False, error=error_dict))
 
-        # Check 6: input schema validation
-        if hasattr(module, "input_schema") and module.input_schema is not None:
+        # Convert pipeline trace to PreflightResult checks
+        if trace is not None:
+            checks.extend(_trace_to_checks(trace))
+
+        # Detect requires_approval
+        requires_approval = False
+        if pipe_ctx.module is not None:
+            requires_approval = self._needs_approval(pipe_ctx.module)
+
+        # Module-level preflight (optional)
+        if pipe_ctx.module is not None and hasattr(pipe_ctx.module, "preflight") and callable(pipe_ctx.module.preflight):
             try:
-                module.input_schema.model_validate(inputs)
-                checks.append(PreflightCheckResult(check="schema", passed=True))
-            except pydantic.ValidationError as e:
-                checks.append(
-                    PreflightCheckResult(
-                        check="schema",
-                        passed=False,
-                        error={"code": "SCHEMA_VALIDATION_ERROR", "errors": _convert_validation_errors(e)},
-                    )
-                )
-        else:
-            checks.append(PreflightCheckResult(check="schema", passed=True))
-
-        # Check 7: module-level preflight (optional)
-        if hasattr(module, "preflight") and callable(module.preflight):
-            try:
-                preflight_warnings = module.preflight(inputs, ctx)
+                preflight_warnings = pipe_ctx.module.preflight(inputs, pipe_ctx.context)
                 if isinstance(preflight_warnings, list) and preflight_warnings:
                     checks.append(
-                        PreflightCheckResult(
-                            check="module_preflight",
-                            passed=True,
-                            warnings=preflight_warnings,
-                        )
+                        PreflightCheckResult(check="module_preflight", passed=True, warnings=preflight_warnings)
                     )
                 else:
                     checks.append(PreflightCheckResult(check="module_preflight", passed=True))
             except Exception as exc:
-                # preflight() should not raise, but handle gracefully if it does
                 checks.append(
                     PreflightCheckResult(
                         check="module_preflight",
@@ -674,105 +684,50 @@ class Executor:
                 message=f"Invalid module ID: '{module_id}'. Must match pattern: {MODULE_ID_PATTERN.pattern}"
             )
 
-    def _check_safety(self, module_id: str, ctx: Context) -> None:
-        """Run call chain safety checks (step 2).
+    def _translate_abort(self, abort: PipelineAbortError) -> ModuleError:
+        """Translate PipelineAbortError into the appropriate ModuleError subclass.
 
-        Delegates to the standalone ``guard_call_chain`` algorithm (A20).
+        Maps pipeline step abort explanations back to the error types callers expect.
         """
-        guard_call_chain(
-            module_id,
-            ctx.call_chain,
-            max_call_depth=self._max_call_depth,
-            max_module_repeat=self._max_module_repeat,
-        )
+        explanation = abort.explanation or ""
+        step = abort.step
 
-    def _is_async_module(self, module_id: str, module: Any) -> bool:
-        """Check if a module's execute method is async, with caching."""
-        with self._async_cache_lock:
-            if module_id in self._async_cache:
-                return self._async_cache[module_id]
-            is_async = inspect.iscoroutinefunction(module.execute)
-            self._async_cache[module_id] = is_async
-            return is_async
+        if step == "module_lookup" and "not found" in explanation.lower():
+            # Extract module_id from explanation
+            return ModuleNotFoundError(module_id=explanation.split(": ")[-1] if ": " in explanation else "")
+        if step == "acl_check" and "denied" in explanation.lower():
+            # Parse "Access denied: {caller} -> {target}" from BuiltinACLCheck
+            caller_id = ""
+            target_id = ""
+            if " -> " in explanation:
+                parts = explanation.split(": ", 1)[-1]
+                pair = parts.split(" -> ", 1)
+                if len(pair) == 2:
+                    caller_id, target_id = pair[0].strip(), pair[1].strip()
+            return ACLDeniedError(caller_id=caller_id, target_id=target_id)
+        if step == "approval_gate":
+            if "rejected" in explanation.lower() or "denied" in explanation.lower():
+                return ApprovalDeniedError(message=explanation)
+            if "timeout" in explanation.lower():
+                return ApprovalTimeoutError(message=explanation)
+            if "pending" in explanation.lower():
+                return ApprovalPendingError(message=explanation)
+        if step == "input_validation" and "validation failed" in explanation.lower():
+            return SchemaValidationError(message=explanation)
+        if step == "output_validation" and "validation failed" in explanation.lower():
+            return SchemaValidationError(message=explanation)
+        if step == "execute":
+            if "cancelled" in explanation.lower():
+                from apcore.cancel import ExecutionCancelledError
+                return ExecutionCancelledError()
+            if "deadline" in explanation.lower() or "timed out" in explanation.lower():
+                return ModuleTimeoutError(module_id="", timeout_ms=0)
 
-    #: Grace period (ms) for cooperative cancellation before giving up.
-    _GRACE_PERIOD_MS: int = 5000
+        # Fallback: return as ModuleError
+        return ModuleError(code="PIPELINE_ABORT", message=explanation)
 
-    def _execute_with_timeout(
-        self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context
-    ) -> dict[str, Any]:
-        """Execute module with timeout enforcement (Algorithm A22, sync path).
-
-        Steps:
-        1. If timeout_ms == 0 → execute without timeout.
-        2. Run module in thread with timeout.
-        3. On timeout → send cooperative cancel via CancelToken.
-        4. Wait grace period (5s) for module to respond to cancel.
-        5. If still alive → log warning (Python cannot force-kill threads).
-        6. Raise ModuleTimeoutError.
-        """
-        timeout_ms = self._default_timeout
-
-        if timeout_ms < 0:
-            raise InvalidInputError(message=f"Negative timeout: {timeout_ms}ms")
-
-        # Global deadline enforcement (dual-timeout model)
-        if ctx._global_deadline is not None:
-            remaining_ms = max(0, (ctx._global_deadline - time.monotonic()) * 1000)
-            if remaining_ms <= 0:
-                raise ModuleTimeoutError(module_id=module_id, timeout_ms=self._global_timeout)
-            if timeout_ms == 0 or remaining_ms < timeout_ms:
-                timeout_ms = int(remaining_ms)
-
-        # Async module in sync context: bridge to async
-        if self._is_async_module(module_id, module):
-            return self._run_async_in_sync(module.execute(inputs, ctx), module_id, timeout_ms)
-
-        if timeout_ms == 0:
-            _logger.warning("Timeout disabled for module %s", module_id)
-            return module.execute(inputs, ctx)
-
-        result_holder: dict[str, Any] = {}
-        exception_holder: dict[str, Exception] = {}
-
-        def run_module() -> None:
-            try:
-                result_holder["output"] = module.execute(inputs, ctx)
-            except Exception as e:
-                exception_holder["error"] = e
-
-        thread = threading.Thread(target=run_module, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout_ms / 1000.0)
-
-        if thread.is_alive():
-            # Step 3: Cooperative cancellation via CancelToken
-            cancel_token = getattr(ctx, "cancel_token", None)
-            if cancel_token is not None:
-                cancel_token.cancel()
-                # Step 4: Wait grace period
-                thread.join(timeout=self._GRACE_PERIOD_MS / 1000.0)
-                if not thread.is_alive():
-                    # Module responded to cancellation
-                    if "error" in exception_holder:
-                        raise exception_holder["error"]
-                    if "output" in result_holder:
-                        return result_holder["output"]
-
-            # Step 5: Thread still alive — cannot force-kill in Python
-            if thread.is_alive():
-                _logger.warning(
-                    "Module '%s' timeout after %dms + %dms grace period; " "thread cannot be force-killed in Python",
-                    module_id,
-                    timeout_ms,
-                    self._GRACE_PERIOD_MS,
-                )
-            raise ModuleTimeoutError(module_id=module_id, timeout_ms=timeout_ms)
-
-        if "error" in exception_holder:
-            raise exception_holder["error"]
-
-        return result_holder["output"]
+    # _check_safety, _is_async_module, _execute_with_timeout removed in v0.17
+    # (replaced by BuiltinCallChainGuard, BuiltinExecute pipeline steps)
 
     def _run_async_in_sync(self, coro: Any, module_id: str, timeout_ms: int) -> Any:
         """Run an async coroutine from a sync context."""
@@ -833,7 +788,7 @@ class Executor:
         context: Context | None = None,
         version_hint: str | None = None,
     ) -> dict[str, Any]:
-        """Async counterpart to call(). Supports async modules natively.
+        """Async module execution — delegates to PipelineEngine.
 
         Args:
             module_id: The module to execute.
@@ -846,100 +801,32 @@ class Executor:
         """
         self._validate_module_id(module_id)
 
-        if inputs is None:
-            inputs = {}
-
-        # Step 1 -- Context
-        if context is None:
-            ctx = Context.create(executor=self)
-            ctx = ctx.child(module_id)
-            if self._global_timeout > 0:
-                ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
-        else:
-            ctx = context.child(module_id)
-
-        # Step 2 -- Safety Checks
-        self._check_safety(module_id, ctx)
-
-        # Step 3 -- Lookup
-        module = self._registry.get(module_id, version_hint=version_hint)
-        if module is None:
-            raise ModuleNotFoundError(module_id=module_id)
-
-        # Step 4 -- ACL
-        if self._acl is not None:
-            allowed = self._acl.check(ctx.caller_id, module_id, ctx)
-            if not allowed:
-                raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
-
-        # Step 5 -- Approval Gate
-        await self._check_approval_async(module, module_id, inputs, ctx)
-
-        # Step 6 -- Input Validation and Redaction
-        if hasattr(module, "input_schema") and module.input_schema is not None:
-            try:
-                module.input_schema.model_validate(inputs)
-            except pydantic.ValidationError as e:
-                raise SchemaValidationError(
-                    message="Input validation failed",
-                    errors=_convert_validation_errors(e),
-                ) from e
-            ctx.redacted_inputs = redact_sensitive(inputs, module.input_schema.model_json_schema())
-
-        executed_middlewares: list[Middleware] = []
-
+        pipe_ctx = PipelineContext(
+            module_id=module_id,
+            inputs=inputs or {},
+            context=context,
+            version_hint=version_hint,
+        )
         try:
-            # Step 7 -- Middleware Before (async-aware)
-            try:
-                inputs, executed_middlewares = await self._middleware_manager.execute_before_async(
-                    module_id, inputs, ctx
-                )
-            except MiddlewareChainError as mce:
-                executed_middlewares = mce.executed_middlewares
-                recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, inputs, mce.original, ctx, executed_middlewares
-                )
-                if recovery is not None:
-                    return recovery
-                executed_middlewares = []
-                raise mce.original from mce
-
-            # Cancel check before execution
-            if ctx.cancel_token is not None:
-                ctx.cancel_token.check()
-
-            # Step 8 -- Execute (async)
-            output = await self._execute_async(module, module_id, inputs, ctx)
-
-            # Step 9 -- Output Validation and Redaction
-            if hasattr(module, "output_schema") and module.output_schema is not None:
-                try:
-                    module.output_schema.model_validate(output)
-                except pydantic.ValidationError as e:
-                    raise SchemaValidationError(
-                        message="Output validation failed",
-                        errors=_convert_validation_errors(e),
-                    ) from e
-
-                REDACTED_OUTPUT.set(ctx, redact_sensitive(output, module.output_schema.model_json_schema()))
-
-            # Step 10 -- Middleware After (async-aware)
-            output = await self._middleware_manager.execute_after_async(module_id, inputs, output, ctx)
-
+            output, _trace = await self._pipeline_engine.run(self._strategy, pipe_ctx)
+        except PipelineAbortError as e:
+            raise self._translate_abort(e) from e
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # Error handling (A11): wrap and propagate
-            wrapped = propagate_error(exc, module_id, ctx)
-            if executed_middlewares:
+            # A11 error propagation + middleware on_error recovery
+            ctx_obj = pipe_ctx.context
+            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
+            executed_mw = pipe_ctx.executed_middlewares
+            if executed_mw:
                 recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, inputs, wrapped, ctx, executed_middlewares
+                    module_id, pipe_ctx.inputs, wrapped, ctx_obj, executed_mw
                 )
                 if recovery is not None:
                     return recovery
+            if isinstance(exc, MiddlewareChainError):
+                raise ModuleExecuteError(module_id=module_id, message=str(exc)) from exc
             raise wrapped from exc
-
-        # Step 11 -- Return
         return output
 
     async def stream(
@@ -951,11 +838,11 @@ class Executor:
     ) -> AsyncIterator[dict[str, Any]]:
         """Async generator that streams module output chunks.
 
-        Steps 1-6 are identical to call_async(). If the module has no stream()
-        method, falls back to call_async() and yields a single chunk. If the
-        module has stream(), iterates it, yields each chunk, and accumulates
-        results via shallow merge. After all chunks, validates accumulated
-        output and runs after-middleware.
+        Phase 1: Pipeline runs steps 1-7 (context, guard, lookup, ACL, approval,
+        middleware_before, input_validation). Step 8 (execute) sets up the stream
+        or falls back to single-chunk mode.
+        Phase 2: After streaming, runs output_validation + middleware_after on
+        accumulated output.
 
         Args:
             module_id: The module to execute.
@@ -968,168 +855,73 @@ class Executor:
         """
         self._validate_module_id(module_id)
 
-        effective_inputs: dict[str, Any] = dict(inputs) if inputs is not None else {}
+        pipe_ctx = PipelineContext(
+            module_id=module_id,
+            inputs=inputs or {},
+            context=context,
+            version_hint=version_hint,
+            stream=True,
+        )
 
-        # Step 1 -- Context
-        if context is None:
-            ctx = Context.create(executor=self)
-            ctx = ctx.child(module_id)
-            if self._global_timeout > 0:
-                ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
-        else:
-            ctx = context.child(module_id)
-
-        # Step 2 -- Safety Checks
-        self._check_safety(module_id, ctx)
-
-        # Step 3 -- Lookup
-        module = self._registry.get(module_id, version_hint=version_hint)
-        if module is None:
-            raise ModuleNotFoundError(module_id=module_id)
-
-        # Step 4 -- ACL
-        if self._acl is not None:
-            allowed = self._acl.check(ctx.caller_id, module_id, ctx)
-            if not allowed:
-                raise ACLDeniedError(caller_id=ctx.caller_id, target_id=module_id)
-
-        # Step 5 -- Approval Gate
-        await self._check_approval_async(module, module_id, effective_inputs, ctx)
-
-        # Step 6 -- Input Validation and Redaction
-        if hasattr(module, "input_schema") and module.input_schema is not None:
-            try:
-                module.input_schema.model_validate(effective_inputs)
-            except pydantic.ValidationError as e:
-                raise SchemaValidationError(
-                    message="Input validation failed",
-                    errors=_convert_validation_errors(e),
-                ) from e
-            ctx.redacted_inputs = redact_sensitive(effective_inputs, module.input_schema.model_json_schema())
-
-        executed_middlewares: list[Middleware] = []
-
+        # Phase 1: Run pipeline up to execute step.
+        # BuiltinExecute detects ctx.stream=True and checks for module.stream().
         try:
-            # Step 7 -- Middleware Before (async-aware)
-            try:
-                effective_inputs, executed_middlewares = await self._middleware_manager.execute_before_async(
-                    module_id, effective_inputs, ctx
-                )
-            except MiddlewareChainError as mce:
-                executed_middlewares = mce.executed_middlewares
-                recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, effective_inputs, mce.original, ctx, executed_middlewares
-                )
-                if recovery is not None:
-                    yield recovery
-                    return
-                executed_middlewares = []
-                raise mce.original from mce
-
-            # Cancel check before execution
-            if ctx.cancel_token is not None:
-                ctx.cancel_token.check()
-
-            # Step 8 -- Stream or fallback
-            if not hasattr(module, "stream") or module.stream is None:
-                # Fallback: delegate to _execute_async, yield single chunk
-                output = await self._execute_async(module, module_id, effective_inputs, ctx)
-
-                # Step 9 -- Output Validation and Redaction
-                if hasattr(module, "output_schema") and module.output_schema is not None:
-                    try:
-                        module.output_schema.model_validate(output)
-                    except pydantic.ValidationError as e:
-                        raise SchemaValidationError(
-                            message="Output validation failed",
-                            errors=_convert_validation_errors(e),
-                        ) from e
-
-                    REDACTED_OUTPUT.set(ctx, redact_sensitive(output, module.output_schema.model_json_schema()))
-
-                # Step 10 -- Middleware After (async-aware)
-                output = await self._middleware_manager.execute_after_async(module_id, effective_inputs, output, ctx)
-
-                yield output
-            else:
-                # Streaming path: iterate module.stream(), accumulate via deep merge
-                accumulated: dict[str, Any] = {}
-                async for chunk in module.stream(effective_inputs, ctx):
-                    _deep_merge(accumulated, chunk)
-                    yield chunk
-
-                # Step 9 -- Output Validation and Redaction on accumulated result
-                if hasattr(module, "output_schema") and module.output_schema is not None:
-                    try:
-                        module.output_schema.model_validate(accumulated)
-                    except pydantic.ValidationError as e:
-                        raise SchemaValidationError(
-                            message="Output validation failed",
-                            errors=_convert_validation_errors(e),
-                        ) from e
-
-                    REDACTED_OUTPUT.set(ctx, redact_sensitive(accumulated, module.output_schema.model_json_schema()))
-
-                # Step 10 -- Middleware After on accumulated result (async-aware)
-                accumulated = await self._middleware_manager.execute_after_async(
-                    module_id, effective_inputs, accumulated, ctx
-                )
-
+            output, _trace = await self._pipeline_engine.run(self._strategy, pipe_ctx)
+        except PipelineAbortError as e:
+            raise self._translate_abort(e) from e
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # Error handling (A11): wrap and propagate
-            wrapped = propagate_error(exc, module_id, ctx)
-            if executed_middlewares:
+            ctx_obj = pipe_ctx.context
+            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
+            if pipe_ctx.executed_middlewares:
                 recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id,
-                    effective_inputs,
-                    wrapped,
-                    ctx,
-                    executed_middlewares,
+                    module_id, pipe_ctx.inputs, wrapped, ctx_obj,
+                    pipe_ctx.executed_middlewares,
                 )
                 if recovery is not None:
                     yield recovery
                     return
             raise wrapped from exc
 
-    async def _execute_async(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> dict[str, Any]:
-        """Execute module asynchronously with timeout."""
-        timeout_ms = self._default_timeout
+        # If module has no stream(), pipeline already executed and set ctx.output
+        if pipe_ctx.output_stream is None:
+            yield pipe_ctx.output or {}
+            return
 
-        if timeout_ms < 0:
-            raise InvalidInputError(message=f"Negative timeout: {timeout_ms}ms")
+        # Phase 2: Iterate stream, accumulate chunks
+        accumulated: dict[str, Any] = {}
+        try:
+            async for chunk in pipe_ctx.output_stream:
+                _deep_merge(accumulated, chunk)
+                yield chunk
+        except ExecutionCancelledError:
+            raise
+        except Exception as exc:
+            ctx_obj = pipe_ctx.context
+            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
+            if pipe_ctx.executed_middlewares:
+                recovery = await self._middleware_manager.execute_on_error_async(
+                    module_id, pipe_ctx.inputs, wrapped, ctx_obj,
+                    pipe_ctx.executed_middlewares,
+                )
+                if recovery is not None:
+                    yield recovery
+                    return
+            raise wrapped from exc
 
-        # Global deadline enforcement (dual-timeout model)
-        if ctx._global_deadline is not None:
-            remaining_ms = max(0, (ctx._global_deadline - time.monotonic()) * 1000)
-            if remaining_ms <= 0:
-                raise ModuleTimeoutError(module_id=module_id, timeout_ms=self._global_timeout)
-            if timeout_ms == 0 or remaining_ms < timeout_ms:
-                timeout_ms = int(remaining_ms)
-
-        timeout_s = timeout_ms / 1000.0 if timeout_ms > 0 else None
-        is_async = self._is_async_module(module_id, module)
-
-        if is_async:
-            coro = module.execute(inputs, ctx)
-        else:
-            coro = asyncio.to_thread(module.execute, inputs, ctx)
-
-        if timeout_s is not None:
+        # Phase 3: Output validation + middleware_after on accumulated result
+        pipe_ctx.output = accumulated
+        post_steps = [s for s in self._strategy.steps
+                      if s.name in ("output_validation", "middleware_after", "return_result")]
+        if post_steps:
+            post_strategy = ExecutionStrategy("post_stream", post_steps)
             try:
-                return await asyncio.wait_for(coro, timeout=timeout_s)
-            except asyncio.TimeoutError:
-                raise ModuleTimeoutError(module_id=module_id, timeout_ms=timeout_ms)
-        else:
-            if timeout_ms == 0:
-                _logger.warning("Timeout disabled for module %s", module_id)
-            return await coro
+                await self._pipeline_engine.run(post_strategy, pipe_ctx)
+            except Exception:
+                pass  # Post-stream validation errors are non-fatal for already-yielded chunks
 
-    def clear_async_cache(self) -> None:
-        """Clear the async module detection cache."""
-        with self._async_cache_lock:
-            self._async_cache.clear()
+    # _execute_async removed in v0.17 (replaced by BuiltinExecute pipeline step)
 
     # -------------------------------------------------------------------------
     # Strategy resolution

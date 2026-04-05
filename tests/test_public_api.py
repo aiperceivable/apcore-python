@@ -509,6 +509,11 @@ class TestPublicAPIAll:
         "StepNotReplaceableError",
         "StepNameDuplicateError",
         "StrategyNotFoundError",
+        # Pipeline Configuration (0.17.0)
+        "register_step_type",
+        "unregister_step_type",
+        "registered_step_types",
+        "build_strategy_from_config",
         # Config Bus (0.15.0)
         "ConfigBindError",
         "ConfigEnvMapConflictError",

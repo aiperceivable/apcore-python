@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -9,8 +10,14 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from apcore.errors import ModuleError
+from apcore.utils.pattern import match_pattern
 
 _logger = logging.getLogger(__name__)
+
+
+def _any_match(patterns: tuple[str, ...], module_id: str) -> bool:
+    """Return True if any glob pattern matches the module_id (Algorithm A09)."""
+    return any(match_pattern(p, module_id) for p in patterns)
 
 
 @runtime_checkable
@@ -38,15 +45,23 @@ class BaseStep(ABC):
     def __init__(
         self,
         name: str,
-        description: str,
+        description: str = "",
         *,
         removable: bool = True,
         replaceable: bool = True,
+        match_modules: tuple[str, ...] | None = None,
+        ignore_errors: bool = False,
+        pure: bool = False,
+        timeout_ms: int = 0,
     ) -> None:
         self.name = name
         self.description = description
         self.removable = removable
         self.replaceable = replaceable
+        self.match_modules = match_modules
+        self.ignore_errors = ignore_errors
+        self.pure = pure
+        self.timeout_ms = timeout_ms
 
     @abstractmethod
     async def execute(self, ctx: PipelineContext) -> StepResult: ...
@@ -78,6 +93,10 @@ class PipelineContext:
     output_stream: Any | None = None
     strategy: ExecutionStrategy | None = None
     trace: PipelineTrace | None = None
+    # New in v0.17
+    dry_run: bool = False
+    version_hint: str | None = None
+    executed_middlewares: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -89,6 +108,7 @@ class StepTrace:
     result: StepResult
     skipped: bool = False
     decision_point: bool = False
+    skip_reason: str | None = None
 
 
 @dataclass
@@ -198,27 +218,128 @@ class PipelineEngine:
         # Index-based loop (not for-each) to support skip_to.
         while i < len(steps):
             step = steps[i]
-            step_start = time.monotonic()
-            try:
-                result = await step.execute(ctx)
-            except Exception as exc:
+
+            # ── Read declarative metadata (getattr for backward compat) ──
+            match_modules = getattr(step, "match_modules", None)
+            ignore_errors = getattr(step, "ignore_errors", False)
+            pure = getattr(step, "pure", False)
+            timeout_ms = getattr(step, "timeout_ms", 0)
+
+            # (1) match_modules filter
+            if match_modules is not None and not _any_match(
+                match_modules, ctx.module_id
+            ):
                 trace.steps.append(
                     StepTrace(
                         name=step.name,
-                        duration_ms=(time.monotonic() - step_start) * 1000,
-                        result=StepResult(action="abort", explanation=str(exc)),
-                        skipped=False,
-                        decision_point=False,
+                        duration_ms=0,
+                        result=StepResult(action="continue"),
+                        skipped=True,
+                        skip_reason="no_match",
+                    )
+                )
+                i += 1
+                continue
+
+            # (2) dry_run filter: skip impure steps
+            if getattr(ctx, "dry_run", False) and not pure:
+                trace.steps.append(
+                    StepTrace(
+                        name=step.name,
+                        duration_ms=0,
+                        result=StepResult(action="continue"),
+                        skipped=True,
+                        skip_reason="dry_run",
+                    )
+                )
+                i += 1
+                continue
+
+            # (3) Execute with optional per-step timeout
+            step_start = time.monotonic()
+            try:
+                if timeout_ms > 0:
+                    result = await asyncio.wait_for(
+                        step.execute(ctx),
+                        timeout=timeout_ms / 1000,
+                    )
+                else:
+                    result = await step.execute(ctx)
+            except asyncio.TimeoutError:
+                duration = (time.monotonic() - step_start) * 1000
+                if ignore_errors:
+                    _logger.warning(
+                        "Step '%s' timed out after %dms (ignored)",
+                        step.name,
+                        timeout_ms,
+                    )
+                    trace.steps.append(
+                        StepTrace(
+                            name=step.name,
+                            duration_ms=duration,
+                            result=StepResult(
+                                action="continue",
+                                explanation=f"Timeout after {timeout_ms}ms (ignored)",
+                            ),
+                            skip_reason="error_ignored",
+                        )
+                    )
+                    i += 1
+                    continue
+                trace.steps.append(
+                    StepTrace(
+                        name=step.name,
+                        duration_ms=duration,
+                        result=StepResult(
+                            action="abort",
+                            explanation=f"Step timed out after {timeout_ms}ms",
+                        ),
+                    )
+                )
+                trace.total_duration_ms = (time.monotonic() - start) * 1000
+                raise PipelineAbortError(
+                    step=step.name,
+                    explanation=f"Step timed out after {timeout_ms}ms",
+                    trace=trace,
+                )
+            except Exception as exc:
+                duration = (time.monotonic() - step_start) * 1000
+                # (4) ignore_errors: log and continue
+                if ignore_errors:
+                    _logger.warning(
+                        "Step '%s' failed (ignored): %s", step.name, exc
+                    )
+                    trace.steps.append(
+                        StepTrace(
+                            name=step.name,
+                            duration_ms=duration,
+                            result=StepResult(
+                                action="continue",
+                                explanation=str(exc),
+                            ),
+                            skip_reason="error_ignored",
+                        )
+                    )
+                    i += 1
+                    continue
+                # Not ignored: record and raise
+                trace.steps.append(
+                    StepTrace(
+                        name=step.name,
+                        duration_ms=duration,
+                        result=StepResult(
+                            action="abort", explanation=str(exc)
+                        ),
                     )
                 )
                 trace.total_duration_ms = (time.monotonic() - start) * 1000
                 raise
 
+            # (5) Record successful step trace
             step_trace = StepTrace(
                 name=step.name,
                 duration_ms=(time.monotonic() - step_start) * 1000,
                 result=result,
-                skipped=False,
                 decision_point=result.confidence is not None,
             )
             trace.steps.append(step_trace)
@@ -259,8 +380,8 @@ class PipelineEngine:
 
         trace.success = True
         trace.total_duration_ms = (time.monotonic() - start) * 1000
-        final_output = ctx.validated_output if ctx.validated_output is not None else ctx.output
-        return final_output, trace
+        # Use ctx.output — it's the most up-to-date (middleware_after may modify it)
+        return ctx.output, trace
 
 
 # ---------------------------------------------------------------------------

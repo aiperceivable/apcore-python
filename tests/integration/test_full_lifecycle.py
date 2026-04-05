@@ -386,7 +386,11 @@ class TestFullLifecycle:
         assert len(middleware.error_calls) >= 1
 
     def test_schema_validation_in_full_pipeline(self) -> None:
-        """Invalid inputs must raise SchemaValidationError; middleware must NOT be called."""
+        """Invalid inputs must raise SchemaValidationError.
+
+        v0.17: middleware_before runs BEFORE input_validation (swap).
+        So middleware IS called even when validation later fails.
+        """
         registry = Registry()
         registry.register("mod.strict", StrictModule())
 
@@ -402,7 +406,9 @@ class TestFullLifecycle:
         with pytest.raises(SchemaValidationError):
             executor.call("mod.strict", {"name": "Alice"})
 
-        assert len(middleware.before_calls) == 0
+        # v0.17: middleware_before runs before validation, so before IS called
+        assert len(middleware.before_calls) == 1
+        # after is NOT called because pipeline aborts at validation
         assert len(middleware.after_calls) == 0
 
     def test_full_pipeline_with_acl_conditions(self) -> None:
