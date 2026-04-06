@@ -53,6 +53,8 @@ class BaseStep(ABC):
         ignore_errors: bool = False,
         pure: bool = False,
         timeout_ms: int = 0,
+        requires: tuple[str, ...] = (),
+        provides: tuple[str, ...] = (),
     ) -> None:
         self.name = name
         self.description = description
@@ -62,6 +64,8 @@ class BaseStep(ABC):
         self.ignore_errors = ignore_errors
         self.pure = pure
         self.timeout_ms = timeout_ms
+        self.requires = requires
+        self.provides = provides
 
     @abstractmethod
     async def execute(self, ctx: PipelineContext) -> StepResult: ...
@@ -143,6 +147,22 @@ class ExecutionStrategy:
         if len(names) != len(set(names)):
             dupes = [n for n in names if names.count(n) > 1]
             raise StepNameDuplicateError(f"Duplicate step names: {set(dupes)}")
+        self._validate_dependencies()
+
+    def _validate_dependencies(self) -> None:
+        """Warn if any step's requires are not provided by a preceding step."""
+        provided: set[str] = set()
+        for step in self.steps:
+            requires = getattr(step, "requires", ())
+            missing = set(requires) - provided
+            if missing:
+                _logger.warning(
+                    "Step '%s' requires %s, but no preceding step provides them. " "This may cause runtime errors.",
+                    step.name,
+                    missing,
+                )
+            provides = getattr(step, "provides", ())
+            provided.update(provides)
 
     def insert_after(self, anchor: str, step: Step) -> None:
         """Insert a step after the named anchor step."""
@@ -151,6 +171,7 @@ class ExecutionStrategy:
         for i, s in enumerate(self.steps):
             if s.name == anchor:
                 self.steps.insert(i + 1, step)
+                self._validate_dependencies()
                 return
         raise StepNotFoundError(f"Anchor step '{anchor}' not found")
 
@@ -161,6 +182,7 @@ class ExecutionStrategy:
         for i, s in enumerate(self.steps):
             if s.name == anchor:
                 self.steps.insert(i, step)
+                self._validate_dependencies()
                 return
         raise StepNotFoundError(f"Anchor step '{anchor}' not found")
 

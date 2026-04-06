@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-04-06
+
+### Added
+
+- **`build_minimal_strategy()`** — 4-step pipeline (context → lookup → execute → return) for pre-validated internal hot paths. Registered as `"minimal"` in Executor preset builders.
+- **`requires` / `provides` on `BaseStep`** — Optional advisory fields declaring step dependencies. `ExecutionStrategy` validates dependency chains at construction and insertion, emitting warnings for unmet `requires`.
+
+### Fixed
+
+- **`"minimal"` added to preset builders** — `Executor(strategy="minimal")` now works. Previously missing from `_resolve_strategy_name()` preset dict.
+- **Executor docstrings updated** — Constructor and `_resolve_strategy_name` docstrings now list all 5 presets (was missing `"minimal"`).
+
+---
+
 ## [0.17.0] - 2026-04-05
 
 ### Added

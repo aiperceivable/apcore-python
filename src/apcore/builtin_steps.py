@@ -54,6 +54,7 @@ __all__ = [
     "build_internal_strategy",
     "build_testing_strategy",
     "build_performance_strategy",
+    "build_minimal_strategy",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ class BuiltinContextCreation(BaseStep):
             removable=False,
             replaceable=False,
             pure=True,
+            provides=("context",),
         )
         self._config = config
         self._executor = executor
@@ -129,6 +131,7 @@ class BuiltinCallChainGuard(BaseStep):
             removable=True,
             replaceable=True,
             pure=True,
+            requires=("context",),
         )
         self._config = config
         if config is not None:
@@ -166,6 +169,7 @@ class BuiltinModuleLookup(BaseStep):
             removable=False,
             replaceable=False,
             pure=True,
+            provides=("module",),
         )
         self._registry = registry
 
@@ -196,6 +200,7 @@ class BuiltinACLCheck(BaseStep):
             removable=True,
             replaceable=True,
             pure=True,
+            requires=("context", "module"),
         )
         self._acl = acl
 
@@ -236,6 +241,7 @@ class BuiltinApprovalGate(BaseStep):
             removable=True,
             replaceable=True,
             pure=False,
+            requires=("context", "module"),
         )
         self._handler = handler
         self._executor = executor
@@ -404,6 +410,8 @@ class BuiltinInputValidation(BaseStep):
             removable=True,
             replaceable=True,
             pure=True,
+            requires=("module",),
+            provides=("validated_inputs",),
         )
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
@@ -455,6 +463,8 @@ class BuiltinExecute(BaseStep):
             removable=False,
             replaceable=True,
             pure=False,
+            requires=("module",),
+            provides=("output",),
         )
         self._config = config
         if config is not None:
@@ -553,6 +563,8 @@ class BuiltinOutputValidation(BaseStep):
             removable=True,
             replaceable=True,
             pure=True,
+            requires=("module", "output"),
+            provides=("validated_output",),
         )
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
@@ -665,6 +677,7 @@ class BuiltinReturnResult(BaseStep):
             removable=False,
             replaceable=False,
             pure=True,
+            requires=("output",),
         )
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
@@ -776,4 +789,29 @@ def build_performance_strategy(**kwargs: Any) -> ExecutionStrategy:
     s.remove("middleware_before")
     s.remove("middleware_after")
     object.__setattr__(s, "name", "performance")
+    return s
+
+
+def build_minimal_strategy(**kwargs: Any) -> ExecutionStrategy:
+    """Build a minimal strategy: context → lookup → execute → return only.
+
+    Suitable for pre-validated internal hot paths where ACL, approval,
+    middleware, and schema validation are unnecessary. Use with caution —
+    no safety checks, no input/output validation, no middleware.
+
+    Args:
+        **kwargs: Forwarded to build_standard_strategy().
+
+    Returns:
+        An ExecutionStrategy named "minimal" with 4 steps.
+    """
+    s = build_standard_strategy(**kwargs)
+    s.remove("call_chain_guard")
+    s.remove("acl_check")
+    s.remove("approval_gate")
+    s.remove("middleware_before")
+    s.remove("input_validation")
+    s.remove("output_validation")
+    s.remove("middleware_after")
+    object.__setattr__(s, "name", "minimal")
     return s

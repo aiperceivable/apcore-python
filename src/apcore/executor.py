@@ -154,7 +154,8 @@ class Executor:
             registry: Module registry for looking up modules by ID.
             strategy: Optional execution strategy. Can be an ExecutionStrategy
                 instance, a preset name string ("standard", "internal",
-                "testing", "performance"), or None (defaults to standard).
+                "testing", "performance", "minimal"), or None (defaults to
+                standard).
             middlewares: Optional list of middleware instances to register.
             acl: Optional ACL for access control enforcement.
             config: Optional configuration for timeout/depth settings.
@@ -875,7 +876,7 @@ class Executor:
 
         Args:
             name: Strategy name ("standard", "internal", "testing", "performance",
-                or a previously registered name).
+                "minimal", or a previously registered name).
             **kwargs: Forwarded to preset builder functions.
 
         Returns:
@@ -886,6 +887,7 @@ class Executor:
         """
         from apcore.builtin_steps import (
             build_internal_strategy,
+            build_minimal_strategy,
             build_performance_strategy,
             build_standard_strategy,
             build_testing_strategy,
@@ -896,6 +898,7 @@ class Executor:
             "internal": build_internal_strategy,
             "testing": build_testing_strategy,
             "performance": build_performance_strategy,
+            "minimal": build_minimal_strategy,
         }
 
         if name in preset_builders:
