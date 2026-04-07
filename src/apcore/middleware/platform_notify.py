@@ -17,7 +17,7 @@ class PlatformNotifyMiddleware(Middleware):
 
     Emits ``error_threshold_exceeded`` when a module's error rate crosses the
     configured threshold, ``latency_threshold_exceeded`` when p99 latency
-    exceeds the limit, and ``module_health_changed`` when a previously alerted
+    exceeds the limit, and ``apcore.health.recovered`` when a previously alerted
     module recovers below ``threshold * 0.5``.
 
     Hysteresis prevents repeated alerts until recovery is observed.
@@ -169,31 +169,19 @@ class PlatformNotifyMiddleware(Middleware):
                 self._alerted[module_id].add("latency")
 
     def _check_error_recovery(self, module_id: str) -> None:
-        """Emit apcore.health.recovered (canonical) and module_health_changed (legacy alias)."""
+        """Emit ``apcore.health.recovered`` (canonical event) when a previously alerted module recovers."""
         error_rate = self._compute_error_rate(module_id)
         with self._alert_lock:
             if "error_rate" not in self._alerted.get(module_id, set()):
                 return
             if error_rate < self._error_rate_threshold * 0.5:
-                timestamp = datetime.now(timezone.utc).isoformat()
-                data: dict[str, Any] = {"status": "recovered", "error_rate": error_rate}
                 self._emitter.emit(
                     ApCoreEvent(
                         event_type="apcore.health.recovered",
                         module_id=module_id,
-                        timestamp=timestamp,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
                         severity="info",
-                        data=data,
-                    )
-                )
-                # Legacy alias — remove in 0.16.0
-                self._emitter.emit(
-                    ApCoreEvent(
-                        event_type="module_health_changed",
-                        module_id=module_id,
-                        timestamp=timestamp,
-                        severity="info",
-                        data=data,
+                        data={"status": "recovered", "error_rate": error_rate},
                     )
                 )
                 self._alerted[module_id].discard("error_rate")

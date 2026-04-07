@@ -170,14 +170,16 @@ The longest-prefix-match dispatch algorithm ensures that `APCORE_OBSERVABILITY_T
 
 Canonical event type names use dot-namespaced identifiers. `apcore.*` is reserved for core framework events; adapter packages use their own prefix (e.g., `apcore-mcp.*`).
 
-| Canonical name | Replaces | Emitted by |
-|---------------|---------|-----------|
-| `apcore.module.toggled` | `module_health_changed` | `system.control.toggle_feature` |
-| `apcore.health.recovered` | `module_health_changed` | `PlatformNotifyMiddleware` (error rate recovery) |
-| `apcore.config.updated` | `config_changed` | `system.control.update_config` |
-| `apcore.module.reloaded` | `config_changed` | `system.control.reload_module` |
+| Canonical name | Emitted by |
+|---------------|-----------|
+| `apcore.module.toggled` | `system.control.toggle_feature` |
+| `apcore.health.recovered` | `PlatformNotifyMiddleware` (error rate recovery) |
+| `apcore.config.updated` | `system.control.update_config` |
+| `apcore.module.reloaded` | `system.control.reload_module` |
 
-The legacy short-form names are still emitted alongside the canonical names during the transition period.
+> **v0.18.0 — legacy aliases removed.** Listeners that previously subscribed to
+> `module_health_changed` or `config_changed` will no longer receive events.
+> Migrate subscriptions to the canonical names above.
 
 ## Documentation
 

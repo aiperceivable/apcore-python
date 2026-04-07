@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-04-07
+
+### Removed (BREAKING)
+
+- **Legacy event aliases removed.** Per the §9.16 naming convention shipped in v0.15, the dual-emission transition period for `module_health_changed` and `config_changed` ended in this release (the original removal deadline was v0.16.0). Listeners that subscribed to these legacy names will no longer receive events. Migrate subscriptions to the canonical names:
+  - `module_health_changed` → `apcore.module.toggled` (from `system.control.toggle_feature`) **or** `apcore.health.recovered` (from `PlatformNotifyMiddleware`)
+  - `config_changed` → `apcore.config.updated` (from `system.control.update_config`) **or** `apcore.module.reloaded` (from `system.control.reload_module`)
+- **Renamed private method `_emit_config_changed` → `_emit_module_reloaded`** in `system.control.reload_module` to reflect the canonical event it emits. Private API, no public-surface impact.
+
+### Fixed
+
+- **`ModuleAnnotations.from_dict` precedence inversion** — Per PROTOCOL_SPEC §4.4.1 rule 7, when the same key appears both in a nested `extra` object and as a top-level overflow key, the **nested value now wins** (previously the top-level overflow would silently overwrite it). Behavior change is observable only in the pathological case where an input contains both forms of the same key — no conformant producer emits this. Top-level overflow keys are still tolerated and merged into `extra` for backward compatibility.
+
 ## [0.17.1] - 2026-04-06
 
 ### Added

@@ -150,8 +150,9 @@ class TestPlatformNotifyMiddleware:
 
         emitter.reset_mock()
         mw.after("mod.a", {}, {}, MagicMock())
-        # Should emit module_health_changed with status=recovered
-        recovery_calls = [c for c in emitter.emit.call_args_list if c[0][0].event_type == "module_health_changed"]
+        # Should emit apcore.health.recovered with status=recovered.
+        # Legacy 'module_health_changed' alias removed in v0.18.0.
+        recovery_calls = [c for c in emitter.emit.call_args_list if c[0][0].event_type == "apcore.health.recovered"]
         assert len(recovery_calls) == 1
         event: ApCoreEvent = recovery_calls[0][0][0]
         assert event.data["status"] == "recovered"

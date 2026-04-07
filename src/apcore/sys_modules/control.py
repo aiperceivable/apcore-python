@@ -175,27 +175,18 @@ class UpdateConfigModule:
         return True
 
     def _emit_event(self, key: str, old_value: Any, new_value: Any) -> None:
-        """Emit apcore.config.updated (canonical) and config_changed (legacy alias)."""
-        payload = ApCoreEvent(
-            event_type="apcore.config.updated",
-            module_id="system.control.update_config",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            severity="info",
-            data={
-                "key": key,
-                "old_value": old_value,
-                "new_value": new_value,
-            },
-        )
-        self._emitter.emit(payload)
-        # Legacy alias — remove in 0.16.0
+        """Emit ``apcore.config.updated`` (canonical event)."""
         self._emitter.emit(
             ApCoreEvent(
-                event_type="config_changed",
+                event_type="apcore.config.updated",
                 module_id="system.control.update_config",
-                timestamp=payload.timestamp,
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 severity="info",
-                data=payload.data,
+                data={
+                    "key": key,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                },
             )
         )
 
@@ -290,7 +281,7 @@ class ReloadModuleModule:
         elapsed_ms = (time.monotonic() - start) * 1000.0
 
         new_version = getattr(new_module, "version", "1.0.0")
-        self._emit_config_changed(module_id, previous_version, new_version)
+        self._emit_module_reloaded(module_id, previous_version, new_version)
         self._log_reload(module_id, previous_version, new_version, reason)
 
         return {
@@ -349,27 +340,18 @@ class ReloadModuleModule:
         """
         self._registry.register_internal(module_id, module)
 
-    def _emit_config_changed(self, module_id: str, previous_version: str, new_version: str) -> None:
-        """Emit apcore.module.reloaded (canonical) and config_changed (legacy alias)."""
-        payload = ApCoreEvent(
-            event_type="apcore.module.reloaded",
-            module_id=module_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            severity="info",
-            data={
-                "previous_version": previous_version,
-                "new_version": new_version,
-            },
-        )
-        self._emitter.emit(payload)
-        # Legacy alias — remove in 0.16.0
+    def _emit_module_reloaded(self, module_id: str, previous_version: str, new_version: str) -> None:
+        """Emit ``apcore.module.reloaded`` (canonical event)."""
         self._emitter.emit(
             ApCoreEvent(
-                event_type="config_changed",
+                event_type="apcore.module.reloaded",
                 module_id=module_id,
-                timestamp=payload.timestamp,
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 severity="info",
-                data=payload.data,
+                data={
+                    "previous_version": previous_version,
+                    "new_version": new_version,
+                },
             )
         )
 
@@ -491,23 +473,14 @@ class ToggleFeatureModule:
             self._toggle_state.disable(module_id)
 
     def _emit_event(self, module_id: str, enabled: bool) -> None:
-        """Emit apcore.module.toggled (canonical) and module_health_changed (legacy alias)."""
-        payload = ApCoreEvent(
-            event_type="apcore.module.toggled",
-            module_id=module_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            severity="info",
-            data={"enabled": enabled},
-        )
-        self._emitter.emit(payload)
-        # Legacy alias — remove in 0.16.0
+        """Emit ``apcore.module.toggled`` (canonical event)."""
         self._emitter.emit(
             ApCoreEvent(
-                event_type="module_health_changed",
+                event_type="apcore.module.toggled",
                 module_id=module_id,
-                timestamp=payload.timestamp,
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 severity="info",
-                data=payload.data,
+                data={"enabled": enabled},
             )
         )
 

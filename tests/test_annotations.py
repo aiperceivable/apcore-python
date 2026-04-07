@@ -119,6 +119,23 @@ class TestFromDict:
         assert ann.extra["mcp.cat"] == "tools"
         assert ann.extra["new_field"] == "val"
 
+    def test_nested_extra_wins_over_top_level_collision(self) -> None:
+        # PROTOCOL_SPEC §4.4.1 rule 7: when the same key appears both nested and
+        # at the root, the nested value MUST win.
+        data = {
+            "mcp.category": "LEGACY_VALUE",
+            "extra": {"mcp.category": "CANONICAL_VALUE"},
+        }
+        ann = ModuleAnnotations.from_dict(data)
+        assert ann.extra["mcp.category"] == "CANONICAL_VALUE"
+
+    def test_legacy_flattened_form_still_accepted(self) -> None:
+        # Backward compatibility: top-level overflow keys still normalize into extra.
+        data = {"readonly": True, "mcp.category": "tools", "cli.approval_message": "ok?"}
+        ann = ModuleAnnotations.from_dict(data)
+        assert ann.readonly is True
+        assert ann.extra == {"mcp.category": "tools", "cli.approval_message": "ok?"}
+
     def test_missing_fields_use_defaults(self) -> None:
         ann = ModuleAnnotations.from_dict({})
         assert ann.readonly is False

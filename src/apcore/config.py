@@ -95,6 +95,12 @@ _CONSTRAINTS: dict[str, tuple[Any, str]] = {
 }
 
 #: Default configuration values.
+#:
+#: NOTE: ``version`` is the frozen baseline for legacy-mode configs (those
+#: that omit an explicit ``version`` field). It identifies the spec version
+#: whose semantics legacy mode parses against, NOT the current SDK version.
+#: Do not bump this with each spec MINOR — only when legacy-mode parsing
+#: semantics actually change.
 _DEFAULTS: dict[str, Any] = {
     "version": "0.16.0",
     "extensions": {

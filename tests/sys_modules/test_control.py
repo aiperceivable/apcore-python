@@ -103,16 +103,14 @@ class TestUpdateConfigEmitsConfigChangedEvent:
             {"key": "executor.default_timeout", "value": 5000, "reason": "event test"},
             None,
         )
-        # Two events: canonical (apcore.config.updated) + legacy alias (config_changed)
-        assert emitter.emit.call_count == 2
-        events = [call[0][0] for call in emitter.emit.call_args_list]
-        event_types = {e.event_type for e in events}
-        assert "apcore.config.updated" in event_types
-        assert "config_changed" in event_types
-        canonical = next(e for e in events if e.event_type == "apcore.config.updated")
-        assert canonical.data["key"] == "executor.default_timeout"
-        assert canonical.data["old_value"] == 30000
-        assert canonical.data["new_value"] == 5000
+        # Single canonical event (apcore.config.updated). Legacy 'config_changed'
+        # alias removed in v0.18.0 — see CHANGELOG and PROTOCOL_SPEC §9.16.
+        assert emitter.emit.call_count == 1
+        event = emitter.emit.call_args_list[0][0][0]
+        assert event.event_type == "apcore.config.updated"
+        assert event.data["key"] == "executor.default_timeout"
+        assert event.data["old_value"] == 30000
+        assert event.data["new_value"] == 5000
 
 
 class TestUpdateConfigRestrictedKeySysModulesEnabled:
@@ -386,15 +384,13 @@ class TestReloadModuleEmitsConfigChangedEvent:
                 context=None,
             )
 
-        # Two events: canonical (apcore.module.reloaded) + legacy alias (config_changed)
-        assert mock_emit.call_count == 2
-        events = [call[0][0] for call in mock_emit.call_args_list]
-        assert all(isinstance(e, ApCoreEvent) for e in events)
-        event_types = {e.event_type for e in events}
-        assert "apcore.module.reloaded" in event_types
-        assert "config_changed" in event_types
-        canonical = next(e for e in events if e.event_type == "apcore.module.reloaded")
-        assert canonical.module_id == "my.module"
+        # Single canonical event (apcore.module.reloaded). Legacy 'config_changed'
+        # alias removed in v0.18.0 — see CHANGELOG and PROTOCOL_SPEC §9.16.
+        assert mock_emit.call_count == 1
+        event = mock_emit.call_args_list[0][0][0]
+        assert isinstance(event, ApCoreEvent)
+        assert event.event_type == "apcore.module.reloaded"
+        assert event.module_id == "my.module"
 
 
 class TestReloadModuleNoEventOnFailure:
@@ -616,9 +612,9 @@ class TestToggleFeatureModuleNotFound:
         assert exc_info.value.code == "MODULE_NOT_FOUND"
 
 
-class TestToggleFeatureEmitsModuleHealthChanged:
-    def test_toggle_feature_emits_module_health_changed(self, _clear_disabled_modules: Any) -> None:
-        """Verify emit() is called with canonical and legacy events on toggle."""
+class TestToggleFeatureEmitsCanonicalEvent:
+    def test_toggle_feature_emits_canonical_event(self, _clear_disabled_modules: Any) -> None:
+        """Verify emit() is called with the canonical apcore.module.toggled event on toggle."""
         registry, _ = _make_registry_with_module("my.module")
         emitter = EventEmitter()
         emitter.emit = MagicMock()  # type: ignore[method-assign]
@@ -627,16 +623,14 @@ class TestToggleFeatureEmitsModuleHealthChanged:
             {"module_id": "my.module", "enabled": False, "reason": "test"},
             context=None,
         )
-        # Two events: canonical (apcore.module.toggled) + legacy alias (module_health_changed)
-        assert emitter.emit.call_count == 2
-        events = [call[0][0] for call in emitter.emit.call_args_list]
-        assert all(isinstance(e, ApCoreEvent) for e in events)
-        event_types = {e.event_type for e in events}
-        assert "apcore.module.toggled" in event_types
-        assert "module_health_changed" in event_types
-        canonical = next(e for e in events if e.event_type == "apcore.module.toggled")
-        assert canonical.module_id == "my.module"
-        assert canonical.data["enabled"] is False
+        # Single canonical event (apcore.module.toggled). Legacy
+        # 'module_health_changed' alias removed in v0.18.0.
+        assert emitter.emit.call_count == 1
+        event = emitter.emit.call_args_list[0][0][0]
+        assert isinstance(event, ApCoreEvent)
+        assert event.event_type == "apcore.module.toggled"
+        assert event.module_id == "my.module"
+        assert event.data["enabled"] is False
 
 
 class TestToggleFeatureSurvivesReload:

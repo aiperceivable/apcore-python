@@ -106,13 +106,21 @@ class ModuleAnnotations:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ModuleAnnotations:
-        """Deserialize from dict, capturing unknown keys into extra."""
+        """Deserialize from dict per PROTOCOL_SPEC §4.4.1 wire format.
+
+        - The canonical form carries extension data under a nested ``extra`` object.
+        - Legacy top-level overflow keys (unknown keys at the annotations root) are
+          tolerated for backward compatibility and merged into ``extra``.
+        - When the same key appears in BOTH the nested ``extra`` AND as a top-level
+          overflow key, the nested value wins (§4.4.1 rule 7).
+        """
         known = {k: v for k, v in data.items() if k in _CANONICAL_FIELDS}
-        unknown = {k: v for k, v in data.items() if k not in _CANONICAL_FIELDS}
+        overflow = {k: v for k, v in data.items() if k not in _CANONICAL_FIELDS}
         explicit_extra = known.pop("extra", {})
         if not isinstance(explicit_extra, dict):
             explicit_extra = {}
-        extra: dict[str, Any] = {**explicit_extra, **unknown}
+        # §4.4.1 rule 7: nested explicit `extra` wins over legacy top-level overflow.
+        extra: dict[str, Any] = {**overflow, **explicit_extra}
         return cls(**known, extra=extra)
 
 
