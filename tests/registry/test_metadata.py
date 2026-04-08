@@ -148,6 +148,60 @@ class TestMergeModuleMetadata:
         assert result["metadata"]["key2"] == "val2"
         assert result["metadata"]["shared"] == "yaml"
 
+    def test_annotations_field_level_merge(self) -> None:
+        """Spec §4.13: YAML annotations merge over code annotations field-by-field.
+
+        A YAML annotation that flips one flag must NOT blow away unrelated
+        flags set on the code-level annotations dataclass.
+        """
+        from apcore.module import ModuleAnnotations
+
+        class MockModule:
+            description = "d"
+            annotations = ModuleAnnotations(readonly=True, idempotent=True)
+
+        # YAML only overrides `destructive`; readonly/idempotent must survive.
+        meta = {"annotations": {"destructive": True}}
+        result = merge_module_metadata(MockModule, meta)
+        assert isinstance(result["annotations"], ModuleAnnotations)
+        assert result["annotations"].destructive is True
+        assert result["annotations"].readonly is True
+        assert result["annotations"].idempotent is True
+
+    def test_annotations_yaml_only(self) -> None:
+        """YAML annotations are honored when no code annotations exist."""
+        from apcore.module import ModuleAnnotations
+
+        class MockModule:
+            description = "d"
+
+        result = merge_module_metadata(MockModule, {"annotations": {"readonly": True}})
+        assert isinstance(result["annotations"], ModuleAnnotations)
+        assert result["annotations"].readonly is True
+
+    def test_annotations_none_when_neither_provided(self) -> None:
+        """Result.annotations is None when neither code nor YAML defines them."""
+
+        class MockModule:
+            description = "d"
+
+        result = merge_module_metadata(MockModule, {})
+        assert result["annotations"] is None
+
+    def test_examples_yaml_overrides_code(self) -> None:
+        """Spec §4.13: YAML examples take full priority over code examples."""
+        from apcore.module import ModuleExample
+
+        class MockModule:
+            description = "d"
+            examples = [ModuleExample(title="from_code", inputs={}, output={})]
+
+        meta = {"examples": [{"title": "from_yaml", "inputs": {"x": 1}, "output": {"y": 2}}]}
+        result = merge_module_metadata(MockModule, meta)
+        assert len(result["examples"]) == 1
+        assert result["examples"][0].title == "from_yaml"
+        assert result["examples"][0].inputs == {"x": 1}
+
 
 # === load_id_map() ===
 

@@ -723,6 +723,51 @@ class BadLoadModule:
         assert defn.version == "3.0.0"
         assert defn.tags == ["yaml_tag"]
 
+    def test_discover_yaml_annotations_field_level_merge(self, tmp_path: Path) -> None:
+        """Spec §4.13: YAML annotations merge field-by-field over code annotations.
+
+        Regression: prior to wiring schema.merge_annotations into the registry,
+        ``descriptor.annotations`` was read directly from the class attribute,
+        so YAML annotations were silently dropped.
+        """
+        from apcore.module import ModuleAnnotations
+
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        # Module class defines readonly=True; YAML adds destructive=True.
+        # The merge must preserve readonly while applying destructive.
+        (ext / "annotated.py").write_text(
+            "from pydantic import BaseModel\n"
+            "from apcore.module import ModuleAnnotations\n"
+            "\n"
+            "class InputModel(BaseModel):\n"
+            "    value: str\n"
+            "\n"
+            "class OutputModel(BaseModel):\n"
+            "    result: str\n"
+            "\n"
+            "class AnnotatedModule:\n"
+            "    input_schema = InputModel\n"
+            "    output_schema = OutputModel\n"
+            "    description = 'mod'\n"
+            "    annotations = ModuleAnnotations(readonly=True, idempotent=True)\n"
+            "\n"
+            "    def execute(self, inputs, context=None):\n"
+            "        return {'result': inputs['value']}\n"
+        )
+        (ext / "annotated_meta.yaml").write_text(yaml.dump({"annotations": {"destructive": True}}))
+
+        reg = Registry(extensions_dir=str(ext))
+        reg.discover()
+        defn = reg.get_definition("annotated")
+        assert defn is not None
+        assert isinstance(defn.annotations, ModuleAnnotations)
+        # YAML-supplied flag is honored…
+        assert defn.annotations.destructive is True
+        # …and code-set flags are preserved (field-level merge, not whole-replace).
+        assert defn.annotations.readonly is True
+        assert defn.annotations.idempotent is True
+
 
 # ===== clear_cache() =====
 

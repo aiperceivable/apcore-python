@@ -10,6 +10,7 @@ import yaml
 
 from apcore.errors import ConfigError, ConfigNotFoundError
 from apcore.registry.types import DependencyInfo
+from apcore.schema.annotations import merge_annotations, merge_examples
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,15 @@ def parse_dependencies(deps_raw: list[dict[str, Any]]) -> list[DependencyInfo]:
 
 
 def merge_module_metadata(module_class: type, meta: dict[str, Any]) -> dict[str, Any]:
-    """Merge YAML metadata over code-level attributes. YAML wins on conflicts."""
+    """Merge YAML metadata over code-level attributes per spec §4.13.
+
+    Scalar fields (description, name, tags, version, documentation) follow
+    "YAML wins, code is the fallback". The ``annotations`` field uses
+    field-level merging via :func:`apcore.schema.merge_annotations` so a YAML
+    annotation override does not blow away unrelated code-set flags. The
+    ``examples`` field uses :func:`apcore.schema.merge_examples` (YAML wins
+    fully when present). The ``metadata`` field is a shallow dict merge.
+    """
     code_desc = getattr(module_class, "description", "")
     code_name = getattr(module_class, "name", None)
     code_tags = getattr(module_class, "tags", [])
@@ -77,13 +86,20 @@ def merge_module_metadata(module_class: type, meta: dict[str, Any]) -> dict[str,
     yaml_metadata = meta.get("metadata", {})
     merged_metadata = {**(code_metadata or {}), **(yaml_metadata or {})}
 
+    yaml_annotations = meta.get("annotations")
+    merged_annotations: Any
+    if yaml_annotations is None and code_annotations is None:
+        merged_annotations = None
+    else:
+        merged_annotations = merge_annotations(yaml_annotations, code_annotations)
+
     return {
         "description": meta.get("description") or code_desc,
         "name": meta.get("name") or code_name,
         "tags": meta.get("tags") if meta.get("tags") is not None else (code_tags or []),
         "version": meta.get("version") or code_version,
-        "annotations": (meta.get("annotations") if meta.get("annotations") is not None else code_annotations),
-        "examples": (meta.get("examples") if meta.get("examples") is not None else (code_examples or [])),
+        "annotations": merged_annotations,
+        "examples": merge_examples(meta.get("examples"), code_examples or None),
         "metadata": merged_metadata,
         "documentation": meta.get("documentation") or code_docs,
     }

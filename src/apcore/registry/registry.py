@@ -296,72 +296,104 @@ class Registry:
         return registered_count
 
     def _discover_default(self) -> int:
-        """Run discovery using the default file-system scanning logic."""
-        # Determine scan params from config
-        max_depth = 8
-        follow_symlinks = False
-        if self._config is not None:
-            max_depth = self._config.get("extensions.max_depth", 8)
-            follow_symlinks = self._config.get("extensions.follow_symlinks", False)
+        """Run discovery using the default file-system scanning logic.
 
-        # Step 1: Scan extension roots
+        Orchestrates 7 named stages; per-stage logic lives in the dedicated
+        helpers below. Mirrors the structure of
+        ``apcore-typescript/src/registry/registry.ts:_discoverDefault``.
+        """
+        max_depth, follow_symlinks = self._scan_params()
+        discovered = self._scan_roots(max_depth, follow_symlinks)
+        self._apply_id_map_overrides(discovered)
+        raw_metadata = self._load_all_metadata(discovered)
+        resolved_classes = self._resolve_all_entry_points(discovered, raw_metadata)
+        valid_classes = self._validate_all(resolved_classes)
+        load_order = self._resolve_load_order(valid_classes, raw_metadata)
+        valid_classes = self._filter_id_conflicts(load_order, valid_classes)
+        registered_count = self._register_in_order(load_order, valid_classes, raw_metadata)
+
+        if registered_count == 0 and discovered:
+            logger.warning(
+                "No modules successfully registered from %d discovered files",
+                len(discovered),
+            )
+        elif registered_count == 0:
+            logger.warning("No modules discovered")
+
+        return registered_count
+
+    def _scan_params(self) -> tuple[int, bool]:
+        """Resolve scan parameters from config, falling back to spec defaults."""
+        if self._config is None:
+            return 8, False
+        return (
+            self._config.get("extensions.max_depth", 8),
+            self._config.get("extensions.follow_symlinks", False),
+        )
+
+    def _scan_roots(self, max_depth: int, follow_symlinks: bool) -> list[Any]:
+        """Stage 1 — walk extension root(s) and return DiscoveredModule entries."""
         has_namespace = any("namespace" in r for r in self._extension_roots)
         if len(self._extension_roots) > 1 or has_namespace:
-            discovered = scan_multi_root(
+            return scan_multi_root(
                 roots=self._extension_roots,
                 max_depth=max_depth,
                 follow_symlinks=follow_symlinks,
             )
-        else:
-            root_path = Path(self._extension_roots[0]["root"])
-            discovered = scan_extensions(
-                root=root_path,
-                max_depth=max_depth,
-                follow_symlinks=follow_symlinks,
-            )
+        root_path = Path(self._extension_roots[0]["root"])
+        return scan_extensions(
+            root=root_path,
+            max_depth=max_depth,
+            follow_symlinks=follow_symlinks,
+        )
 
-        # Step 2: Apply ID Map overrides
-        if self._id_map:
-            resolved_roots = [Path(r["root"]).resolve() for r in self._extension_roots]
-            for dm in discovered:
-                rel_path = None
-                for root in resolved_roots:
-                    try:
-                        rel_path = str(dm.file_path.relative_to(root))
-                        break
-                    except ValueError:
-                        continue
-                if rel_path and rel_path in self._id_map:
-                    map_entry = self._id_map[rel_path]
-                    dm.canonical_id = map_entry["id"]
+    def _apply_id_map_overrides(self, discovered: list[Any]) -> None:
+        """Stage 2 — rewrite ``canonical_id`` for files listed in the ID map."""
+        if not self._id_map:
+            return
+        resolved_roots = [Path(r["root"]).resolve() for r in self._extension_roots]
+        for dm in discovered:
+            rel_path: str | None = None
+            for root in resolved_roots:
+                try:
+                    rel_path = str(dm.file_path.relative_to(root))
+                    break
+                except ValueError:
+                    continue
+            if rel_path and rel_path in self._id_map:
+                dm.canonical_id = self._id_map[rel_path]["id"]
 
-        # Step 3: Load metadata for each discovered module
+    def _load_all_metadata(self, discovered: list[Any]) -> dict[str, dict[str, Any]]:
+        """Stage 3 — read each module's optional companion ``*_meta.yaml``."""
         raw_metadata: dict[str, dict[str, Any]] = {}
         for dm in discovered:
-            if dm.meta_path:
-                raw_metadata[dm.canonical_id] = load_metadata(dm.meta_path)
-            else:
-                raw_metadata[dm.canonical_id] = {}
+            raw_metadata[dm.canonical_id] = load_metadata(dm.meta_path) if dm.meta_path else {}
+        return raw_metadata
 
-        # Step 4: Resolve entry points
-        resolved_classes: dict[str, type] = {}
+    def _resolve_all_entry_points(
+        self,
+        discovered: list[Any],
+        raw_metadata: dict[str, dict[str, Any]],
+    ) -> dict[str, type]:
+        """Stage 4 — resolve each discovered file to its module class."""
+        resolved: dict[str, type] = {}
         for dm in discovered:
             meta = raw_metadata.get(dm.canonical_id, {})
-            # Inject class override from ID map
+            # Inject class override from ID map (if present)
             if dm.canonical_id in self._id_map:
                 map_entry = self._id_map[dm.canonical_id]
                 if map_entry.get("class"):
                     stem = dm.file_path.stem
                     meta.setdefault("entry_point", f"{stem}:{map_entry['class']}")
             try:
-                cls = resolve_entry_point(dm.file_path, meta=meta)
+                resolved[dm.canonical_id] = resolve_entry_point(dm.file_path, meta=meta)
             except Exception as e:
                 logger.warning("Failed to resolve entry point for '%s': %s", dm.canonical_id, e)
-                continue
-            resolved_classes[dm.canonical_id] = cls
+        return resolved
 
-        # Step 5: Validate module classes (use custom validator if set)
-        valid_classes: dict[str, type] = {}
+    def _validate_all(self, resolved_classes: dict[str, type]) -> dict[str, type]:
+        """Stage 5 — run the (custom or built-in) validator over each class."""
+        valid: dict[str, type] = {}
         for mod_id, cls in resolved_classes.items():
             if self._custom_validator is not None:
                 errors = self._custom_validator.validate(cls)
@@ -370,21 +402,37 @@ class Registry:
             if errors:
                 logger.warning("Module '%s' failed validation: %s", mod_id, "; ".join(errors))
                 continue
-            valid_classes[mod_id] = cls
+            valid[mod_id] = cls
+        return valid
 
-        # Step 6: Collect dependencies
+    def _resolve_load_order(
+        self,
+        valid_classes: dict[str, type],
+        raw_metadata: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        """Stage 6 + 7 — gather declared dependencies and topo-sort the load order.
+
+        Raises ``CircularDependencyError`` if a cycle is detected.
+        """
         modules_with_deps: list[tuple[str, list[DependencyInfo]]] = []
         for mod_id in valid_classes:
-            meta = raw_metadata.get(mod_id, {})
-            deps_raw = meta.get("dependencies", [])
+            deps_raw = raw_metadata.get(mod_id, {}).get("dependencies", [])
             deps = parse_dependencies(deps_raw) if deps_raw else []
             modules_with_deps.append((mod_id, deps))
-
-        # Step 7: Resolve dependency order (may raise CircularDependencyError)
         known_ids = {mod_id for mod_id, _ in modules_with_deps}
-        load_order = resolve_dependencies(modules_with_deps, known_ids=known_ids)
+        return resolve_dependencies(modules_with_deps, known_ids=known_ids)
 
-        # Step 7.5: Batch ID conflict detection (A03)
+    def _filter_id_conflicts(
+        self,
+        load_order: list[str],
+        valid_classes: dict[str, type],
+    ) -> dict[str, type]:
+        """Stage 7.5 — drop classes whose IDs collide (A03 batch detection).
+
+        Errors are excluded from the registration set; warnings are logged
+        but the module proceeds.
+        """
+        filtered = dict(valid_classes)
         batch_ids: set[str] = set()
         for mod_id in load_order:
             conflict = detect_id_conflicts(
@@ -396,12 +444,23 @@ class Registry:
             if conflict is not None:
                 if conflict.severity == "error":
                     logger.warning("Skipping module '%s': %s", mod_id, conflict.message)
-                    valid_classes.pop(mod_id, None)
+                    filtered.pop(mod_id, None)
                 else:
                     logger.warning("ID conflict: %s", conflict.message)
             batch_ids.add(mod_id)
+        return filtered
 
-        # Step 8: Instantiate and register in dependency order
+    def _register_in_order(
+        self,
+        load_order: list[str],
+        valid_classes: dict[str, type],
+        raw_metadata: dict[str, dict[str, Any]],
+    ) -> int:
+        """Stage 8 — instantiate, register, and run on_load() for each module.
+
+        Returns the number of modules that successfully completed registration
+        (including a successful ``on_load`` call when defined).
+        """
         registered_count = 0
         for mod_id in load_order:
             cls = valid_classes.get(mod_id)
@@ -415,36 +474,35 @@ class Registry:
                 continue
 
             merged_meta = merge_module_metadata(cls, meta)
-
             with self._lock:
                 self._modules[mod_id] = module
                 self._module_meta[mod_id] = merged_meta
                 self._lowercase_map[mod_id.lower()] = mod_id
 
-            # Call on_load if available
-            if hasattr(module, "on_load") and callable(module.on_load):
-                try:
-                    module.on_load()
-                except Exception as e:
-                    logger.error("on_load() failed for module '%s': %s", mod_id, e)
-                    with self._lock:
-                        self._modules.pop(mod_id, None)
-                        self._module_meta.pop(mod_id, None)
-                        self._lowercase_map.pop(mod_id.lower(), None)
-                    continue
+            if not self._invoke_on_load(mod_id, module):
+                continue
 
             self._trigger_event("register", mod_id, module)
             registered_count += 1
-
-        if registered_count == 0 and discovered:
-            logger.warning(
-                "No modules successfully registered from %d discovered files",
-                len(discovered),
-            )
-        elif registered_count == 0:
-            logger.warning("No modules discovered")
-
         return registered_count
+
+    def _invoke_on_load(self, mod_id: str, module: Any) -> bool:
+        """Call ``module.on_load()`` if defined; roll back registration on failure.
+
+        Returns True if the module is still registered, False if it was removed.
+        """
+        if not (hasattr(module, "on_load") and callable(module.on_load)):
+            return True
+        try:
+            module.on_load()
+        except Exception as e:
+            logger.error("on_load() failed for module '%s': %s", mod_id, e)
+            with self._lock:
+                self._modules.pop(mod_id, None)
+                self._module_meta.pop(mod_id, None)
+                self._lowercase_map.pop(mod_id.lower(), None)
+            return False
+        return True
 
     # ----- Manual Registration -----
 
@@ -670,6 +728,9 @@ class Registry:
         if deprecation:
             sunset_date = deprecation.get("sunset_date")
 
+        # `meta` is populated by merge_module_metadata at registration time and
+        # already implements spec §4.13 (YAML > code > defaults). Read from it
+        # directly so YAML annotations and examples are honored.
         return ModuleDescriptor(
             module_id=module_id,
             name=meta.get("name") or getattr(module, "name", None),
@@ -679,8 +740,8 @@ class Registry:
             output_schema=output_json,
             version=meta.get("version") or getattr(module, "version", "1.0.0"),
             tags=list(meta.get("tags") or getattr(module, "tags", None) or []),
-            annotations=getattr(module, "annotations", None),
-            examples=list(getattr(module, "examples", []) or []),
+            annotations=meta.get("annotations") if "annotations" in meta else getattr(module, "annotations", None),
+            examples=list(meta.get("examples") or []),
             metadata=effective_metadata,
             sunset_date=sunset_date,
         )
