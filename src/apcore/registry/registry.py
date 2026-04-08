@@ -932,8 +932,8 @@ class Registry:
         Raises ImportError if watchdog is not installed.
         """
         try:
-            from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler, FileSystemEvent
+            from watchdog.observers import Observer  # type: ignore[import-not-found]
+            from watchdog.events import FileSystemEventHandler, FileSystemEvent  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError("watchdog is required for hot reload. Install it with: pip install watchdog")
 

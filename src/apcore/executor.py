@@ -143,15 +143,15 @@ class Executor:
                 self._middleware_manager.add(mw)
 
         # Resolve strategy (pass middleware_manager and executor for production parity)
-        strategy_kwargs = dict(
-            registry=registry,
-            config=config,
-            acl=acl,
-            approval_handler=approval_handler,
-            middlewares=middlewares,
-            middleware_manager=self._middleware_manager,
-            executor=self,
-        )
+        strategy_kwargs: dict[str, Any] = {
+            "registry": registry,
+            "config": config,
+            "acl": acl,
+            "approval_handler": approval_handler,
+            "middlewares": middlewares,
+            "middleware_manager": self._middleware_manager,
+            "executor": self,
+        }
         if strategy is None:
             from apcore.builtin_steps import build_standard_strategy
 
@@ -401,7 +401,12 @@ class Executor:
         except Exception as e:
             # Step raised an error (e.g., ModuleNotFoundError, ACLDeniedError)
             # Convert to a failed check using the error's own code/dict
-            error_dict = e.to_dict() if hasattr(e, "to_dict") else {"code": type(e).__name__, "message": str(e)}
+            error_dict: dict[str, Any] = {"code": type(e).__name__, "message": str(e)}
+            to_dict_fn = getattr(e, "to_dict", None)
+            if callable(to_dict_fn):
+                produced = to_dict_fn()
+                if isinstance(produced, dict):
+                    error_dict = produced
             code = getattr(e, "code", type(e).__name__)
 
             # Determine which check failed based on error type
@@ -487,12 +492,15 @@ class Executor:
                     caller_id, target_id = pair[0].strip(), pair[1].strip()
             return ACLDeniedError(caller_id=caller_id, target_id=target_id)
         if step == "approval_gate":
-            if "rejected" in explanation.lower() or "denied" in explanation.lower():
-                return ApprovalDeniedError(message=explanation)
-            if "timeout" in explanation.lower():
-                return ApprovalTimeoutError(message=explanation)
-            if "pending" in explanation.lower():
-                return ApprovalPendingError(message=explanation)
+            from apcore.approval import ApprovalResult
+
+            lowered = explanation.lower()
+            if "rejected" in lowered or "denied" in lowered:
+                return ApprovalDeniedError(result=ApprovalResult(status="rejected", reason=explanation))
+            if "timeout" in lowered:
+                return ApprovalTimeoutError(result=ApprovalResult(status="timeout", reason=explanation))
+            if "pending" in lowered:
+                return ApprovalPendingError(result=ApprovalResult(status="pending", reason=explanation))
         if step == "input_validation" and "validation failed" in explanation.lower():
             return SchemaValidationError(message=explanation)
         if step == "output_validation" and "validation failed" in explanation.lower():

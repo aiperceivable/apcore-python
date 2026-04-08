@@ -13,7 +13,7 @@ from apcore.decorator import (
     FunctionModule,
     generate_input_model,
     generate_output_model,
-    _has_context_param,
+    _context_param_name,
     _make_auto_id,
     module,
 )
@@ -568,28 +568,24 @@ class TestGenerateOutputModel:
         assert inst.model_dump() == {"result": "hello"}
 
 
-class TestHasContextParam:
-    """Tests for _has_context_param()."""
+class TestContextParamName:
+    """Tests for _context_param_name()."""
 
     def test_function_with_context(self):
-        """Function with Context param returns (True, param_name)."""
+        """Function with Context param returns the parameter name."""
 
         def func(name: str, ctx: Context) -> dict:
             return {}
 
-        has_ctx, param_name = _has_context_param(func)
-        assert has_ctx is True
-        assert param_name == "ctx"
+        assert _context_param_name(func) == "ctx"
 
     def test_function_without_context(self):
-        """Function without Context param returns (False, None)."""
+        """Function without Context param returns None."""
 
         def func(name: str) -> dict:
             return {}
 
-        has_ctx, param_name = _has_context_param(func)
-        assert has_ctx is False
-        assert param_name is None
+        assert _context_param_name(func) is None
 
     def test_detection_is_type_based(self):
         """Detection is by type, not name — 'ctx' with Context type detected."""
@@ -597,9 +593,7 @@ class TestHasContextParam:
         def func(ctx: Context) -> dict:
             return {}
 
-        has_ctx, param_name = _has_context_param(func)
-        assert has_ctx is True
-        assert param_name == "ctx"
+        assert _context_param_name(func) == "ctx"
 
     def test_non_context_named_context(self):
         """Param named 'context' with type str is NOT detected."""
@@ -607,9 +601,7 @@ class TestHasContextParam:
         def func(context: str) -> dict:
             return {}
 
-        has_ctx, param_name = _has_context_param(func)
-        assert has_ctx is False
-        assert param_name is None
+        assert _context_param_name(func) is None
 
 
 # ---------------------------------------------------------------------------

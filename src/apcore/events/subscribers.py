@@ -7,7 +7,7 @@ import logging
 from dataclasses import asdict
 
 try:
-    import aiohttp
+    import aiohttp  # type: ignore[import-not-found]
 except ImportError:
     aiohttp = None  # type: ignore[assignment]
 

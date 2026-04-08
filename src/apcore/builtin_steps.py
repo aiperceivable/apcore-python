@@ -15,7 +15,7 @@ import dataclasses
 import inspect
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 import pydantic
 
@@ -488,7 +488,7 @@ class BuiltinInputValidation(BaseStep):
         if schema_dict_fn is not None and callable(schema_dict_fn):
             from apcore.utils.redaction import redact_sensitive
 
-            schema = schema_dict_fn()
+            schema = cast(dict[str, Any], schema_dict_fn())
             redacted = redact_sensitive(ctx.inputs, schema)
             if ctx.context is not None and hasattr(ctx.context, "redacted_inputs"):
                 ctx.context.redacted_inputs = redacted
@@ -646,7 +646,7 @@ class BuiltinOutputValidation(BaseStep):
             if schema_dict_fn is not None and callable(schema_dict_fn):
                 from apcore.utils.redaction import redact_sensitive
 
-                schema = schema_dict_fn()
+                schema = cast(dict[str, Any], schema_dict_fn())
                 redacted = redact_sensitive(ctx.output, schema)
                 ctx.context.data[REDACTED_OUTPUT.name] = redacted
 

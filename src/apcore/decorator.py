@@ -131,24 +131,25 @@ def generate_output_model(func: Any) -> type[BaseModel]:
     return create_model("OutputModel", result=(return_type, ...))
 
 
-def _has_context_param(func: Any) -> tuple[bool, str | None]:
-    """Check if any parameter has type annotation that is the Context class.
+def _context_param_name(func: Any) -> str | None:
+    """Return the name of the parameter typed as ``Context``, or None.
 
-    Returns (True, param_name) if found, (False, None) otherwise.
-    Detection is type-based, not name-based.
+    Detection is type-based, not name-based. Returns the parameter name when
+    a single ``Context``-typed parameter is found; returns ``None`` when the
+    function has no Context parameter or its annotations cannot be resolved.
     """
     try:
         hints = typing.get_type_hints(func, include_extras=True)
     except NameError:
-        return (False, None)
+        return None
 
     for param_name, hint in hints.items():
         if param_name == "return":
             continue
         if hint is Context:
-            return (True, param_name)
+            return param_name
 
-    return (False, None)
+    return None
 
 
 def _normalize_result(result: Any) -> dict[str, Any]:
@@ -193,7 +194,7 @@ class FunctionModule:
         self.input_schema = input_schema if input_schema is not None else generate_input_model(func, param_descs)
         self.output_schema = output_schema if output_schema is not None else generate_output_model(func)
 
-        has_context, context_param_name = _has_context_param(func)
+        context_param_name = _context_param_name(func)
 
         # Description priority chain
         if description is not None:
@@ -223,7 +224,7 @@ class FunctionModule:
 
             async def _async_execute(inputs: dict[str, Any], context: Context) -> dict[str, Any]:
                 call_kwargs = dict(inputs)
-                if has_context:
+                if context_param_name is not None:
                     call_kwargs[context_param_name] = context
                 result = await func(**call_kwargs)
                 return _normalize_result(result)
@@ -233,7 +234,7 @@ class FunctionModule:
 
             def _sync_execute(inputs: dict[str, Any], context: Context) -> dict[str, Any]:
                 call_kwargs = dict(inputs)
-                if has_context:
+                if context_param_name is not None:
                     call_kwargs[context_param_name] = context
                 result = func(**call_kwargs)
                 return _normalize_result(result)

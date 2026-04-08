@@ -8,8 +8,8 @@ from typing import Annotated, Any, Literal, Union
 
 import yaml
 from pydantic import BaseModel, Field, create_model
-from pydantic.fields import PydanticUndefined
 from pydantic.functional_validators import AfterValidator
+from pydantic_core import PydanticUndefined
 
 from apcore.config import Config
 from apcore.errors import SchemaNotFoundError, SchemaParseError

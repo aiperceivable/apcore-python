@@ -83,7 +83,9 @@ def _resolve_step(step_def: dict[str, Any]) -> BaseStep:
     if type_name and type_name in _step_type_registry:
         factory = _step_type_registry[type_name]
         if isinstance(factory, type) and issubclass(factory, BaseStep):
-            step = factory(**config) if config else factory()
+            # Factory is a BaseStep subclass; either it provides defaults for
+            # `name` (most user steps do) or the YAML supplied `config` overrides.
+            step = factory(**config) if config else factory()  # type: ignore[call-arg]
         else:
             step = factory(config)
         # Override metadata from YAML

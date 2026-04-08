@@ -219,10 +219,16 @@ def _register_sys_modules(
     usage_collector: UsageCollector,
 ) -> None:
     """Register all sys.* modules: health, manifest, and usage."""
+    # HealthSummaryModule and HealthModuleModule require a non-None
+    # MetricsCollector. When the caller did not supply one, fall back to a
+    # fresh empty collector so health modules degrade to "no recorded
+    # metrics" rather than crashing at registration.
+    effective_metrics = metrics_collector if metrics_collector is not None else MetricsCollector()
+
     # Health modules
     health_summary = HealthSummaryModule(
         registry=registry,
-        metrics_collector=metrics_collector,
+        metrics_collector=effective_metrics,
         error_history=error_history,
         config=config,
     )
@@ -230,7 +236,7 @@ def _register_sys_modules(
 
     health_module = HealthModuleModule(
         registry=registry,
-        metrics_collector=metrics_collector,
+        metrics_collector=effective_metrics,
         error_history=error_history,
     )
     _register_sys_module(registry, "system.health.module", health_module)

@@ -124,13 +124,13 @@ class OTLPExporter:
             ImportError: If required opentelemetry packages are not installed.
         """
         try:
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[import-not-found]
                 OTLPSpanExporter as _OTLPSpanExporter,
             )
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-            from opentelemetry.trace import StatusCode
+            from opentelemetry.sdk.resources import Resource  # type: ignore[import-not-found]
+            from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-not-found]
+            from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # type: ignore[import-not-found]
+            from opentelemetry.trace import StatusCode  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "opentelemetry packages are required for OTLPExporter. "

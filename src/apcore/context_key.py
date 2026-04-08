@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, overload
 
 T = TypeVar("T")
 
-_MISSING = object()
+_MISSING: Any = object()
 
 
 class _ContextLike(Protocol):
@@ -26,10 +26,20 @@ class ContextKey(Generic[T]):
 
     name: str
 
-    def get(self, ctx: _ContextLike, default: T | None = None) -> T | None:  # type: ignore[type-var]
-        """Return the value for this key, or *default* if absent."""
+    @overload
+    def get(self, ctx: _ContextLike) -> T | None: ...
+
+    @overload
+    def get(self, ctx: _ContextLike, default: T) -> T: ...
+
+    def get(self, ctx: _ContextLike, default: T | None = None) -> T | None:
+        """Return the value for this key, or *default* if absent.
+
+        Overloaded so that ``key.get(ctx)`` returns ``T | None`` while
+        ``key.get(ctx, default=value)`` narrows the return type to ``T``.
+        """
         value = ctx.data.get(self.name, _MISSING)
-        return default if value is _MISSING else value  # type: ignore[return-value]
+        return default if value is _MISSING else value
 
     def set(self, ctx: _ContextLike, value: T) -> None:
         """Store *value* under this key in context.data."""

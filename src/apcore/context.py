@@ -136,7 +136,7 @@ class Context(Generic[T]):
             identity=identity,
             redacted_inputs=data.get("redacted_inputs"),
             data=dict(data.get("data", {})),
-            services=None,
+            services=None,  # type: ignore[arg-type]
             cancel_token=None,
         )
 

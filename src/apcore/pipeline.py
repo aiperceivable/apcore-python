@@ -153,7 +153,7 @@ class ExecutionStrategy:
         """Warn if any step's requires are not provided by a preceding step."""
         provided: set[str] = set()
         for step in self.steps:
-            requires = getattr(step, "requires", ())
+            requires: tuple[str, ...] = getattr(step, "requires", ())
             missing = set(requires) - provided
             if missing:
                 _logger.warning(
@@ -161,7 +161,7 @@ class ExecutionStrategy:
                     step.name,
                     missing,
                 )
-            provides = getattr(step, "provides", ())
+            provides: tuple[str, ...] = getattr(step, "provides", ())
             provided.update(provides)
 
     def insert_after(self, anchor: str, step: Step) -> None:
