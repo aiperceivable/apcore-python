@@ -11,6 +11,7 @@ abort results, enabling the executor to propagate typed exceptions.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import logging
 import time
@@ -18,6 +19,7 @@ from typing import Any
 
 import pydantic
 
+from apcore.approval import ApprovalRequest, ApprovalResult
 from apcore.cancel import ExecutionCancelledError
 from apcore.context import Context
 from apcore.context_keys import REDACTED_OUTPUT
@@ -25,11 +27,13 @@ from apcore.errors import (
     ACLDeniedError,
     ApprovalDeniedError,
     ApprovalPendingError,
+    ApprovalTimeoutError,
     InvalidInputError,
     ModuleNotFoundError,
     ModuleTimeoutError,
     SchemaValidationError,
 )
+from apcore.module import ModuleAnnotations
 from apcore.pipeline import (
     BaseStep,
     ExecutionStrategy,
@@ -204,6 +208,10 @@ class BuiltinACLCheck(BaseStep):
         )
         self._acl = acl
 
+    def set_acl(self, acl: Any | None) -> None:
+        """Replace the ACL provider used by this step at runtime."""
+        self._acl = acl
+
     async def execute(self, ctx: PipelineContext) -> StepResult:
         if self._acl is None:
             return StepResult(action="continue")
@@ -227,14 +235,15 @@ class BuiltinACLCheck(BaseStep):
 
 
 class BuiltinApprovalGate(BaseStep):
-    """Approval handler flow for modules requiring approval."""
+    """Approval handler flow for modules requiring approval.
 
-    def __init__(
-        self,
-        *,
-        handler: Any | None = None,
-        executor: Any | None = None,
-    ) -> None:
+    For modules whose annotations declare ``requires_approval=True``, calls
+    the configured ApprovalHandler, emits an audit event (logging + tracing
+    span event), and translates the result into either continued execution
+    or the appropriate ``ApprovalError`` subclass.
+    """
+
+    def __init__(self, *, handler: Any | None = None) -> None:
         super().__init__(
             name="approval_gate",
             description="Request and verify module approval",
@@ -244,55 +253,95 @@ class BuiltinApprovalGate(BaseStep):
             requires=("context", "module"),
         )
         self._handler = handler
-        self._executor = executor
+
+    def set_handler(self, handler: Any | None) -> None:
+        """Replace the approval handler used by this step at runtime."""
+        self._handler = handler
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         if self._handler is None:
             return StepResult(action="continue")
 
         module = ctx.module
-        annotations = getattr(module, "annotations", None)
-        requires_approval = False
-        if annotations is not None:
-            if isinstance(annotations, dict):
-                requires_approval = bool(annotations.get("requires_approval", False))
-            elif hasattr(annotations, "requires_approval"):
-                requires_approval = annotations.requires_approval
-
-        if not requires_approval:
+        if not _module_requires_approval(module):
             return StepResult(action="continue")
 
-        # Phase B token support: if inputs contain _approval_token, delegate
+        # Phase B token resume vs fresh request
         if "_approval_token" in ctx.inputs:
             token = ctx.inputs.pop("_approval_token")
             result = await self._handler.check_approval(token)
-        elif self._executor is not None and hasattr(self._executor, "_check_approval_async"):
-            await self._executor._check_approval_async(
-                module,
-                ctx.module_id,
-                ctx.inputs,
-                ctx.context,
-            )
-            return StepResult(action="continue")
         else:
-            from apcore.approval import ApprovalRequest
-
             request = ApprovalRequest(
                 module_id=ctx.module_id,
                 arguments=ctx.inputs,
                 context=ctx.context,
+                annotations=_coerce_annotations(getattr(module, "annotations", None)),
+                description=getattr(module, "description", None),
+                tags=list(getattr(module, "tags", None) or []),
             )
             result = await self._handler.request_approval(request)
 
+        self._emit_audit(result, ctx.module_id, ctx.context)
+
         if result.status == "approved":
             return StepResult(action="continue")
+        if result.status == "rejected":
+            raise ApprovalDeniedError(result=result, module_id=ctx.module_id)
+        if result.status == "timeout":
+            raise ApprovalTimeoutError(result=result, module_id=ctx.module_id)
         if result.status == "pending":
-            raise ApprovalPendingError(
-                message=f"Approval pending: {result.reason or 'awaiting review'}",
-            )
-        raise ApprovalDeniedError(
-            message=f"Approval {result.status}: {result.reason or 'no reason'}",
+            raise ApprovalPendingError(result=result, module_id=ctx.module_id)
+        _logger.warning(
+            "Unknown approval status %r for module %s, treating as denied",
+            result.status,
+            ctx.module_id,
         )
+        raise ApprovalDeniedError(result=result, module_id=ctx.module_id)
+
+    @staticmethod
+    def _emit_audit(result: ApprovalResult, module_id: str, ctx: Context) -> None:
+        """Log the decision and append a span event when tracing is active."""
+        _logger.info(
+            "Approval decision: module=%s status=%s approved_by=%s reason=%s",
+            module_id,
+            result.status,
+            result.approved_by,
+            result.reason,
+        )
+        spans_stack: list[Any] = ctx.data.get("_apcore.mw.tracing.spans", [])
+        if spans_stack:
+            spans_stack[-1].events.append(
+                {
+                    "name": "approval_decision",
+                    "module_id": module_id,
+                    "status": result.status,
+                    "approved_by": result.approved_by or "",
+                    "reason": result.reason or "",
+                    "approval_id": result.approval_id or "",
+                }
+            )
+
+
+def _module_requires_approval(module: Any) -> bool:
+    """Read ``requires_approval`` from a module's annotations (dataclass or dict)."""
+    annotations = getattr(module, "annotations", None)
+    if annotations is None:
+        return False
+    if isinstance(annotations, ModuleAnnotations):
+        return annotations.requires_approval
+    if isinstance(annotations, dict):
+        return bool(annotations.get("requires_approval", False))
+    return False
+
+
+def _coerce_annotations(annotations: Any) -> ModuleAnnotations:
+    """Coerce raw module annotations into a ``ModuleAnnotations`` instance."""
+    if isinstance(annotations, ModuleAnnotations):
+        return annotations
+    if isinstance(annotations, dict):
+        valid_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
+        return ModuleAnnotations(**{k: v for k, v in annotations.items() if k in valid_fields})
+    return ModuleAnnotations()
 
 
 # ---------------------------------------------------------------------------
@@ -720,7 +769,7 @@ def build_standard_strategy(
             BuiltinCallChainGuard(config=config),
             BuiltinModuleLookup(registry=registry),
             BuiltinACLCheck(acl=acl),
-            BuiltinApprovalGate(handler=approval_handler, executor=executor),
+            BuiltinApprovalGate(handler=approval_handler),
             BuiltinMiddlewareBefore(
                 middlewares=middlewares or [],
                 middleware_manager=middleware_manager,
@@ -751,7 +800,7 @@ def build_internal_strategy(**kwargs: Any) -> ExecutionStrategy:
     s = build_standard_strategy(**kwargs)
     s.remove("acl_check")
     s.remove("approval_gate")
-    object.__setattr__(s, "name", "internal")
+    s.name = "internal"
     return s
 
 
@@ -770,7 +819,7 @@ def build_testing_strategy(**kwargs: Any) -> ExecutionStrategy:
     s.remove("acl_check")
     s.remove("approval_gate")
     s.remove("call_chain_guard")
-    object.__setattr__(s, "name", "testing")
+    s.name = "testing"
     return s
 
 
@@ -788,7 +837,7 @@ def build_performance_strategy(**kwargs: Any) -> ExecutionStrategy:
     s = build_standard_strategy(**kwargs)
     s.remove("middleware_before")
     s.remove("middleware_after")
-    object.__setattr__(s, "name", "performance")
+    s.name = "performance"
     return s
 
 
@@ -813,5 +862,5 @@ def build_minimal_strategy(**kwargs: Any) -> ExecutionStrategy:
     s.remove("input_validation")
     s.remove("output_validation")
     s.remove("middleware_after")
-    object.__setattr__(s, "name", "minimal")
+    s.name = "minimal"
     return s

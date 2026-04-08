@@ -8,7 +8,6 @@ Supports sync, async, and streaming execution modes.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import threading
 from collections.abc import AsyncIterator
@@ -17,7 +16,7 @@ from typing import Any, Callable
 import pydantic
 
 from apcore.acl import ACL
-from apcore.approval import ApprovalHandler, ApprovalRequest, ApprovalResult
+from apcore.approval import ApprovalHandler
 from apcore.cancel import ExecutionCancelledError
 from apcore.config import Config
 from apcore.context import Context
@@ -113,20 +112,6 @@ def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str
     ]
 
 
-# =============================================================================
-# Redaction utilities (from section-05)
-# =============================================================================
-
-
-# redact_sensitive and REDACTED_VALUE moved to apcore.utils.redaction in v0.17
-# Re-exported here for backward compatibility.
-
-
-# =============================================================================
-# Executor class (section-06)
-# =============================================================================
-
-
 class Executor:
     """Central execution engine that orchestrates the module call pipeline.
 
@@ -212,8 +197,6 @@ class Executor:
                 message=f"Negative default_timeout: {self._default_timeout}",
             )
 
-        self._async_cache: dict[str, bool] = {}
-        self._async_cache_lock = threading.Lock()
         # Cached event loop for sync call() to avoid asyncio.run() overhead
         self._sync_loop: asyncio.AbstractEventLoop | None = None
 
@@ -263,30 +246,31 @@ class Executor:
     def set_acl(self, acl: ACL) -> None:
         """Set the access control provider.
 
-        Updates both the executor field and the strategy's ACL step.
+        Updates both the executor field and the strategy's ``acl_check`` step
+        via its public :meth:`BuiltinACLCheck.set_acl` setter.
 
         Args:
             acl: The ACL instance to use for access control enforcement.
         """
         self._acl = acl
         for step in self._strategy.steps:
-            if step.name == "acl_check":
-                step._acl = acl
+            if step.name == "acl_check" and hasattr(step, "set_acl"):
+                step.set_acl(acl)
                 break
 
     def set_approval_handler(self, handler: ApprovalHandler) -> None:
         """Set the approval handler for Step 5 gate.
 
-        Updates both the executor field and the strategy's approval step.
+        Updates both the executor field and the strategy's ``approval_gate``
+        step via its public :meth:`BuiltinApprovalGate.set_handler` setter.
 
         Args:
             handler: The ApprovalHandler instance to use for approval enforcement.
         """
         self._approval_handler = handler
-        # Update the existing approval_gate step in the strategy
         for step in self._strategy.steps:
-            if step.name == "approval_gate":
-                step._handler = handler
+            if step.name == "approval_gate" and hasattr(step, "set_handler"):
+                step.set_handler(handler)
                 break
 
     def use(self, middleware: Middleware) -> Executor:
@@ -317,7 +301,9 @@ class Executor:
     ) -> dict[str, Any]:
         """Execute a module through the execution pipeline.
 
-        Delegates to PipelineEngine.run() with the configured strategy.
+        Sync wrapper around :meth:`call_async`. Routes through a cached event
+        loop when no loop is active and uses a thread bridge when called from
+        inside a running loop.
 
         Args:
             module_id: The module to execute.
@@ -328,62 +314,33 @@ class Executor:
         Returns:
             The module output dict, possibly modified by middleware.
         """
-        self._validate_module_id(module_id)
-
-        pipe_ctx = PipelineContext(
-            module_id=module_id,
-            inputs=inputs or {},
-            context=context,
-            version_hint=version_hint,
+        return self._run_async_in_sync(
+            self.call_async(module_id, inputs, context, version_hint),
+            module_id,
         )
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+    def _run_async_in_sync(self, coro: Any, module_id: str) -> Any:
+        """Execute a coroutine from sync context using a cached loop or thread bridge.
 
+        Centralizes the loop-detection logic shared by ``call``, ``validate``,
+        and ``call_with_trace``. Inside an existing event loop, dispatches to a
+        background thread; otherwise uses (and creates if needed) the cached
+        ``_sync_loop``.
+        """
         try:
-            if loop is None:
-                # Use cached event loop for sync calls (avoids asyncio.run() overhead)
-                if self._sync_loop is None or self._sync_loop.is_closed():
-                    self._sync_loop = asyncio.new_event_loop()
-                if self._sync_loop.is_running():
-                    # Nested sync call inside async execution — use thread bridge
-                    output, _trace = self._run_in_new_thread(
-                        self._pipeline_engine.run(self._strategy, pipe_ctx),
-                        module_id,
-                        None,
-                    )
-                else:
-                    output, _trace = self._sync_loop.run_until_complete(
-                        self._pipeline_engine.run(self._strategy, pipe_ctx)
-                    )
-            else:
-                output, _trace = self._run_in_new_thread(
-                    self._pipeline_engine.run(self._strategy, pipe_ctx),
-                    module_id,
-                    None,
-                )
-        except PipelineAbortError as e:
-            raise self._translate_abort(e) from e
-        except ExecutionCancelledError:
-            raise
-        except Exception as exc:
-            # A11 error propagation + middleware on_error recovery
-            ctx_obj = pipe_ctx.context
-            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
-            executed_mw = pipe_ctx.executed_middlewares
-            if executed_mw:
-                recovery = self._middleware_manager.execute_on_error(
-                    module_id, pipe_ctx.inputs, wrapped, ctx_obj, executed_mw
-                )
-                if recovery is not None:
-                    return recovery
-            # Wrap non-ModuleExecuteError into ModuleExecuteError for uniform error type
-            if isinstance(exc, MiddlewareChainError):
-                raise ModuleExecuteError(module_id=module_id, message=str(exc)) from exc
-            raise wrapped from exc
-        return output
+            asyncio.get_running_loop()
+            inside_loop = True
+        except RuntimeError:
+            inside_loop = False
+
+        if inside_loop:
+            return self._run_in_new_thread(coro, module_id, None)
+
+        if self._sync_loop is None or self._sync_loop.is_closed():
+            self._sync_loop = asyncio.new_event_loop()
+        if self._sync_loop.is_running():
+            return self._run_in_new_thread(coro, module_id, None)
+        return self._sync_loop.run_until_complete(coro)
 
     def validate(
         self,
@@ -405,16 +362,10 @@ class Executor:
         Returns:
             PreflightResult with per-check status.
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is None:
-            if self._sync_loop is None or self._sync_loop.is_closed():
-                self._sync_loop = asyncio.new_event_loop()
-            return self._sync_loop.run_until_complete(self._validate_async(module_id, inputs, context))
-        return self._run_in_new_thread(self._validate_async(module_id, inputs, context), module_id, None)
+        return self._run_async_in_sync(
+            self._validate_async(module_id, inputs, context),
+            module_id,
+        )
 
     async def _validate_async(
         self,
@@ -473,10 +424,14 @@ class Executor:
         if trace is not None:
             checks.extend(_trace_to_checks(trace))
 
-        # Detect requires_approval
+        # Detect requires_approval (preflight reports, does not enforce)
         requires_approval = False
         if pipe_ctx.module is not None:
-            requires_approval = self._needs_approval(pipe_ctx.module)
+            annotations = getattr(pipe_ctx.module, "annotations", None)
+            if isinstance(annotations, ModuleAnnotations):
+                requires_approval = annotations.requires_approval
+            elif isinstance(annotations, dict):
+                requires_approval = bool(annotations.get("requires_approval", False))
 
         # Module-level preflight (optional)
         if (
@@ -503,111 +458,6 @@ class Executor:
 
         valid = all(c.passed for c in checks)
         return PreflightResult(valid=valid, checks=checks, requires_approval=requires_approval)
-
-    def _needs_approval(self, module: Any) -> bool:
-        """Check if a module requires approval, handling both dict and dataclass annotations."""
-        annotations = getattr(module, "annotations", None)
-        if annotations is None:
-            return False
-        if isinstance(annotations, ModuleAnnotations):
-            return annotations.requires_approval
-        if isinstance(annotations, dict):
-            return bool(annotations.get("requires_approval", False))
-        return False
-
-    def _build_approval_request(
-        self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context
-    ) -> ApprovalRequest:
-        """Build an ApprovalRequest from module metadata."""
-        annotations = getattr(module, "annotations", None)
-        if isinstance(annotations, ModuleAnnotations):
-            ann = annotations
-        elif isinstance(annotations, dict):
-            valid_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
-            ann = ModuleAnnotations(**{k: v for k, v in annotations.items() if k in valid_fields})
-        else:
-            ann = ModuleAnnotations()
-
-        return ApprovalRequest(
-            module_id=module_id,
-            arguments=inputs,
-            context=ctx,
-            annotations=ann,
-            description=getattr(module, "description", None),
-            tags=getattr(module, "tags", None) or [],
-        )
-
-    def _handle_approval_result(self, result: ApprovalResult, module_id: str) -> None:
-        """Map an ApprovalResult status to the appropriate action or error."""
-        if result.status == "approved":
-            return
-        if result.status == "rejected":
-            raise ApprovalDeniedError(result=result, module_id=module_id)
-        if result.status == "timeout":
-            raise ApprovalTimeoutError(result=result, module_id=module_id)
-        if result.status == "pending":
-            raise ApprovalPendingError(result=result, module_id=module_id)
-        _logger.warning("Unknown approval status '%s' for module %s, treating as denied", result.status, module_id)
-        raise ApprovalDeniedError(result=result, module_id=module_id)
-
-    def _emit_approval_event(self, result: ApprovalResult, module_id: str, ctx: Context) -> None:
-        """Emit an audit event for the approval decision (logging + span event)."""
-        _logger.info(
-            "Approval decision: module=%s status=%s approved_by=%s reason=%s",
-            module_id,
-            result.status,
-            result.approved_by,
-            result.reason,
-        )
-        spans_stack: list[Any] = ctx.data.get("_apcore.mw.tracing.spans", [])
-        if spans_stack:
-            spans_stack[-1].events.append(
-                {
-                    "name": "approval_decision",
-                    "module_id": module_id,
-                    "status": result.status,
-                    "approved_by": result.approved_by or "",
-                    "reason": result.reason or "",
-                    "approval_id": result.approval_id or "",
-                }
-            )
-
-    def _check_approval_sync(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> None:
-        """Step 5: Approval gate (sync path). Bridges to async handler."""
-        if self._approval_handler is None:
-            return
-        if not self._needs_approval(module):
-            return
-
-        # Phase B resume: pop _approval_token and check
-        if "_approval_token" in inputs:
-            token = inputs.pop("_approval_token")
-            coro = self._approval_handler.check_approval(token)
-        else:
-            request = self._build_approval_request(module, module_id, inputs, ctx)
-            coro = self._approval_handler.request_approval(request)
-
-        result = self._run_async_in_sync(coro, module_id, 0)
-        self._emit_approval_event(result, module_id, ctx)
-        self._handle_approval_result(result, module_id)
-
-    async def _check_approval_async(self, module: Any, module_id: str, inputs: dict[str, Any], ctx: Context) -> None:
-        """Step 5: Approval gate (async path)."""
-        if self._approval_handler is None:
-            return
-        if not self._needs_approval(module):
-            return
-
-        # Phase B resume: pop _approval_token and check
-        if "_approval_token" in inputs:
-            token = inputs.pop("_approval_token")
-            result = await self._approval_handler.check_approval(token)
-        else:
-            request = self._build_approval_request(module, module_id, inputs, ctx)
-            result = await self._approval_handler.request_approval(request)
-
-        self._emit_approval_event(result, module_id, ctx)
-        self._handle_approval_result(result, module_id)
 
     @staticmethod
     def _validate_module_id(module_id: str) -> None:
@@ -659,31 +509,6 @@ class Executor:
 
         # Fallback: return as ModuleError
         return ModuleError(code="PIPELINE_ABORT", message=explanation)
-
-    # _check_safety, _is_async_module, _execute_with_timeout removed in v0.17
-    # (replaced by BuiltinCallChainGuard, BuiltinExecute pipeline steps)
-
-    def _run_async_in_sync(self, coro: Any, module_id: str, timeout_ms: int) -> Any:
-        """Run an async coroutine from a sync context."""
-        timeout_s = timeout_ms / 1000.0 if timeout_ms > 0 else None
-
-        try:
-            asyncio.get_running_loop()
-            has_loop = True
-        except RuntimeError:
-            has_loop = False
-
-        if not has_loop:
-            if timeout_s is not None:
-                wrapped = asyncio.wait_for(coro, timeout=timeout_s)
-            else:
-                wrapped = coro
-            try:
-                return asyncio.run(wrapped)
-            except asyncio.TimeoutError:
-                raise ModuleTimeoutError(module_id=module_id, timeout_ms=timeout_ms)
-        else:
-            return self._run_in_new_thread(coro, module_id, timeout_s)
 
     def _run_in_new_thread(self, coro: Any, module_id: str, timeout_s: float | None) -> Any:
         """Run coroutine in a new thread with its own event loop."""
@@ -748,20 +573,35 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            # A11 error propagation + middleware on_error recovery
-            ctx_obj = pipe_ctx.context
-            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
-            executed_mw = pipe_ctx.executed_middlewares
-            if executed_mw:
-                recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id, pipe_ctx.inputs, wrapped, ctx_obj, executed_mw
-                )
-                if recovery is not None:
-                    return recovery
-            if isinstance(exc, MiddlewareChainError):
-                raise ModuleExecuteError(module_id=module_id, message=str(exc)) from exc
-            raise wrapped from exc
+            return await self._recover_from_call_error(exc, pipe_ctx, module_id)
         return output
+
+    async def _recover_from_call_error(
+        self,
+        exc: Exception,
+        pipe_ctx: PipelineContext,
+        module_id: str,
+    ) -> dict[str, Any]:
+        """Run A11 error propagation + middleware on_error recovery.
+
+        Returns the recovery dict from the first middleware that provides one.
+        If no middleware recovers, raises the wrapped error (or wraps a
+        ``MiddlewareChainError`` into ``ModuleExecuteError`` first). Never
+        returns ``None`` — callers can rely on the fact that a return value is
+        always a valid recovery dict.
+        """
+        ctx_obj = pipe_ctx.context
+        wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
+        executed_mw = pipe_ctx.executed_middlewares
+        if executed_mw:
+            recovery = await self._middleware_manager.execute_on_error_async(
+                module_id, pipe_ctx.inputs, wrapped, ctx_obj, executed_mw
+            )
+            if recovery is not None:
+                return recovery
+        if isinstance(exc, MiddlewareChainError):
+            raise ModuleExecuteError(module_id=module_id, message=str(exc)) from exc
+        raise wrapped from exc
 
     async def stream(
         self,
@@ -806,20 +646,8 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            ctx_obj = pipe_ctx.context
-            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
-            if pipe_ctx.executed_middlewares:
-                recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id,
-                    pipe_ctx.inputs,
-                    wrapped,
-                    ctx_obj,
-                    pipe_ctx.executed_middlewares,
-                )
-                if recovery is not None:
-                    yield recovery
-                    return
-            raise wrapped from exc
+            yield await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            return
 
         # If module has no stream(), pipeline already executed and set ctx.output
         if pipe_ctx.output_stream is None:
@@ -835,20 +663,8 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            ctx_obj = pipe_ctx.context
-            wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
-            if pipe_ctx.executed_middlewares:
-                recovery = await self._middleware_manager.execute_on_error_async(
-                    module_id,
-                    pipe_ctx.inputs,
-                    wrapped,
-                    ctx_obj,
-                    pipe_ctx.executed_middlewares,
-                )
-                if recovery is not None:
-                    yield recovery
-                    return
-            raise wrapped from exc
+            yield await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            return
 
         # Phase 3: Output validation + middleware_after on accumulated result
         pipe_ctx.output = accumulated
@@ -926,8 +742,9 @@ class Executor:
     ) -> tuple[dict[str, Any], PipelineTrace]:
         """Sync call that returns (result, trace).
 
-        Runs the module through the pipeline engine and returns both the
-        output and the full pipeline trace for introspection.
+        Sync wrapper around :meth:`call_async_with_trace`. Runs the module
+        through the pipeline engine and returns both the output and the full
+        pipeline trace for introspection.
 
         Args:
             module_id: The module to execute.
@@ -938,23 +755,10 @@ class Executor:
         Returns:
             A tuple of (result dict, PipelineTrace).
         """
-        effective_strategy = self._effective_strategy(strategy)
-        pipe_ctx = PipelineContext(
-            module_id=module_id,
-            inputs=inputs or {},
-            context=context,
-            strategy=effective_strategy,
+        return self._run_async_in_sync(
+            self.call_async_with_trace(module_id, inputs, context, strategy=strategy),
+            module_id,
         )
-        engine = PipelineEngine()
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is None:
-            return asyncio.run(engine.run(effective_strategy, pipe_ctx))
-        return self._run_in_new_thread(engine.run(effective_strategy, pipe_ctx), module_id, None)
 
     async def call_async_with_trace(
         self,
@@ -967,7 +771,10 @@ class Executor:
         """Async call that returns (result, trace).
 
         Runs the module through the pipeline engine and returns both the
-        output and the full pipeline trace for introspection.
+        output and the full pipeline trace for introspection. Errors flow
+        through the same A11 propagation + middleware ``on_error`` recovery
+        path as :meth:`call_async`; if a middleware recovers, the recovery
+        dict is returned alongside the trace captured up to the failure.
 
         Args:
             module_id: The module to execute.
@@ -986,7 +793,22 @@ class Executor:
             strategy=effective_strategy,
         )
         engine = PipelineEngine()
-        return await engine.run(effective_strategy, pipe_ctx)
+        try:
+            return await engine.run(effective_strategy, pipe_ctx)
+        except PipelineAbortError as e:
+            raise self._translate_abort(e) from e
+        except ExecutionCancelledError:
+            raise
+        except Exception as exc:
+            # If a middleware ``on_error`` recovers, return the recovery dict.
+            # The full pipeline trace was held inside ``engine.run`` and is not
+            # accessible here, so callers receive a sentinel trace marking the
+            # strategy and module — sufficient for routing/observability but
+            # without per-step detail. Callers needing the partial trace
+            # should use ``call_async`` (which discards the trace) or attach
+            # a tracing middleware.
+            recovery = await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            return recovery, PipelineTrace(module_id=module_id, strategy_name=effective_strategy.name)
 
     def _effective_strategy(
         self,

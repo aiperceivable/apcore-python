@@ -379,7 +379,7 @@ class TestApprovalAuditEvents:
     def test_audit_log_emitted_on_approved(self, registry: Registry, caplog: pytest.LogCaptureFixture) -> None:
         """logging.info is emitted with approval decision details when approved."""
         executor = Executor(registry=registry, approval_handler=AutoApproveHandler())
-        with caplog.at_level(logging.INFO, logger="apcore.executor"):
+        with caplog.at_level(logging.INFO, logger="apcore.builtin_steps"):
             executor.call("test.approval_required")
 
         approval_logs = [r for r in caplog.records if "Approval decision" in r.message]
@@ -390,7 +390,7 @@ class TestApprovalAuditEvents:
     def test_audit_log_emitted_on_denied(self, registry: Registry, caplog: pytest.LogCaptureFixture) -> None:
         """logging.info is emitted before ApprovalDeniedError is raised."""
         executor = Executor(registry=registry, approval_handler=AlwaysDenyHandler())
-        with caplog.at_level(logging.INFO, logger="apcore.executor"):
+        with caplog.at_level(logging.INFO, logger="apcore.builtin_steps"):
             with pytest.raises(ApprovalDeniedError):
                 executor.call("test.approval_required")
 
@@ -405,7 +405,7 @@ class TestApprovalAuditEvents:
             return ApprovalResult(status="pending", approval_id="tok-123")
 
         executor = Executor(registry=registry, approval_handler=CallbackApprovalHandler(pending_cb))
-        with caplog.at_level(logging.INFO, logger="apcore.executor"):
+        with caplog.at_level(logging.INFO, logger="apcore.builtin_steps"):
             with pytest.raises(ApprovalPendingError):
                 executor.call("test.approval_required")
 
@@ -417,7 +417,7 @@ class TestApprovalAuditEvents:
     async def test_audit_log_emitted_async(self, registry: Registry, caplog: pytest.LogCaptureFixture) -> None:
         """Audit log is emitted in async call_async() path."""
         executor = Executor(registry=registry, approval_handler=AutoApproveHandler())
-        with caplog.at_level(logging.INFO, logger="apcore.executor"):
+        with caplog.at_level(logging.INFO, logger="apcore.builtin_steps"):
             await executor.call_async("test.approval_required")
 
         approval_logs = [r for r in caplog.records if "Approval decision" in r.message]
@@ -427,7 +427,7 @@ class TestApprovalAuditEvents:
     def test_no_audit_log_when_gate_skipped(self, registry: Registry, caplog: pytest.LogCaptureFixture) -> None:
         """No audit log when gate is skipped (no handler or no requires_approval)."""
         executor = Executor(registry=registry)
-        with caplog.at_level(logging.INFO, logger="apcore.executor"):
+        with caplog.at_level(logging.INFO, logger="apcore.builtin_steps"):
             executor.call("test.approval_required")
 
         approval_logs = [r for r in caplog.records if "Approval decision" in r.message]
