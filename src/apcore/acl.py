@@ -77,11 +77,8 @@ class ACL:
 
     _condition_handlers: ClassVar[dict[str, ACLConditionHandler]] = {
         "identity_types": _IdentityTypesHandler(),
-        "identity_type": _IdentityTypesHandler(),
         "roles": _RolesHandler(),
-        "role": _RolesHandler(),
         "max_call_depth": _MaxCallDepthHandler(),
-        "call_depth": _MaxCallDepthHandler(),
     }
 
     @classmethod
@@ -250,56 +247,25 @@ class ACL:
         Returns:
             True if the call is allowed, False if denied.
         """
-        effective_caller = "@external" if caller_id is None else caller_id
+        effective_caller, rules, default_effect, audit_logger = self._snapshot(caller_id)
 
-        with self._lock:
-            rules = list(self._rules)
-            default_effect = self._default_effect
-            audit_logger = self._audit_logger
-
+        matched: tuple[int, ACLRule] | None = None
         for idx, rule in enumerate(rules):
             if self._matches_rule(rule, effective_caller, target_id, context):
-                decision = rule.effect == "allow"
-                self._logger.debug(
-                    "ACL check: caller_id=%s target_id=%s decision=%s rule=%s",
-                    caller_id,
-                    target_id,
-                    "allow" if decision else "deny",
-                    rule.description or "(no description)",
-                )
-                if audit_logger is not None:
-                    entry = self._build_audit_entry(
-                        caller_id=effective_caller,
-                        target_id=target_id,
-                        decision="allow" if decision else "deny",
-                        reason="rule_match",
-                        matched_rule=rule,
-                        matched_rule_index=idx,
-                        context=context,
-                    )
-                    audit_logger(entry)
-                return decision
+                matched = (idx, rule)
+                break
 
-        default_decision = default_effect == "allow"
-        self._logger.debug(
-            "ACL check: caller_id=%s target_id=%s decision=%s rule=default",
-            caller_id,
-            target_id,
-            "allow" if default_decision else "deny",
+        return self._finalize_check(
+            log_method="check",
+            caller_id=caller_id,
+            effective_caller=effective_caller,
+            target_id=target_id,
+            rules_present=bool(rules),
+            default_effect=default_effect,
+            matched=matched,
+            audit_logger=audit_logger,
+            context=context,
         )
-        if audit_logger is not None:
-            reason = "no_rules" if not rules else "default_effect"
-            entry = self._build_audit_entry(
-                caller_id=effective_caller,
-                target_id=target_id,
-                decision="allow" if default_decision else "deny",
-                reason=reason,
-                matched_rule=None,
-                matched_rule_index=None,
-                context=context,
-            )
-            audit_logger(entry)
-        return default_decision
 
     async def async_check(
         self,
@@ -317,56 +283,85 @@ class ACL:
         Returns:
             True if the call is allowed, False if denied.
         """
-        effective_caller = "@external" if caller_id is None else caller_id
+        effective_caller, rules, default_effect, audit_logger = self._snapshot(caller_id)
 
-        with self._lock:
-            rules = list(self._rules)
-            default_effect = self._default_effect
-            audit_logger = self._audit_logger
-
+        matched: tuple[int, ACLRule] | None = None
         for idx, rule in enumerate(rules):
             if await self._matches_rule_async(rule, effective_caller, target_id, context):
-                decision = rule.effect == "allow"
-                self._logger.debug(
-                    "ACL async_check: caller_id=%s target_id=%s decision=%s rule=%s",
-                    caller_id,
-                    target_id,
-                    "allow" if decision else "deny",
-                    rule.description or "(no description)",
-                )
-                if audit_logger is not None:
-                    entry = self._build_audit_entry(
-                        caller_id=effective_caller,
-                        target_id=target_id,
-                        decision="allow" if decision else "deny",
-                        reason="rule_match",
-                        matched_rule=rule,
-                        matched_rule_index=idx,
-                        context=context,
-                    )
-                    audit_logger(entry)
-                return decision
+                matched = (idx, rule)
+                break
 
-        default_decision = default_effect == "allow"
+        return self._finalize_check(
+            log_method="async_check",
+            caller_id=caller_id,
+            effective_caller=effective_caller,
+            target_id=target_id,
+            rules_present=bool(rules),
+            default_effect=default_effect,
+            matched=matched,
+            audit_logger=audit_logger,
+            context=context,
+        )
+
+    def _snapshot(self, caller_id: str | None) -> tuple[str, list[ACLRule], str, Callable[[AuditEntry], None] | None]:
+        """Atomically snapshot mutable state for a check call."""
+        effective_caller = "@external" if caller_id is None else caller_id
+        with self._lock:
+            return effective_caller, list(self._rules), self._default_effect, self._audit_logger
+
+    def _finalize_check(
+        self,
+        *,
+        log_method: str,
+        caller_id: str | None,
+        effective_caller: str,
+        target_id: str,
+        rules_present: bool,
+        default_effect: str,
+        matched: tuple[int, ACLRule] | None,
+        audit_logger: Callable[[AuditEntry], None] | None,
+        context: Context | None,
+    ) -> bool:
+        """Log the decision, emit an audit entry, and return the boolean result.
+
+        Shared by both check() and async_check() so that audit + logging logic
+        lives in exactly one place.
+        """
+        if matched is not None:
+            matched_idx, matched_rule = matched
+            decision = matched_rule.effect == "allow"
+            rule_label: str = matched_rule.description or "(no description)"
+            reason = "rule_match"
+        else:
+            matched_idx = None
+            matched_rule = None
+            decision = default_effect == "allow"
+            rule_label = "default"
+            reason = "default_effect" if rules_present else "no_rules"
+
         self._logger.debug(
-            "ACL async_check: caller_id=%s target_id=%s decision=%s rule=default",
+            "ACL %s: caller_id=%s target_id=%s decision=%s rule=%s",
+            log_method,
             caller_id,
             target_id,
-            "allow" if default_decision else "deny",
+            "allow" if decision else "deny",
+            rule_label,
         )
+
         if audit_logger is not None:
-            reason = "no_rules" if not rules else "default_effect"
-            entry = self._build_audit_entry(
-                caller_id=effective_caller,
-                target_id=target_id,
-                decision="allow" if default_decision else "deny",
-                reason=reason,
-                matched_rule=None,
-                matched_rule_index=None,
-                context=context,
+            audit_logger(
+                self._build_audit_entry(
+                    caller_id=effective_caller,
+                    target_id=target_id,
+                    decision="allow" if decision else "deny",
+                    reason=reason,
+                    matched_rule=matched_rule,
+                    matched_rule_index=matched_idx,
+                    context=context,
+                )
             )
-            audit_logger(entry)
-        return default_decision
+
+        return decision
 
     def _match_patterns(self, patterns: list[str], value: str, context: Context | None = None) -> bool:
         """Match a list of patterns against a value.
@@ -473,12 +468,10 @@ class ACL:
         context: Context | None,
     ) -> bool:
         """Async version of _matches_rule. Uses _evaluate_conditions_async for conditions."""
-        caller_match = any(self._match_pattern(p, caller, context) for p in rule.callers)
-        if not caller_match:
+        if not self._match_patterns(rule.callers, caller, context):
             return False
 
-        target_match = any(self._match_pattern(p, target, context) for p in rule.targets)
-        if not target_match:
+        if not self._match_patterns(rule.targets, target, context):
             return False
 
         if rule.conditions is not None:
