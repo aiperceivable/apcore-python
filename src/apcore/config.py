@@ -1077,39 +1077,17 @@ class Config:
 
 
 def _instantiate_model(model_class: type, data: dict[str, Any], namespace: str) -> Any:
-    """Instantiate a Pydantic model or dataclass from a dict.
+    """Bind a config namespace dict to a Pydantic v2 model, dataclass, or plain class.
 
-    Tries Pydantic v2, then v1, then dataclass, then plain constructor.
+    Pydantic v2 models are instantiated via ``model_validate`` (which runs
+    field validation); dataclasses and any other class accepting a keyword
+    init are instantiated via ``model_class(**data)``. Pydantic v1's
+    ``parse_obj`` form is no longer attempted because ``pyproject.toml``
+    requires ``pydantic>=2.0``.
     """
-    # Pydantic v2
-    if hasattr(model_class, "model_validate"):
-        try:
-            return model_class.model_validate(data)
-        except Exception as exc:
-            raise ConfigBindError(
-                message=f"Failed to bind namespace {namespace!r} to {model_class.__name__}: {exc}"
-            ) from exc
-
-    # Pydantic v1
-    if hasattr(model_class, "parse_obj"):
-        try:
-            return model_class.parse_obj(data)
-        except Exception as exc:
-            raise ConfigBindError(
-                message=f"Failed to bind namespace {namespace!r} to {model_class.__name__}: {exc}"
-            ) from exc
-
-    # Dataclass
-    if dataclasses.is_dataclass(model_class):
-        try:
-            return model_class(**data)
-        except Exception as exc:
-            raise ConfigBindError(
-                message=f"Failed to bind namespace {namespace!r} to {model_class.__name__}: {exc}"
-            ) from exc
-
-    # Generic fallback
     try:
+        if hasattr(model_class, "model_validate"):
+            return model_class.model_validate(data)
         return model_class(**data)
     except Exception as exc:
         raise ConfigBindError(
