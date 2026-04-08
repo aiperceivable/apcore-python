@@ -247,31 +247,43 @@ class Executor:
         """Set the access control provider.
 
         Updates both the executor field and the strategy's ``acl_check`` step
-        via its public :meth:`BuiltinACLCheck.set_acl` setter.
+        via its public :meth:`BuiltinACLCheck.set_acl` setter when present.
+        Custom user-supplied ACL steps without that setter are silently
+        skipped — callers should re-register the strategy if they need to
+        replace a custom step's ACL provider.
 
         Args:
             acl: The ACL instance to use for access control enforcement.
         """
         self._acl = acl
         for step in self._strategy.steps:
-            if step.name == "acl_check" and hasattr(step, "set_acl"):
-                step.set_acl(acl)
-                break
+            if step.name != "acl_check":
+                continue
+            setter = getattr(step, "set_acl", None)
+            if callable(setter):
+                setter(acl)
+            break
 
     def set_approval_handler(self, handler: ApprovalHandler) -> None:
         """Set the approval handler for Step 5 gate.
 
         Updates both the executor field and the strategy's ``approval_gate``
-        step via its public :meth:`BuiltinApprovalGate.set_handler` setter.
+        step via its public :meth:`BuiltinApprovalGate.set_handler` setter
+        when present. Custom user-supplied approval steps without that
+        setter are silently skipped — callers should re-register the
+        strategy if they need to replace a custom step's handler.
 
         Args:
             handler: The ApprovalHandler instance to use for approval enforcement.
         """
         self._approval_handler = handler
         for step in self._strategy.steps:
-            if step.name == "approval_gate" and hasattr(step, "set_handler"):
-                step.set_handler(handler)
-                break
+            if step.name != "approval_gate":
+                continue
+            setter = getattr(step, "set_handler", None)
+            if callable(setter):
+                setter(handler)
+            break
 
     def use(self, middleware: Middleware) -> Executor:
         """Add class-based middleware and return self for chaining."""
