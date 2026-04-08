@@ -94,7 +94,15 @@ This round produced an unusually clear data point about the reliability of LLM-d
 
 When the next cleanup round happens, the following items should be re-investigated *from scratch* using "read primary source first, then form claims":
 
-1. **`config.py` A12 / A12-NS** (Task #5) — The "two parallel paths" claim is the strongest unexamined claim from this round's plan. Verify by reading config.py + spec §9.3 / §9.5 / §9.10 before scoping. Plausibly real, but possibly overstated.
+1. **`config.py` typed-Config migration** — The "two parallel paths" cleanup-doc claim was investigated against `apcore-rust/src/config.rs` and the analysis is recorded below. **Result**: Rust avoids the dual-layout problem entirely by using a strongly-typed `Config` struct (`executor: ExecutorConfig`, `observability: ObservabilityConfig`, `user_namespaces: HashMap`) deserialized via serde — there is no dict-based storage and no mode-dependent `get()` dispatch. Adopting this pattern in python requires:
+   - Converting `Config._data: dict` to a Pydantic v2 model with typed fields
+   - Reworking ~10 test files that use `Config(data=...)` or `config.data`
+   - Migrating all `config.get("executor.X")` paths through Pydantic accessors
+   - ~500-800 LOC change, breaking public API, design-doc + multi-day work
+   
+   The shallow alternative (auto-wrap legacy yaml in `{"apcore": ...}` at load time) was also rejected: it would break the same 10 test files via `config.data` shape contract AND wouldn't actually unify validate/env-override because their algorithms still differ. Marginal helper extraction (`_run_constraints_check`) was also rejected as premature abstraction (saves 0 LOC).
+   
+   **Bottom line**: This is genuinely deferred to a future round with proper design upfront. The cleanup-2026-04 round explicitly chose NOT to attempt this refactor under "全部解决" pressure because the risk-to-value ratio was wrong.
 2. **`registry.py:_handle_file_change`** — Class discovery via `dir(mod)` + `hasattr(attr, 'execute')` is fragile and inconsistent with the entry_point resolution that the rest of the registry uses. Not in this round's scope but flagged for cleanup.
 3. **`builtin_steps.py:692-857` strategy builder duplication** — Five build_*_strategy functions all do `build_standard_strategy + .remove() + name = X`. Could be data-driven (`{name: [removed_steps]}` table). Skipped this round to avoid premature abstraction; revisit if a 6th strategy variant is added.
 4. **`pipeline_config.py` `register_step_type()`** — Agent reported zero production callers. Not verified yet. If genuinely unused, delete the dynamic-handler-resolution path.
