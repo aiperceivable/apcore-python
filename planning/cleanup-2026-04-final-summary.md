@@ -30,7 +30,7 @@
 
 ## Impact on Files Touched
 
-| File | Before | After | Δ |
+| File | Before | After | Diff |
 |---|---:|---:|---:|
 | executor.py | 1057 | 874 | **−183** |
 | builtin_steps.py | 817 | 858 | +41 |
@@ -102,7 +102,7 @@ When the next cleanup round happens, the following items should be re-investigat
    
    The shallow alternative (auto-wrap legacy yaml in `{"apcore": ...}` at load time) was also rejected: it would break the same 10 test files via `config.data` shape contract AND wouldn't actually unify validate/env-override because their algorithms still differ. Marginal helper extraction (`_run_constraints_check`) was also rejected as premature abstraction (saves 0 LOC).
    
-   **Bottom line**: This is genuinely deferred to a future round with proper design upfront. The cleanup-2026-04 round explicitly chose NOT to attempt this refactor under "全部解决" pressure because the risk-to-value ratio was wrong.
+   **Bottom line**: This is genuinely deferred to a future round with proper design upfront. The cleanup-2026-04 round explicitly chose NOT to attempt this refactor under "solve everything" pressure because the risk-to-value ratio was wrong.
 2. **`registry.py:_handle_file_change`** — Class discovery via `dir(mod)` + `hasattr(attr, 'execute')` is fragile and inconsistent with the entry_point resolution that the rest of the registry uses. Not in this round's scope but flagged for cleanup.
 3. **`builtin_steps.py:692-857` strategy builder duplication** — Five build_*_strategy functions all do `build_standard_strategy + .remove() + name = X`. Could be data-driven (`{name: [removed_steps]}` table). Skipped this round to avoid premature abstraction; revisit if a 6th strategy variant is added.
 4. **`pipeline_config.py` `register_step_type()`** — Agent reported zero production callers. Not verified yet. If genuinely unused, delete the dynamic-handler-resolution path.
