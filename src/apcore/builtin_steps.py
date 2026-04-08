@@ -76,6 +76,25 @@ def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str
     ]
 
 
+def _ensure_middleware_manager(manager: Any | None, middlewares: list[Any] | None) -> Any:
+    """Return *manager* if provided, otherwise build a fresh one from *middlewares*.
+
+    Lets ``BuiltinMiddlewareBefore`` and ``BuiltinMiddlewareAfter`` keep a
+    single execution path: production passes the executor's shared
+    ``MiddlewareManager`` directly, while tests/standalone callers can
+    supply a raw ``middlewares`` list and have a one-off manager built for
+    them on the fly.
+    """
+    if manager is not None:
+        return manager
+    from apcore.middleware.manager import MiddlewareManager
+
+    built = MiddlewareManager()
+    for mw in middlewares or []:
+        built.add(mw)
+    return built
+
+
 # ---------------------------------------------------------------------------
 # Step 1: Context Creation
 # ---------------------------------------------------------------------------
@@ -350,7 +369,13 @@ def _coerce_annotations(annotations: Any) -> ModuleAnnotations:
 
 
 class BuiltinMiddlewareBefore(BaseStep):
-    """Execute middleware before-chain."""
+    """Execute middleware before-chain.
+
+    Always operates through a ``MiddlewareManager`` — when the caller does
+    not supply one, an internal manager is built from the ``middlewares``
+    list. This collapses what used to be two parallel execute() paths
+    (manager + raw-list fallback) into one.
+    """
 
     def __init__(
         self,
@@ -365,82 +390,56 @@ class BuiltinMiddlewareBefore(BaseStep):
             replaceable=False,
             pure=False,
         )
-        self._middlewares = middlewares or []
-        self._middleware_manager = middleware_manager
+        self._manager = _ensure_middleware_manager(middleware_manager, middlewares)
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
-        if self._middleware_manager is not None:
-            from apcore.middleware.manager import MiddlewareChainError
+        from apcore.middleware.manager import MiddlewareChainError
 
-            try:
-                if hasattr(self._middleware_manager, "execute_before_async"):
-                    inputs, executed = await self._middleware_manager.execute_before_async(
-                        ctx.module_id,
-                        ctx.inputs,
-                        ctx.context,
-                    )
-                else:
-                    inputs, executed = self._middleware_manager.execute_before(
-                        ctx.module_id,
-                        ctx.inputs,
-                        ctx.context,
-                    )
-                ctx.inputs = inputs
-                ctx.executed_middlewares = list(executed)
-            except MiddlewareChainError as exc:
-                # Store executed middlewares for the executor's on_error recovery
-                ctx.executed_middlewares = list(exc.executed_middlewares)
-                raise
-            except Exception as exc:
-                # on_error recovery for non-chain errors
-                if hasattr(self._middleware_manager, "execute_on_error_async"):
-                    recovery = await self._middleware_manager.execute_on_error_async(
-                        ctx.module_id,
-                        ctx.inputs,
-                        exc,
-                        ctx.context,
-                        ctx.executed_middlewares,
-                    )
-                elif hasattr(self._middleware_manager, "execute_on_error"):
-                    recovery = self._middleware_manager.execute_on_error(
-                        ctx.module_id,
-                        ctx.inputs,
-                        exc,
-                        ctx.context,
-                        ctx.executed_middlewares,
-                    )
-                else:
-                    recovery = None
-                # Clear executed_middlewares after on_error to prevent double invocation
-                ctx.executed_middlewares = []
-                if recovery is not None:
-                    ctx.output = recovery
-                    return StepResult(action="skip_to", skip_to="return_result")
-                raise
-            return StepResult(action="continue")
-
-        executed: list[Any] = []
-        for mw in self._middlewares:
-            try:
-                if hasattr(mw, "before"):
-                    result = mw.before(ctx.module_id, ctx.inputs, ctx.context)
-                    if result is not None:
-                        ctx.inputs = result if isinstance(result, dict) else ctx.inputs
-                    executed.append(mw)
-            except Exception as exc:
-                ctx.executed_middlewares = executed
-                for recovery_mw in reversed(executed):
-                    if hasattr(recovery_mw, "on_error"):
-                        try:
-                            recovery = recovery_mw.on_error(ctx.module_id, ctx.inputs, exc, ctx.context)
-                            if recovery is not None:
-                                ctx.output = recovery
-                                return StepResult(action="skip_to", skip_to="return_result")
-                        except Exception:
-                            pass
-                ctx.executed_middlewares = []  # Clear to prevent double on_error in executor
-                raise
-        ctx.executed_middlewares = executed
+        try:
+            if hasattr(self._manager, "execute_before_async"):
+                inputs, executed = await self._manager.execute_before_async(
+                    ctx.module_id,
+                    ctx.inputs,
+                    ctx.context,
+                )
+            else:
+                inputs, executed = self._manager.execute_before(
+                    ctx.module_id,
+                    ctx.inputs,
+                    ctx.context,
+                )
+            ctx.inputs = inputs
+            ctx.executed_middlewares = list(executed)
+        except MiddlewareChainError as exc:
+            # Store executed middlewares for the executor's on_error recovery
+            ctx.executed_middlewares = list(exc.executed_middlewares)
+            raise
+        except Exception as exc:
+            # on_error recovery for non-chain errors
+            if hasattr(self._manager, "execute_on_error_async"):
+                recovery = await self._manager.execute_on_error_async(
+                    ctx.module_id,
+                    ctx.inputs,
+                    exc,
+                    ctx.context,
+                    ctx.executed_middlewares,
+                )
+            elif hasattr(self._manager, "execute_on_error"):
+                recovery = self._manager.execute_on_error(
+                    ctx.module_id,
+                    ctx.inputs,
+                    exc,
+                    ctx.context,
+                    ctx.executed_middlewares,
+                )
+            else:
+                recovery = None
+            # Clear executed_middlewares after on_error to prevent double invocation
+            ctx.executed_middlewares = []
+            if recovery is not None:
+                ctx.output = recovery
+                return StepResult(action="skip_to", skip_to="return_result")
+            raise
         return StepResult(action="continue")
 
 
@@ -660,7 +659,13 @@ class BuiltinOutputValidation(BaseStep):
 
 
 class BuiltinMiddlewareAfter(BaseStep):
-    """Execute middleware after-chain."""
+    """Execute middleware after-chain.
+
+    Always operates through a ``MiddlewareManager`` — when the caller does
+    not supply one, an internal manager is built from the ``middlewares``
+    list. Mirrors :class:`BuiltinMiddlewareBefore` so the two steps share
+    the same execution model.
+    """
 
     def __init__(
         self,
@@ -675,39 +680,24 @@ class BuiltinMiddlewareAfter(BaseStep):
             replaceable=False,
             pure=False,
         )
-        self._middlewares = middlewares or []
-        self._middleware_manager = middleware_manager
+        self._manager = _ensure_middleware_manager(middleware_manager, middlewares)
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
-        if self._middleware_manager is not None:
-            if hasattr(self._middleware_manager, "execute_after_async"):
-                output = await self._middleware_manager.execute_after_async(
-                    ctx.module_id,
-                    ctx.inputs,
-                    ctx.output or {},
-                    ctx.context,
-                )
-            else:
-                output = self._middleware_manager.execute_after(
-                    ctx.module_id,
-                    ctx.inputs,
-                    ctx.output or {},
-                    ctx.context,
-                )
-            ctx.output = output
-            return StepResult(action="continue")
-
-        for mw in self._middlewares:
-            try:
-                if hasattr(mw, "after"):
-                    result = mw.after(ctx.module_id, ctx.inputs, ctx.output, ctx.context)
-                    if result is not None and isinstance(result, dict):
-                        ctx.output = result
-            except Exception as exc:
-                return StepResult(
-                    action="abort",
-                    explanation=f"Middleware after error: {exc}",
-                )
+        if hasattr(self._manager, "execute_after_async"):
+            output = await self._manager.execute_after_async(
+                ctx.module_id,
+                ctx.inputs,
+                ctx.output or {},
+                ctx.context,
+            )
+        else:
+            output = self._manager.execute_after(
+                ctx.module_id,
+                ctx.inputs,
+                ctx.output or {},
+                ctx.context,
+            )
+        ctx.output = output
         return StepResult(action="continue")
 
 

@@ -13,8 +13,6 @@ import threading
 from collections.abc import AsyncIterator
 from typing import Any, Callable
 
-import pydantic
-
 from apcore.acl import ACL
 from apcore.approval import ApprovalHandler
 from apcore.cancel import ExecutionCancelledError
@@ -98,18 +96,6 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any], *, _depth: int =
             _deep_merge(base[key], value, _depth=_depth + 1)
         else:
             base[key] = value
-
-
-def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str, Any]]:
-    """Convert a Pydantic ValidationError into a list of error dicts."""
-    return [
-        {
-            "field": ".".join(str(loc) for loc in err["loc"]),
-            "code": err["type"],
-            "message": err["msg"],
-        }
-        for err in error.errors()
-    ]
 
 
 class Executor:
