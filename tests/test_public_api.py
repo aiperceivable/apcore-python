@@ -311,6 +311,39 @@ class TestPublicAPIImports:
         assert isinstance(apcore.__version__, str)
         assert re.match(r"^\d+\.\d+\.\d+", apcore.__version__)
 
+    # -- Pipeline preset builders (parity with apcore-typescript / apcore-rust) --
+    # Regression for sync finding A-006: Python previously only exported
+    # build_strategy_from_config; the 5 named-preset builders existed in
+    # apcore.builtin_steps but were not re-exported to the package root.
+
+    def test_pipeline_preset_builders_importable_from_package_root(self):
+        from apcore import (
+            build_internal_strategy,
+            build_minimal_strategy,
+            build_performance_strategy,
+            build_standard_strategy,
+            build_testing_strategy,
+        )
+
+        for fn in (
+            build_standard_strategy,
+            build_internal_strategy,
+            build_testing_strategy,
+            build_performance_strategy,
+            build_minimal_strategy,
+        ):
+            assert callable(fn)
+
+    def test_pipeline_preset_builders_in_all(self):
+        for name in (
+            "build_standard_strategy",
+            "build_internal_strategy",
+            "build_testing_strategy",
+            "build_performance_strategy",
+            "build_minimal_strategy",
+        ):
+            assert name in apcore.__all__, f"{name} missing from apcore.__all__"
+
 
 class TestPublicAPIAll:
     """Verify __all__ is comprehensive and matches actual exports."""
@@ -514,6 +547,12 @@ class TestPublicAPIAll:
         "unregister_step_type",
         "registered_step_types",
         "build_strategy_from_config",
+        # Pipeline Preset Builders (parity with apcore-typescript / apcore-rust)
+        "build_standard_strategy",
+        "build_internal_strategy",
+        "build_testing_strategy",
+        "build_performance_strategy",
+        "build_minimal_strategy",
         # Config Bus (0.15.0)
         "ConfigBindError",
         "ConfigEnvMapConflictError",

@@ -206,6 +206,15 @@ from apcore.pipeline_config import (
     unregister_step_type,
 )
 
+# Pipeline Preset Builders (parity with apcore-typescript and apcore-rust)
+from apcore.builtin_steps import (
+    build_internal_strategy,
+    build_minimal_strategy,
+    build_performance_strategy,
+    build_standard_strategy,
+    build_testing_strategy,
+)
+
 # Trace Context
 from apcore.trace_context import TraceContext, TraceParent
 
@@ -557,6 +566,12 @@ __all__ = [
     "unregister_step_type",
     "registered_step_types",
     "build_strategy_from_config",
+    # Pipeline Preset Builders (parity with apcore-typescript / apcore-rust)
+    "build_standard_strategy",
+    "build_internal_strategy",
+    "build_testing_strategy",
+    "build_performance_strategy",
+    "build_minimal_strategy",
     # System Modules
     "register_sys_modules",
     "register_subscriber_type",

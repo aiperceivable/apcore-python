@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.18.0] - 2026-04-07
+## [0.18.0] - 2026-04-08
+
+### Added
+
+- **Pipeline preset builders re-exported at package root** — `build_standard_strategy`, `build_internal_strategy`, `build_testing_strategy`, `build_performance_strategy`, `build_minimal_strategy` are now importable directly from `apcore`. These functions existed in `apcore.builtin_steps` but were not previously in `apcore.__all__`. Parity with apcore-typescript (`buildXxxStrategy`) and apcore-rust (`build_xxx_strategy` at the crate root).
+- **`TestRegisterInternalValidation`** test class in `tests/registry/test_registry.py` (6 parity tests covering empty rejection, pattern rejection, over-length rejection, reserved-word bypass, duplicate rejection, accept-at-max-length) plus `test_pipeline_preset_builders_*` in `tests/test_public_api.py`.
+
+### Changed
+
+- **`MAX_MODULE_ID_LENGTH` raised from 128 to 192** (`apcore.registry.registry`). Tracks PROTOCOL_SPEC §2.7 EBNF constraint #1 update — accommodates Java/.NET deep-namespace FQN-derived IDs while remaining filesystem-safe (`192 + len('.binding.yaml') = 205 < 255`-byte filename limit on ext4/xfs/NTFS/APFS/btrfs). Module IDs valid before this change remain valid; only the upper bound moved. **Forward-compatible relaxation:** older 0.17.x/0.18.x readers will reject IDs in the 129–192 range emitted by this version.
+- **`Registry.register()` and `Registry.register_internal()` now share a `_validate_module_id()` helper** that runs validation in canonical order (empty → EBNF pattern → length → reserved word per-segment). The reserved-word check is the only step `register_internal()` skips (so sys modules can use the `system.*` prefix); empty/pattern/length/duplicate now apply uniformly. Aligned cross-language with apcore-typescript and apcore-rust.
+- **`register_internal()` now enforces empty / pattern / length / duplicate checks.** Previously bypassed every validation step. Production callers (`apcore.sys_modules.*`) all use canonical-shape IDs so no in-tree caller is broken; external adapters that used `register_internal` as a generic escape hatch should review.
+- **Duplicate registration error message canonicalized** to `"Module ID '<id>' is already registered"` (was `"Module already exists: <id>"` for `register_internal`). Both `register()` and `register_internal()` now emit the same message via the shared error path. Aligned with apcore-rust and apcore-typescript byte-for-byte.
 
 ### Removed (BREAKING)
 

@@ -321,8 +321,14 @@ class TestReloadModuleCallsSafeUnregister:
         mod = _make_reload_module(registry=registry)
 
         new_module = _FakeModuleV2()
+        # `register_internal` now enforces the duplicate check (aligned with
+        # apcore-typescript / apcore-rust). Because `safe_unregister` is mocked
+        # to return True without actually removing the slot, we must also mock
+        # `register_internal` so the re-registration doesn't trip the new
+        # duplicate guard. This test only cares about the safe_unregister call.
         with (
             patch.object(registry, "safe_unregister", return_value=True) as mock_unreg,
+            patch.object(registry, "register_internal"),
             patch.object(mod, "_rediscover_module", return_value=new_module),
         ):
             mod.execute(

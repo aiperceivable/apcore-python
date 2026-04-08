@@ -1111,9 +1111,13 @@ class TestCustomValidator:
 
 
 class TestRegistryConstants:
-    def test_max_module_id_length_is_128(self) -> None:
-        """MAX_MODULE_ID_LENGTH is 128."""
-        assert MAX_MODULE_ID_LENGTH == 128
+    def test_max_module_id_length_matches_spec(self) -> None:
+        """MAX_MODULE_ID_LENGTH matches PROTOCOL_SPEC §2.7 EBNF constraint #1 (192).
+
+        Filesystem-safe: 192 + len('.binding.yaml')=13 = 205 < 255-byte filename limit.
+        Bumped from 128 to accommodate Java/.NET deep-namespace FQN-derived IDs.
+        """
+        assert MAX_MODULE_ID_LENGTH == 192
 
     def test_max_module_id_length_is_int(self) -> None:
         """MAX_MODULE_ID_LENGTH is an integer."""
@@ -1155,3 +1159,42 @@ class TestRegistryConstants:
         exact_id = "a" * MAX_MODULE_ID_LENGTH
         reg.register(exact_id, _ValidModule())
         assert reg.has(exact_id)
+
+
+# ===== register_internal — bypasses ONLY reserved word check =====
+# (parity with apcore-typescript and apcore-rust)
+
+
+class TestRegisterInternalValidation:
+    def test_register_internal_accepts_reserved_first_segment(self) -> None:
+        reg = Registry()
+        reg.register_internal("system.health", _ValidModule())
+        assert reg.has("system.health")
+
+    def test_register_internal_accepts_reserved_any_segment(self) -> None:
+        reg = Registry()
+        reg.register_internal("myapp.system.config", _ValidModule())
+        assert reg.has("myapp.system.config")
+
+    def test_register_internal_still_rejects_empty(self) -> None:
+        reg = Registry()
+        with pytest.raises(InvalidInputError, match="non-empty"):
+            reg.register_internal("", _ValidModule())
+
+    def test_register_internal_still_rejects_invalid_pattern(self) -> None:
+        reg = Registry()
+        for bad_id in ["INVALID-ID", "1abc", "Module", "a..b", ".leading", "trailing.", "has space"]:
+            with pytest.raises(InvalidInputError, match="Invalid module ID|Must match pattern"):
+                reg.register_internal(bad_id, _ValidModule())
+
+    def test_register_internal_still_rejects_over_length(self) -> None:
+        reg = Registry()
+        overlong = "a" * (MAX_MODULE_ID_LENGTH + 1)
+        with pytest.raises(InvalidInputError, match="maximum length"):
+            reg.register_internal(overlong, _ValidModule())
+
+    def test_register_internal_rejects_duplicate(self) -> None:
+        reg = Registry()
+        reg.register_internal("system.dup", _ValidModule())
+        with pytest.raises(InvalidInputError, match="already registered"):
+            reg.register_internal("system.dup", _ValidModule())

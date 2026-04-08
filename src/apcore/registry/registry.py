@@ -103,7 +103,7 @@ class ModuleValidator(Protocol):
         ...
 
 
-MAX_MODULE_ID_LENGTH = 128
+MAX_MODULE_ID_LENGTH = 192
 
 RESERVED_WORDS = frozenset({"system", "internal", "core", "apcore", "plugin", "schema", "acl"})
 
@@ -116,6 +116,48 @@ __all__ = [
     "Discoverer",
     "ModuleValidator",
 ]
+
+
+def _validate_module_id(module_id: str, *, allow_reserved: bool = False) -> None:
+    """Validate a module ID against PROTOCOL_SPEC §2.7 in canonical order.
+
+    Order: empty → pattern → length → reserved (per-segment).
+    Duplicate detection is the caller's responsibility (it requires registry
+    state).
+
+    Args:
+        module_id: Candidate module ID to validate.
+        allow_reserved: When True, the per-segment reserved word check is
+            skipped — used by ``Registry.register_internal`` to allow sys
+            modules to use the ``system.*`` prefix. All other validations
+            (empty, pattern, length) still apply.
+
+    Raises:
+        InvalidInputError: On any validation failure.
+
+    Aligned with ``apcore-typescript._validateModuleId`` and
+    ``apcore::registry::registry::validate_module_id``.
+    """
+    # 1. empty check
+    if not module_id:
+        raise InvalidInputError(message="module_id must be a non-empty string")
+
+    # 2. EBNF pattern check
+    if not MODULE_ID_PATTERN.match(module_id):
+        raise InvalidInputError(
+            f"Invalid module ID: '{module_id}'. Must match pattern: "
+            f"{MODULE_ID_PATTERN.pattern} (lowercase, digits, underscores, dots only; no hyphens)"
+        )
+
+    # 3. length check
+    if len(module_id) > MAX_MODULE_ID_LENGTH:
+        raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
+
+    # 4. reserved word per-segment check (skipped for register_internal)
+    if not allow_reserved:
+        for segment in module_id.split("."):
+            if segment in RESERVED_WORDS:
+                raise InvalidInputError(f"Module ID contains reserved word: '{segment}'")
 
 
 class Registry:
@@ -422,20 +464,16 @@ class Registry:
             metadata: Optional metadata dict (may include x-compatible-versions, x-deprecation).
 
         Raises:
-            InvalidInputError: If module_id is already registered (non-versioned).
+            InvalidInputError: If module_id is empty, malformed, exceeds the
+                length limit, contains a reserved word, or is already
+                registered (non-versioned).
             RuntimeError: If module.on_load() fails (propagated).
+
+        Validation order (PROTOCOL_SPEC §2.7, aligned with apcore-typescript
+        and apcore-rust): empty → pattern → length → reserved (per-segment)
+        → duplicate.
         """
-        if not module_id:
-            raise InvalidInputError(message="module_id must be a non-empty string")
-
-        if not MODULE_ID_PATTERN.match(module_id):
-            raise InvalidInputError(
-                f"Invalid module ID: '{module_id}'. Must match pattern: "
-                f"{MODULE_ID_PATTERN.pattern} (lowercase, digits, underscores, dots only; no hyphens)"
-            )
-
-        if len(module_id) > MAX_MODULE_ID_LENGTH:
-            raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
+        _validate_module_id(module_id, allow_reserved=False)
 
         _ensure_schema_adapter(module)
 
@@ -1009,12 +1047,31 @@ class Registry:
             return dict(self._module_meta.get(module_id, {}))
 
     def register_internal(self, module_id: str, module: Any) -> None:
-        """Register a module bypassing reserved word validation.
+        """Register a sys/internal module that bypasses **only** the reserved
+        word check.
 
-        Used by sys modules that use the reserved 'system.' prefix.
+        All other PROTOCOL_SPEC §2.7 validations (empty, EBNF pattern, length,
+        duplicate) still apply. The intended use case is registering modules
+        under reserved prefixes like ``system.health`` or
+        ``system.control.toggle_feature`` from ``apcore.sys_modules``.
+
+        Aligned with apcore-typescript ``Registry.registerInternal`` and
+        apcore-rust ``Registry::register_internal``.
+
+        Raises:
+            InvalidInputError: If module_id is empty, malformed, exceeds the
+                length limit, or is already registered.
+            RuntimeError: If module.on_load() fails (propagated).
         """
+        _validate_module_id(module_id, allow_reserved=True)
+
         _ensure_schema_adapter(module)
         with self._lock:
+            if module_id in self._modules:
+                # Aligned with apcore-typescript / apcore-rust and the canonical
+                # message produced by detect_id_conflicts for the public
+                # `register()` path.
+                raise InvalidInputError(message=f"Module ID '{module_id}' is already registered")
             self._modules[module_id] = module
             self._lowercase_map[module_id.lower()] = module_id
         self._trigger_event("register", module_id, module)
