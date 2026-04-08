@@ -74,57 +74,13 @@ class Context(Generic[T]):
             services=services,  # type: ignore[arg-type]
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize context to a dictionary. Omits executor (non-serializable/transient)."""
-        result: dict[str, Any] = {
-            "trace_id": self.trace_id,
-            "caller_id": self.caller_id,
-            "call_chain": list(self.call_chain),
-        }
-        if self.identity is not None:
-            result["identity"] = {
-                "id": self.identity.id,
-                "type": self.identity.type,
-                "roles": list(self.identity.roles),
-                "attrs": dict(self.identity.attrs),
-            }
-        else:
-            result["identity"] = None
-        if self.redacted_inputs is not None:
-            result["redacted_inputs"] = dict(self.redacted_inputs)
-        else:
-            result["redacted_inputs"] = None
-        public_data = {k: v for k, v in self.data.items() if not k.startswith("_")}
-        result["data"] = public_data
-        return result
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any], executor: Any = None) -> Context:
-        """Deserialize context from a dictionary. Executor must be re-injected."""
-        identity = None
-        if data.get("identity") is not None:
-            identity = Identity(
-                id=data["identity"]["id"],
-                type=data["identity"].get("type", "user"),
-                roles=tuple(data["identity"].get("roles", ())),
-                attrs=data["identity"].get("attrs", {}),
-            )
-        return cls(  # type: ignore[return-value]
-            trace_id=data["trace_id"],
-            caller_id=data.get("caller_id"),
-            call_chain=list(data.get("call_chain", [])),
-            executor=executor,
-            identity=identity,
-            redacted_inputs=data.get("redacted_inputs"),
-            data=data.get("data", {}),
-        )
-
     def serialize(self) -> dict[str, Any]:
-        """Serialize Context to a dict suitable for JSON encoding.
+        """Serialize Context to a JSON-encodable dict.
 
-        Includes ``_context_version: 1`` at top level.
-        Excludes: executor, services, cancel_token, global_deadline.
-        Filters ``_``-prefixed keys from data.
+        Includes ``_context_version: 1`` at top level for forward
+        compatibility. Excludes non-serializable / transient fields
+        (``executor``, ``services``, ``cancel_token``, ``_global_deadline``)
+        and filters ``_``-prefixed keys from ``data``.
         """
         result: dict[str, Any] = {
             "_context_version": 1,
@@ -148,19 +104,17 @@ class Context(Generic[T]):
 
     @classmethod
     def deserialize(cls, data: dict[str, Any]) -> Context:
-        """Deserialize a dict (from JSON) into a Context.
+        """Reconstruct a Context from its :meth:`serialize` output.
 
-        Non-serializable fields (executor, services, cancel_token,
-        global_deadline) are set to ``None`` after deserialization.
-        If ``_context_version`` is greater than 1, a warning is logged
-        but deserialization proceeds (forward compatibility).
+        Non-serializable fields (``executor``, ``services``, ``cancel_token``,
+        ``_global_deadline``) are set to ``None``; callers that need them
+        should re-inject after deserialization. A ``_context_version`` greater
+        than 1 logs a warning and best-effort proceeds (forward compatibility).
         """
-        _logger = logging.getLogger(__name__)
-
         version = data.get("_context_version", 1)
         if version > 1:
-            _logger.warning(
-                "Unknown _context_version %d (expected 1). " "Proceeding with best-effort deserialization.",
+            logging.getLogger(__name__).warning(
+                "Unknown _context_version %d (expected 1). Proceeding with best-effort deserialization.",
                 version,
             )
 

@@ -170,20 +170,20 @@ class TestGlobalTimeoutAcrossChain:
 
 
 class TestContextSerializationExcludesDeadline:
-    def test_to_dict_excludes_global_deadline(self) -> None:
+    def test_serialize_excludes_global_deadline(self) -> None:
         ctx = Context(trace_id="t1", data={"key": "val"})
         ctx._global_deadline = 99999.0
 
-        serialized = ctx.to_dict()
+        serialized = ctx.serialize()
 
         assert "_global_deadline" not in serialized
 
-    def test_from_dict_does_not_restore(self) -> None:
+    def test_deserialize_does_not_restore_deadline(self) -> None:
         ctx = Context(trace_id="t1")
         ctx._global_deadline = 99999.0
 
-        serialized = ctx.to_dict()
-        restored = Context.from_dict(serialized)
+        serialized = ctx.serialize()
+        restored = Context.deserialize(serialized)
 
         assert restored._global_deadline is None
 

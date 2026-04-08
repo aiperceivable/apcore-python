@@ -38,13 +38,13 @@ class TestContextServices:
         child2 = child1.child("mod.b")
         assert child2.services is svc
 
-    def test_services_not_in_to_dict(self) -> None:
+    def test_services_not_in_serialize(self) -> None:
         svc = MockServices()
         ctx = Context.create(services=svc)
-        serialized = ctx.to_dict()
+        serialized = ctx.serialize()
         assert "services" not in serialized
 
-    def test_from_dict_services_is_none(self) -> None:
+    def test_deserialize_services_is_none(self) -> None:
         serialized = {
             "trace_id": "t1",
             "caller_id": None,
@@ -53,5 +53,5 @@ class TestContextServices:
             "redacted_inputs": None,
             "data": {},
         }
-        restored = Context.from_dict(serialized)
+        restored = Context.deserialize(serialized)
         assert restored.services is None
