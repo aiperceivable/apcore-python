@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Spec §4.13 annotation merge — YAML annotations are no longer silently dropped at registration.** Two coupled bugs were repaired: (1) `registry/metadata.py:merge_module_metadata` was doing whole-replacement of the `annotations` field instead of the field-level merge mandated by §4.13 ("If YAML only defines `readonly: true`, other fields **must** retain values from code or defaults."), and (2) `registry/registry.py:get_definition` was ignoring even that broken merge result and reading directly from the module's class attribute. The fix wires the previously-unwired `apcore.schema.annotations.merge_annotations` and `merge_examples` (which were defined and unit-tested but never called from production) into the registry pipeline, and updates `get_definition` to consume the merged metadata. **User-observable behavior change:** modules that supplied `annotations:` in their `*_meta.yaml` companion files were previously seeing those annotations silently ignored. Those annotations will now be honored. Modules that relied on the broken behavior should audit their `*_meta.yaml`. Adds 5 regression tests covering field-level merge, YAML-only, neither-defined, examples override, and an end-to-end `discover() → get_definition()` round-trip.
+
+### Changed
+
+- **`Executor.call()` and `Executor.call_with_trace()` are now thin sync wrappers** over `call_async()` and `call_async_with_trace()` via a shared `_run_async_in_sync(coro, module_id)` dispatcher. The cached-event-loop / thread-bridge logic that was previously inlined in three places lives in one helper. Sync semantics preserved: nested calls inside a running event loop still route through a background thread.
+- **`Executor.call_async_with_trace()` now uses the unified A11 error recovery path** (`_translate_abort` + `_recover_from_call_error` + middleware `on_error` chain). Previously it called `engine.run` raw and let `PipelineAbortError` leak; behavior now matches `call_async`. When a middleware `on_error` recovers, the recovery dict is returned alongside a sentinel `PipelineTrace` (per-step trace detail is unavailable in the recovery branch — use `call_async` if you don't need the trace, or attach a tracing middleware).
+- **`BuiltinApprovalGate` now self-contains the full approval flow.** Audit-log emission, span-event emission, and full status→error mapping (including `timeout` and unknown-status warning) used to live on private methods of `Executor`, with `BuiltinApprovalGate` reaching into them via `hasattr(executor, '_check_approval_async')`. The reach-into-private cheat is gone; `BuiltinApprovalGate` does everything itself. The `executor=` parameter on `BuiltinApprovalGate.__init__` is removed (was unused after consolidation). **Approval audit logs are now emitted from logger `apcore.builtin_steps`** (was `apcore.executor`) — update any log filters accordingly.
+- **`BuiltinACLCheck` and `BuiltinApprovalGate` now expose public `set_acl()` / `set_handler()` setters.** `Executor.set_acl` and `set_approval_handler` use the public setters instead of poking step `._acl` / `._handler`. Custom user-supplied ACL or approval steps without these setters are silently skipped — re-register the strategy if you need to swap providers on a custom step.
+- **`Registry._discover_default()` decomposed** from a 153-line god method into a 23-line orchestrator + 9 named stage helpers (`_scan_params`, `_scan_roots`, `_apply_id_map_overrides`, `_load_all_metadata`, `_resolve_all_entry_points`, `_validate_all`, `_resolve_load_order`, `_filter_id_conflicts`, `_register_in_order`, `_invoke_on_load`). Pure refactor — no behavior change. Mirrors the structure of `apcore-typescript`'s `_discoverDefault`.
+- **`ACL.check()` and `ACL.async_check()` consolidated** via shared `_snapshot()` and `_finalize_check()` helpers. Audit-entry construction and debug-logging now live in exactly one place (was duplicated four times). Fixed `_matches_rule_async` to call `_match_patterns()` instead of inlining a variant that bypassed compound operators (`$or`/`$not`).
+- **ACL singular condition handler aliases removed** (`identity_type`, `role`, `call_depth`). Spec §6.1 only defines the plural forms (`identity_types`, `roles`, `max_call_depth`); the singular aliases were a python-only divergence.
+- **`builtin_steps.py` strategy builders no longer use `object.__setattr__`** for the `name` field. `ExecutionStrategy` was never a frozen dataclass — `s.name = X` always worked. Cargo-cult code removed.
+
+### Removed (BREAKING)
+
+- **`Context.to_dict()` and `Context.from_dict()`** — superseded by the spec-compliant `Context.serialize()` and `Context.deserialize()` (shipped in v0.16.0). The two pairs were silently inconsistent (`to_dict` always emitted `redacted_inputs` even when `None` while `serialize` omitted it; `serialize` included `_context_version: 1`, `to_dict` did not), so mixing them produced divergent dicts. Migration:
+  - `ctx.to_dict()` → `ctx.serialize()`
+  - `Context.from_dict(data, executor=x)` → `Context.deserialize(data); ctx.executor = x` (the `executor=` parameter is removed; reassign directly on the returned `Context`, which is non-frozen)
+- **Private `Executor` approval helpers removed** as part of the `BuiltinApprovalGate` consolidation. No public API impact unless your code reached into `Executor._check_approval_async`, `_build_approval_request`, `_handle_approval_result`, `_emit_approval_event`, `_needs_approval`, `_check_approval_sync`, the timeout-aware `_run_async_in_sync` (the new same-named method has a different `(coro, module_id)` signature), `_async_cache`, or `_async_cache_lock`.
+
 ## [0.18.0] - 2026-04-08
 
 ### Added
