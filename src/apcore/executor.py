@@ -20,9 +20,6 @@ from apcore.config import Config
 from apcore.context import Context
 from apcore.errors import (
     ACLDeniedError,
-    ApprovalDeniedError,
-    ApprovalPendingError,
-    ApprovalTimeoutError,
     InvalidInputError,
     ModuleError,
     ModuleExecuteError,
@@ -491,16 +488,13 @@ class Executor:
                 if len(pair) == 2:
                     caller_id, target_id = pair[0].strip(), pair[1].strip()
             return ACLDeniedError(caller_id=caller_id, target_id=target_id)
-        if step == "approval_gate":
-            from apcore.approval import ApprovalResult
-
-            lowered = explanation.lower()
-            if "rejected" in lowered or "denied" in lowered:
-                return ApprovalDeniedError(result=ApprovalResult(status="rejected", reason=explanation))
-            if "timeout" in lowered:
-                return ApprovalTimeoutError(result=ApprovalResult(status="timeout", reason=explanation))
-            if "pending" in lowered:
-                return ApprovalPendingError(result=ApprovalResult(status="pending", reason=explanation))
+        # Note: there is no `approval_gate` branch here. BuiltinApprovalGate
+        # raises typed Approval{Denied,Timeout,Pending}Error subclasses
+        # *directly* (see builtin_steps.BuiltinApprovalGate.execute), so the
+        # error never reaches this translation path. Custom user-supplied
+        # approval steps MUST follow the same contract: raise the typed
+        # Approval*Error subclass with a real ApprovalResult — do NOT abort
+        # via StepResult(action="abort", explanation="...rejected...").
         if step == "input_validation" and "validation failed" in explanation.lower():
             return SchemaValidationError(message=explanation)
         if step == "output_validation" and "validation failed" in explanation.lower():
@@ -682,7 +676,15 @@ class Executor:
             try:
                 await self._pipeline_engine.run(post_strategy, pipe_ctx)
             except Exception:
-                pass  # Post-stream validation errors are non-fatal for already-yielded chunks
+                # Non-fatal: chunks have already been yielded to the caller,
+                # so a failed post-stream validation/middleware run cannot
+                # change the observable output. Log at DEBUG so the failure
+                # is still discoverable when investigating bad streams.
+                _logger.debug(
+                    "Post-stream validation/middleware failed for module %s",
+                    module_id,
+                    exc_info=True,
+                )
 
     # _execute_async removed in v0.17 (replaced by BuiltinExecute pipeline step)
 
