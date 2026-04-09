@@ -864,11 +864,14 @@ class ErrorCodes:
     GENERAL_NOT_IMPLEMENTED = "GENERAL_NOT_IMPLEMENTED"
     DEPENDENCY_NOT_FOUND = "DEPENDENCY_NOT_FOUND"
 
-    def __setattr__(self, name: str, value: object) -> None:  # noqa: ARG002
-        raise AttributeError("ErrorCodes is immutable")
-
-    def __delattr__(self, name: str) -> None:  # noqa: ARG002
-        raise AttributeError("ErrorCodes is immutable")
+    # Note: this class is intentionally NOT instantiated. All callers access the
+    # constants as class attributes (`ErrorCodes.MODULE_NOT_FOUND`). A previous
+    # version defined `__setattr__` / `__delattr__` traps, but those only fire
+    # on instance attribute mutation (`ErrorCodes().X = ...`) — never on class
+    # attribute mutation (`ErrorCodes.X = ...`) — so the traps were cargo-cult
+    # code that gave a false sense of immutability without actually enforcing
+    # it. Removed in favor of simple class attributes; if real immutability is
+    # ever needed, use `typing.Final[str]` annotations or a metaclass.
 
 
 # =============================================================================
