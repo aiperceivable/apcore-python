@@ -6,10 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [0.18.0] - 2026-04-08
+## [0.18.0] - 2026-04-09
 
 ### Added
 
+- **`APCore` unified client class** (`apcore.client.APCore`) — High-level facade over `Registry` + `Executor` providing a single entry point for all module operations. Constructor accepts optional `registry`, `executor`, `config`, and `metrics_collector` (auto-created when `sys_modules.enabled`). Public API surface:
+  - **Module management**: `module()` decorator, `register()`, `list_modules(tags=, prefix=)`, `discover()`, `describe()`
+  - **Execution**: `call()`, `call_async()`, `stream()`, `validate()` — all accept `version_hint` for semver negotiation (A14)
+  - **Middleware**: `use()`, `use_before()`, `use_after()`, `remove()` — `use`/`use_before`/`use_after` return `self` for chaining
+  - **Events**: `events` property, `on(event_type, handler)`, `off(subscriber)` — requires `sys_modules.events.enabled` in config
+  - **Module toggle**: `disable(module_id, reason=)`, `enable(module_id, reason=)` — wrappers around `system.control.toggle_feature`
+  - Cross-language parity: matches apcore-typescript `APCore` class and apcore-rust `APCore` struct public API surface
+- **Package-level global convenience functions** (`apcore.call`, `apcore.call_async`, `apcore.stream`, `apcore.validate`, `apcore.register`, `apcore.describe`, `apcore.use`, `apcore.use_before`, `apcore.use_after`, `apcore.remove`, `apcore.discover`, `apcore.list_modules`, `apcore.on`, `apcore.off`, `apcore.disable`, `apcore.enable`, `apcore.module`) — delegate to a module-level `_default_client = APCore()` instance for zero-setup usage (`import apcore; apcore.call("math.add", {"a": 1, "b": 2})`). Python-specific ergonomic; apcore-typescript and apcore-rust require explicit client construction.
 - **Pipeline preset builders re-exported at package root** — `build_standard_strategy`, `build_internal_strategy`, `build_testing_strategy`, `build_performance_strategy`, `build_minimal_strategy` are now importable directly from `apcore`. These functions existed in `apcore.builtin_steps` but were not previously in `apcore.__all__`. Parity with apcore-typescript (`buildXxxStrategy`) and apcore-rust (`build_xxx_strategy` at the crate root).
 - **`TestRegisterInternalValidation`** test class in `tests/registry/test_registry.py` (6 parity tests covering empty rejection, pattern rejection, over-length rejection, reserved-word bypass, duplicate rejection, accept-at-max-length) plus `test_pipeline_preset_builders_*` in `tests/test_public_api.py`.
 
@@ -50,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Global convenience functions `call()`, `call_async()`, `stream()` missing `version_hint` parameter** — These `apcore/__init__.py` wrappers previously forwarded only `(module_id, inputs, context)` to the `APCore` client, silently dropping `version_hint`. Users calling `apcore.call(..., version_hint=">=1.0.0")` would have had the hint ignored. Now all three wrappers accept and forward `version_hint: str | None = None`, matching the `APCore` class signature and cross-language SDKs.
 - **Spec §4.13 annotation merge — YAML annotations are no longer silently dropped at registration.** Two coupled bugs were repaired: (1) `registry/metadata.py:merge_module_metadata` was doing whole-replacement of the `annotations` field instead of the field-level merge mandated by §4.13 ("If YAML only defines `readonly: true`, other fields **must** retain values from code or defaults."), and (2) `registry/registry.py:get_definition` was ignoring even that broken merge result and reading directly from the module's class attribute. The fix wires the previously-unwired `apcore.schema.annotations.merge_annotations` and `merge_examples` (which were defined and unit-tested but never called from production) into the registry pipeline, and updates `get_definition` to consume the merged metadata. **User-observable behavior change:** modules that supplied `annotations:` in their `*_meta.yaml` companion files were previously seeing those annotations silently ignored. Those annotations will now be honored. Modules that relied on the broken behavior should audit their `*_meta.yaml`. Adds 5 regression tests covering field-level merge, YAML-only, neither-defined, examples override, and an end-to-end `discover() → get_definition()` round-trip.
 - **`ModuleAnnotations.from_dict` precedence inversion** — Per PROTOCOL_SPEC §4.4.1 rule 7, when the same key appears both in a nested `extra` object and as a top-level overflow key, the **nested value now wins** (previously the top-level overflow would silently overwrite it). Behavior change is observable only in the pathological case where an input contains both forms of the same key — no conformant producer emits this. Top-level overflow keys are still tolerated and merged into `extra` for backward compatibility.
 

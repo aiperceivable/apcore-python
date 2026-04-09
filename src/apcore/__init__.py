@@ -231,16 +231,24 @@ from apcore.sys_modules.registration import (
 _default_client = APCore()
 
 
-def call(module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None) -> dict[str, Any]:
+def call(
+    module_id: str,
+    inputs: dict[str, Any] | None = None,
+    context: Context | None = None,
+    version_hint: str | None = None,
+) -> dict[str, Any]:
     """Global convenience for _default_client.call()."""
-    return _default_client.call(module_id, inputs, context)
+    return _default_client.call(module_id, inputs, context, version_hint=version_hint)
 
 
 async def call_async(
-    module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None
+    module_id: str,
+    inputs: dict[str, Any] | None = None,
+    context: Context | None = None,
+    version_hint: str | None = None,
 ) -> dict[str, Any]:
     """Global convenience for _default_client.call_async()."""
-    return await _default_client.call_async(module_id, inputs, context)
+    return await _default_client.call_async(module_id, inputs, context, version_hint=version_hint)
 
 
 def module(
@@ -282,10 +290,13 @@ def module(
 
 
 async def stream(
-    module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None
+    module_id: str,
+    inputs: dict[str, Any] | None = None,
+    context: Context | None = None,
+    version_hint: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Global convenience for _default_client.stream()."""
-    async for chunk in _default_client.stream(module_id, inputs, context):
+    async for chunk in _default_client.stream(module_id, inputs, context, version_hint=version_hint):
         yield chunk
 
 
