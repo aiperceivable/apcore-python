@@ -422,8 +422,6 @@ class TestPublicAPIAll:
         "CircularDependencyError",
         "ConfigError",
         "ConfigNotFoundError",
-        "DependencyNotFoundError",
-        "FeatureNotImplementedError",
         "FuncMissingReturnTypeError",
         "FuncMissingTypeHintError",
         "InternalError",

@@ -781,35 +781,6 @@ class InternalError(ModuleError):
         )
 
 
-class FeatureNotImplementedError(ModuleError):
-    """Raised when a requested feature is not yet implemented."""
-
-    _default_retryable: bool | None = False
-
-    def __init__(self, message: str = "Feature not implemented", **kwargs: Any) -> None:
-        super().__init__(
-            code="GENERAL_NOT_IMPLEMENTED",
-            message=message,
-            **kwargs,
-        )
-
-
-class DependencyNotFoundError(ModuleError):
-    """Raised when a dependent module does not exist."""
-
-    _default_retryable: bool | None = False
-
-    def __init__(self, module_id: str = "", dependency_id: str = "", message: str = "", **kwargs: Any) -> None:
-        if not message:
-            message = f"Dependency '{dependency_id}' not found for module '{module_id}'"
-        super().__init__(
-            code="DEPENDENCY_NOT_FOUND",
-            message=message,
-            details={"module_id": module_id, "dependency_id": dependency_id},
-            **kwargs,
-        )
-
-
 class ErrorCodes:
     """All framework error codes as constants.
 
