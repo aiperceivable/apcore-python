@@ -76,14 +76,14 @@ Status legend: ✅ aligned/clean · ❌ has the issue · ⚠️ partial/conditio
 | **Errors** ||||
 | 8 | 40+ class explosion | ⚠️ 42 classes — DEFERRED (P0.2) | ❌ 42 classes, same pattern | ✅ single `ModuleError` + 43-variant `ErrorCode` enum |
 | 9 | Property wrappers unpacking `details` dict | ⚠️ present | ❌ present | ✅ absent (enum) |
-| 10 | Unused error classes (`FeatureNotImplementedError`, `DependencyNotFoundError`) | ⚠️ still 2, **but locked in `tests/test_public_api.py:425-426` and CHANGELOG.md:282-283** — KEEP | ⚠️ same 2 in `errors.ts:552,571`, **also locked in CHANGELOG.md:281-282** — KEEP | ✅ all variants referenced |
+| 10 | Unused error classes (`FeatureNotImplementedError`, `DependencyNotFoundError`) | ✅ **deleted 2026-04-09** (commit `91e951a`): removed from errors.py, __init__.py, test_public_api.py whitelist | ✅ **deleted 2026-04-09** (commit `01ea84d`): removed from errors.ts, index.ts | ✅ all variants referenced |
 | 11 | `ConfigEnvMapConflict` error code | ✅ in spec §8.2 | ✅ same | ✅ same |
-| 12 | Over-engineered immutable `ErrorCodes` container | ⚠️ Python has setattr trap | ✅ simple `Object.freeze` | ✅ enum |
+| 12 | Over-engineered immutable `ErrorCodes` container | ✅ **setattr/delattr traps deleted 2026-04-09** (commit `5a99794`): traps were cargo-cult — only fired on instance mutation, never on class attribute mutation which is how ErrorCodes is actually used | ✅ simple `Object.freeze` | ✅ enum |
 | **Registry** ||||
 | 13 | `_discover_default` god method (150+ lines) | ✅ decomposed (Task #4) | ✅ `registry.ts:259-269` already 11-line orchestrator + 7 helpers | ✅ `discover()` 18 lines |
 | 14 | `_DictSchemaAdapter` backwards-compat shim | ⚠️ kept (CHANGELOG-documented) | ✅ absent | ✅ absent |
 | **Schema** ||||
-| 15 | §4.13 field-level annotation merge wired into registry | ✅ fixed in Task #8 (commit `9c0fde9`) | ✅ `src/registry/metadata.ts:70-100` correctly calls `mergeAnnotations`/`mergeExamples`, `getDefinition` reads merged result | ❌ structural gap: no `merge_*` functions exist; `Discoverer` trait accepts pre-built `DiscoveredModule { descriptor }` so YAML overlay path simply doesn't exist |
+| 15 | §4.13 field-level annotation merge wired into registry | ✅ fixed in Task #8 (commit `9c0fde9`) | ✅ `src/registry/metadata.ts:70-100` correctly calls `mergeAnnotations`/`mergeExamples`, `getDefinition` reads merged result | ⚠️ **Documented as deliberate design choice 2026-04-09** (commit `a4ca567`): Rust does not support YAML annotation overlay — spec §4.13 is conditional ("when both"), and Rust favors explicit code annotations. README section added with serde workaround |
 | 16 | Schema-to-type god methods | ⚠️ KEPT (natural shape) | ✅ `loader.ts` all functions <25 LOC | ✅ `loader.rs` 30 LOC (serde) |
 | 17 | Two tree walkers in `strict.ts` | ⚠️ KEPT (public API) | ✅ single walker | ✅ absent |
 | 18 | `_TYPE_MAP` duplicated | ⚠️ KEPT (different domains) | ✅ no duplication | N/A |
@@ -99,7 +99,7 @@ Status legend: ✅ aligned/clean · ❌ has the issue · ⚠️ partial/conditio
 | 25 | Multi-version Pydantic fallback chain | ✅ deleted (`6587510`) | N/A TypeBox | N/A serde |
 | **Annotation / Decorator** ||||
 | 26 | `_CANONICAL_FIELDS` count vs spec | ✅ 12 fields | ✅ 12 fields in `schema/annotations.ts` | ✅ 13 fields (incl. extra) in `module.rs:98-116` |
-| 27 | Decorator auto-ID matches spec §5.11.6 `{module_path}.{name}` | ✅ `_make_auto_id` compliant | ❓ `decorator.ts:63-70` `makeAutoId` uses `name.toLowerCase()` — **needs verification: does it actually concatenate `function.module_path`?** | N/A no proc-macro yet |
+| 27 | Decorator auto-ID matches spec §5.11.6 `{module_path}.{name}` | ✅ `_make_auto_id` compliant | ✅ **fixed 2026-04-09** (commit `4e74b5e`): `module()` now throws `InvalidInputError` when `id` is missing — JS cannot derive `{module_path}.{name}` at runtime, so explicit `id` is required. Aligned with Rust which also requires explicit name | N/A no proc-macro yet |
 | **Approval** ||||
 | 28 | Three trivial handler subclasses | ✅ spec-mandated (§7.6) — keep | ✅ same | ✅ same |
 | **Observability** (spec §10 is SHOULD) ||||
