@@ -7,7 +7,7 @@ import re
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, runtime_checkable
 
 from apcore.errors import (
     InvalidInputError,
@@ -1030,70 +1030,88 @@ class Registry:
         return module
 
     def _handle_file_change(self, path: str) -> None:
-        """Handle a file modification or creation event."""
-        import importlib.util
+        """Handle a file modification or creation event.
+
+        Resolves the module class via ``resolve_entry_point`` (the same path
+        the rest of the registry uses for discovery) instead of the historical
+        ``dir(mod)`` + ``hasattr(attr, "execute")`` scan, which would pick up
+        imports, helpers, and base classes non-deterministically.
+        """
+        with self._lock:
+            module_id = self._path_to_module_id(path)
+            suspended_state = self._suspend_and_unregister_for_hot_reload(module_id)
+            self._reload_module_from_path(path, module_id, suspended_state)
+
+    def _suspend_and_unregister_for_hot_reload(self, module_id: str | None) -> dict[str, Any] | None:
+        """Capture suspend state and unregister the existing module, if any."""
+        if not module_id or module_id not in self._modules:
+            return None
+
+        old_module = self._modules.get(module_id)
+        suspended_state: dict[str, Any] | None = None
+
+        if old_module and hasattr(old_module, "on_suspend") and callable(old_module.on_suspend):
+            try:
+                raw_state: Any = old_module.on_suspend()
+                if raw_state is None:
+                    suspended_state = None
+                elif isinstance(raw_state, dict):
+                    suspended_state = raw_state
+                else:
+                    logger.warning(
+                        "on_suspend() for module '%s' returned non-dict; ignoring",
+                        module_id,
+                    )
+            except Exception as e:
+                logger.error("on_suspend() failed for module '%s' during hot reload: %s", module_id, e)
+
+        if old_module and hasattr(old_module, "on_unload"):
+            try:
+                old_module.on_unload()
+            except Exception as e:
+                logger.warning("on_unload() failed for module '%s' during hot reload: %s", module_id, e)
+
+        self._inline_unregister(module_id)
+        self._trigger_event("unregister", module_id, old_module)
+        return suspended_state
+
+    def _reload_module_from_path(
+        self,
+        path: str,
+        existing_module_id: str | None,
+        suspended_state: dict[str, Any] | None,
+    ) -> None:
+        """Re-import the file via the canonical entry-point resolver and register it."""
         import os
 
-        with self._lock:
-            # Try to find which module this file belongs to
-            module_id = self._path_to_module_id(path)
-            suspended_state: dict[str, Any] | None = None
-            if module_id and module_id in self._modules:
-                old_module = self._modules.get(module_id)
-                # Suspend: capture state before unload
-                if old_module and hasattr(old_module, "on_suspend") and callable(old_module.on_suspend):
-                    try:
-                        suspended_state = cast("dict[str, Any] | None", old_module.on_suspend())
-                        if suspended_state is not None and not isinstance(suspended_state, dict):
-                            logger.warning(
-                                "on_suspend() for module '%s' returned non-dict; ignoring",
-                                module_id,
-                            )
-                            suspended_state = None
-                    except Exception as e:
-                        logger.error("on_suspend() failed for module '%s' during hot reload: %s", module_id, e)
-                if old_module and hasattr(old_module, "on_unload"):
-                    try:
-                        old_module.on_unload()
-                    except Exception as e:
-                        logger.warning("on_unload() failed for module '%s' during hot reload: %s", module_id, e)
-                self._inline_unregister(module_id)
-                self._trigger_event("unregister", module_id, old_module)
+        try:
+            cls = resolve_entry_point(Path(path))
+        except Exception as e:
+            logger.warning("Hot reload failed for %s: %s", path, e)
+            return
 
-            # Try to re-import and register (inside lock to prevent concurrent state corruption)
+        try:
+            instance = cls()
+        except Exception as e:
+            logger.warning("Hot reload failed to instantiate class from %s: %s", path, e)
+            return
+
+        new_id = existing_module_id or os.path.splitext(os.path.basename(path))[0]
+
+        if new_id in self._modules:
+            old = self._inline_unregister(new_id)
+            if old is not None:
+                self._trigger_event("unregister", new_id, old)
+
+        self._modules[new_id] = instance
+        self._lowercase_map[new_id.lower()] = new_id
+        self._trigger_event("register", new_id, instance)
+
+        if suspended_state is not None and hasattr(instance, "on_resume") and callable(instance.on_resume):
             try:
-                spec = importlib.util.spec_from_file_location("_hot_reload", path)
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    # Find module class (look for execute method)
-                    for attr_name in dir(mod):
-                        attr = getattr(mod, attr_name)
-                        if isinstance(attr, type) and hasattr(attr, "execute"):
-                            instance = attr()
-                            new_id = module_id or os.path.splitext(os.path.basename(path))[0]
-                            # Unregister existing if different from already-cleaned module_id
-                            if new_id in self._modules:
-                                old = self._inline_unregister(new_id)
-                                if old is not None:
-                                    self._trigger_event("unregister", new_id, old)
-                            # Register new
-                            self._modules[new_id] = instance
-                            self._lowercase_map[new_id.lower()] = new_id
-                            self._trigger_event("register", new_id, instance)
-                            # Resume: restore suspended state into new instance
-                            if (
-                                suspended_state is not None
-                                and hasattr(instance, "on_resume")
-                                and callable(instance.on_resume)
-                            ):
-                                try:
-                                    instance.on_resume(suspended_state)
-                                except Exception as e:
-                                    logger.error("on_resume() failed for module '%s' during hot reload: %s", new_id, e)
-                            break
+                instance.on_resume(suspended_state)
             except Exception as e:
-                logger.warning("Hot reload failed for %s: %s", path, e)
+                logger.error("on_resume() failed for module '%s' during hot reload: %s", new_id, e)
 
     def _handle_file_deletion(self, path: str) -> None:
         """Handle a file deletion event."""
