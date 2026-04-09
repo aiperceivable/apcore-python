@@ -473,7 +473,10 @@ class Registry:
                 logger.error("Failed to instantiate module '%s': %s", mod_id, e)
                 continue
 
-            merged_meta = merge_module_metadata(cls, meta)
+            # Pass the instance (not the class) so __init__-set attributes
+            # are picked up; getattr falls through to class attrs anyway.
+            # Aligned with manual register() / register_internal().
+            merged_meta = merge_module_metadata(module, meta)
             with self._lock:
                 self._modules[mod_id] = module
                 self._module_meta[mod_id] = merged_meta
@@ -539,6 +542,17 @@ class Registry:
 
         is_versioned = version is not None
 
+        # Pre-compute the merged metadata view OUTSIDE the lock so the
+        # critical section stays minimal. merge_module_metadata is pure
+        # (no I/O, no shared state). Pass the *instance* so getattr()
+        # picks up instance-level attribute overrides (e.g. modules that
+        # set self.version in __init__) and still falls back to class
+        # attributes via Python's normal lookup chain. This populates
+        # _module_meta even for the manual register() path, matching
+        # apcore-typescript Registry.register() so get_definition()
+        # never has to fall back to the raw module object.
+        merged_meta = merge_module_metadata(module, metadata or {})
+
         with self._lock:
             # For explicit versioned registration, skip conflict check when
             # the module_id already exists (we allow multiple versions).
@@ -568,6 +582,7 @@ class Registry:
             latest = self._versioned_modules.get_latest(module_id)
             if latest is not None:
                 self._modules[module_id] = latest
+            self._module_meta[module_id] = merged_meta
             self._lowercase_map[module_id.lower()] = module_id
 
         # Call on_load if available
@@ -580,6 +595,7 @@ class Registry:
                     self._versioned_meta.remove(module_id, effective_version)
                     if not self._versioned_modules.has(module_id):
                         self._modules.pop(module_id, None)
+                        self._module_meta.pop(module_id, None)
                 raise
 
         self._trigger_event("register", module_id, module)
@@ -728,19 +744,23 @@ class Registry:
         if deprecation:
             sunset_date = deprecation.get("sunset_date")
 
-        # `meta` is populated by merge_module_metadata at registration time and
-        # already implements spec §4.13 (YAML > code > defaults). Read from it
-        # directly so YAML annotations and examples are honored.
+        # INVARIANT: every registration site (`register`, `register_internal`,
+        # `_register_in_order`) populates `_module_meta` via
+        # `merge_module_metadata`, so `meta` always contains the full set of
+        # canonical keys including the merged `annotations` slot. Read all
+        # merged-meta fields straight from it. Schemas come straight from
+        # the module instance because they are not part of the merged
+        # metadata payload. Aligned with apcore-typescript Registry.getDefinition.
         return ModuleDescriptor(
             module_id=module_id,
-            name=meta.get("name") or getattr(module, "name", None),
-            description=meta.get("description") or getattr(module, "description", ""),
-            documentation=meta.get("documentation") or getattr(module, "documentation", None),
+            name=meta.get("name"),
+            description=meta.get("description") or "",
+            documentation=meta.get("documentation"),
             input_schema=input_json,
             output_schema=output_json,
-            version=meta.get("version") or getattr(module, "version", "1.0.0"),
-            tags=list(meta.get("tags") or getattr(module, "tags", None) or []),
-            annotations=meta.get("annotations") if "annotations" in meta else getattr(module, "annotations", None),
+            version=meta.get("version") or "1.0.0",
+            tags=list(meta.get("tags") or []),
+            annotations=meta.get("annotations"),
             examples=list(meta.get("examples") or []),
             metadata=effective_metadata,
             sunset_date=sunset_date,
@@ -1127,6 +1147,13 @@ class Registry:
         _validate_module_id(module_id, allow_reserved=True)
 
         _ensure_schema_adapter(module)
+
+        # Mirror register(): populate _module_meta via the same merge path
+        # so get_definition() reads merged metadata uniformly regardless of
+        # which registration entry point was used. Pass the instance so
+        # __init__-set attributes are picked up.
+        merged_meta = merge_module_metadata(module, {})
+
         with self._lock:
             if module_id in self._modules:
                 # Aligned with apcore-typescript / apcore-rust and the canonical
@@ -1134,6 +1161,7 @@ class Registry:
                 # `register()` path.
                 raise InvalidInputError(message=f"Module ID '{module_id}' is already registered")
             self._modules[module_id] = module
+            self._module_meta[module_id] = merged_meta
             self._lowercase_map[module_id.lower()] = module_id
         self._trigger_event("register", module_id, module)
 

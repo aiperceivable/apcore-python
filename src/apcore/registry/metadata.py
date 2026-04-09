@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import yaml
 
 from apcore.errors import ConfigError, ConfigNotFoundError
+from apcore.module import ModuleAnnotations
 from apcore.registry.types import DependencyInfo
 from apcore.schema.annotations import merge_annotations, merge_examples
 
@@ -64,8 +66,34 @@ def parse_dependencies(deps_raw: list[dict[str, Any]]) -> list[DependencyInfo]:
     return result
 
 
-def merge_module_metadata(module_class: type, meta: dict[str, Any]) -> dict[str, Any]:
+def _coerce_code_annotations(raw: Any) -> ModuleAnnotations | None:
+    """Narrow a module's `annotations` attribute to ``ModuleAnnotations | None``.
+
+    Modules express annotations in three forms in the wild:
+
+    - ``ModuleAnnotations(...)`` instance — pass through.
+    - ``dict[str, Any]`` (dict-style annotations) — filter to canonical
+      field names and construct a ModuleAnnotations.
+    - Anything else (None, MagicMock test stubs, custom objects) —
+      return None so :func:`merge_annotations` does not crash on
+      ``getattr`` chasing nonexistent fields.
+    """
+    if isinstance(raw, ModuleAnnotations):
+        return raw
+    if isinstance(raw, dict):
+        valid = {f.name for f in dataclasses.fields(ModuleAnnotations)}
+        return ModuleAnnotations(**{k: v for k, v in raw.items() if k in valid})
+    return None
+
+
+def merge_module_metadata(module: Any, meta: dict[str, Any]) -> dict[str, Any]:
     """Merge YAML metadata over code-level attributes per spec §4.13.
+
+    Accepts either a module instance OR a class. ``getattr`` resolves
+    instance-level attributes first and then falls through to class
+    attributes via Python's normal lookup chain, so passing the instance
+    correctly handles modules that set their version/annotations/etc. in
+    ``__init__``.
 
     Scalar fields (description, name, tags, version, documentation) follow
     "YAML wins, code is the fallback". The ``annotations`` field uses
@@ -74,34 +102,40 @@ def merge_module_metadata(module_class: type, meta: dict[str, Any]) -> dict[str,
     ``examples`` field uses :func:`apcore.schema.merge_examples` (YAML wins
     fully when present). The ``metadata`` field is a shallow dict merge.
     """
-    code_desc = getattr(module_class, "description", "")
-    code_name = getattr(module_class, "name", None)
-    code_tags = getattr(module_class, "tags", [])
-    code_version = getattr(module_class, "version", "1.0.0")
-    code_annotations = getattr(module_class, "annotations", None)
-    code_examples = getattr(module_class, "examples", [])
-    code_metadata = getattr(module_class, "metadata", {})
-    code_docs = getattr(module_class, "documentation", None)
+    code_desc = getattr(module, "description", "")
+    code_name = getattr(module, "name", None)
+    code_tags = getattr(module, "tags", [])
+    code_version = getattr(module, "version", "1.0.0")
+    code_annotations = _coerce_code_annotations(getattr(module, "annotations", None))
+    code_examples = getattr(module, "examples", [])
+    code_metadata = getattr(module, "metadata", {})
+    code_docs = getattr(module, "documentation", None)
 
     yaml_metadata = meta.get("metadata", {})
     merged_metadata = {**(code_metadata or {}), **(yaml_metadata or {})}
 
     yaml_annotations = meta.get("annotations")
-    merged_annotations: Any
+    merged_annotations: ModuleAnnotations | None
     if yaml_annotations is None and code_annotations is None:
         merged_annotations = None
     else:
         merged_annotations = merge_annotations(yaml_annotations, code_annotations)
 
+    # Defend against unusable code_examples (e.g. MagicMock test stubs):
+    # only forward when it is actually a list, otherwise treat as absent.
+    safe_code_examples = code_examples if isinstance(code_examples, list) else None
+
     return {
-        "description": meta.get("description") or code_desc,
-        "name": meta.get("name") or code_name,
-        "tags": meta.get("tags") if meta.get("tags") is not None else (code_tags or []),
-        "version": meta.get("version") or code_version,
+        "description": meta.get("description") or (code_desc if isinstance(code_desc, str) else ""),
+        "name": meta.get("name") or (code_name if isinstance(code_name, (str, type(None))) else None),
+        "tags": (
+            meta.get("tags") if meta.get("tags") is not None else (code_tags if isinstance(code_tags, list) else [])
+        ),
+        "version": meta.get("version") or (code_version if isinstance(code_version, str) else "1.0.0"),
         "annotations": merged_annotations,
-        "examples": merge_examples(meta.get("examples"), code_examples or None),
-        "metadata": merged_metadata,
-        "documentation": meta.get("documentation") or code_docs,
+        "examples": merge_examples(meta.get("examples"), safe_code_examples),
+        "metadata": merged_metadata if isinstance(merged_metadata, dict) else {},
+        "documentation": meta.get("documentation") or (code_docs if isinstance(code_docs, str) else None),
     }
 
 
