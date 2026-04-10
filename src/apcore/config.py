@@ -781,7 +781,9 @@ class Config:
         """Resolve a dot-path key in namespace mode."""
         namespace, remainder = self._split_namespace_key(key)
         if namespace is None:
-            return _get_nested(self._data, key, default)
+            # §9.9.1: Fallback to the implicit "apcore" namespace if no registered namespace matches.
+            return self._get_namespace_mode(f"apcore.{key}", default)
+
         ns_data = self._data.get(namespace, {})
         if not isinstance(ns_data, dict):
             return default

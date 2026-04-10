@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`APCore` constructor gains `config_path` parameter** — Ergonomic shorthand: `APCore(config_path="apcore.yaml")` is equivalent to `config = Config.load("apcore.yaml"); APCore(config=config)`. Mutually exclusive with `config`; providing both raises `ValueError`. Existing `config=` usage is unchanged.
 - **`APCore` unified client class** (`apcore.client.APCore`) — High-level facade over `Registry` + `Executor` providing a single entry point for all module operations. Constructor accepts optional `registry`, `executor`, `config`, and `metrics_collector` (auto-created when `sys_modules.enabled`). Public API surface:
   - **Module management**: `module()` decorator, `register()`, `list_modules(tags=, prefix=)`, `discover()`, `describe()`
   - **Execution**: `call()`, `call_async()`, `stream()`, `validate()` — all accept `version_hint` for semver negotiation (A14)
