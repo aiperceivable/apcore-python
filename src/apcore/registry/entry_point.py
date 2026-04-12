@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from apcore.errors import ModuleLoadError
 
-__all__ = ["resolve_entry_point", "snake_to_pascal"]
+__all__ = ["resolve_entry_point"]
 
 
 def snake_to_pascal(name: str) -> str:

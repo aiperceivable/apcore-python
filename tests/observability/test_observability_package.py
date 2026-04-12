@@ -85,6 +85,7 @@ class TestObservabilityPackageExports:
             "UsageCollector",
             "UsageMiddleware",
             "create_span",
+            "estimate_p99_latency_ms",
         }
         assert set(obs.__all__) == expected
 

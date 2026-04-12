@@ -8,7 +8,7 @@ from apcore.config import Config
 from apcore.errors import InvalidInputError, ModuleNotFoundError
 from apcore.module import ModuleAnnotations
 from apcore.observability.error_history import ErrorHistory
-from apcore.observability.metrics import MetricsCollector
+from apcore.observability.metrics import MetricsCollector, estimate_p99_latency_ms
 from apcore.registry.registry import Registry
 
 __all__ = ["HealthSummaryModule", "HealthModuleModule", "classify_health_status"]
@@ -228,37 +228,9 @@ class HealthModuleModule:
         total_count: int = counts.get((hist_name, labels_key), 0)
 
         avg_ms = (total_sum / total_count * 1000.0) if total_count > 0 else 0.0
-        p99_ms = self._estimate_p99(hist_name, labels_key, buckets, total_count)
+        p99_ms = estimate_p99_latency_ms(hist_name, labels_key, buckets, total_count)
 
         return avg_ms, p99_ms
-
-    @staticmethod
-    def _estimate_p99(
-        hist_name: str,
-        labels_key: tuple[tuple[str, str], ...],
-        buckets: dict[tuple[str, tuple[tuple[str, str], ...], float], int],
-        total_count: int,
-    ) -> float:
-        """Estimate p99 latency in ms from histogram buckets."""
-        if total_count == 0:
-            return 0.0
-
-        target = total_count * 0.99
-
-        # Collect finite bucket boundaries and sort them
-        bucket_bounds: list[float] = sorted(
-            b for (name, lk, b) in buckets if name == hist_name and lk == labels_key and b != float("inf")
-        )
-
-        for bound in bucket_bounds:
-            count = buckets.get((hist_name, labels_key, bound), 0)
-            if count >= target:
-                return bound * 1000.0
-
-        # Fall back to last finite bucket or 0
-        if bucket_bounds:
-            return bucket_bounds[-1] * 1000.0
-        return 0.0
 
     def _get_recent_errors(self, module_id: str, limit: int) -> list[dict[str, Any]]:
         """Return recent errors formatted as dicts."""

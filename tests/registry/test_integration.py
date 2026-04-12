@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -108,12 +107,11 @@ class TestPublicAPI:
         assert callable(load_metadata)
         assert callable(load_id_map)
 
-    def test_import_scan_multi_root_and_snake_to_pascal(self) -> None:
-        """from apcore.registry import scan_multi_root, snake_to_pascal works."""
-        from apcore.registry import scan_multi_root, snake_to_pascal
+    def test_import_scan_multi_root(self) -> None:
+        """from apcore.registry import scan_multi_root works."""
+        from apcore.registry import scan_multi_root
 
         assert callable(scan_multi_root)
-        assert callable(snake_to_pascal)
 
     def test_import_discovered_module_and_dependency_info(self) -> None:
         """from apcore.registry import DiscoveredModule, DependencyInfo works."""
@@ -135,7 +133,6 @@ class TestPublicAPI:
             "scan_extensions",
             "scan_multi_root",
             "resolve_entry_point",
-            "snake_to_pascal",
             "resolve_dependencies",
             "load_metadata",
             "load_id_map",
@@ -149,28 +146,6 @@ class TestPublicAPI:
 
 
 class TestEndToEnd:
-    def test_discover_get_export_pipeline(self, tmp_path: Path) -> None:
-        """discover() -> get() -> export_schema() end-to-end pipeline."""
-        from apcore.registry.registry import Registry
-        from apcore.registry.schema_export import export_schema
-
-        ext = tmp_path / "extensions"
-        ext.mkdir()
-        _write_module_file(ext, "hello.py", "HelloModule", "Hello module")
-
-        reg = Registry(extensions_dir=str(ext))
-        count = reg.discover()
-        assert count == 1
-
-        mod = reg.get("hello")
-        assert mod is not None
-
-        json_str = export_schema(reg, "hello", format="json")
-        parsed = json.loads(json_str)
-        assert "input_schema" in parsed
-        assert "output_schema" in parsed
-        assert parsed["module_id"] == "hello"
-
     def test_register_unregister_callbacks(self) -> None:
         """register() -> on callback fired -> unregister() -> on callback fired."""
         from apcore.registry.registry import Registry

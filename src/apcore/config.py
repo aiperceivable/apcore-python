@@ -396,16 +396,22 @@ def _apply_namespace_env_overrides(
     for env_key, env_value in os.environ.items():
         coerced = _coerce_env_value(env_value)
 
-        # 1. Global env_map (bare env var → top-level key).
+        # 1. Global env_map (bare env var → top-level dot-path).
+        # The mapped target may be a dot-path (e.g. "server.port"); set it
+        # nested at the top level so `get()` can traverse it.
         if env_key in _GLOBAL_ENV_MAP:
-            result[_GLOBAL_ENV_MAP[env_key]] = coerced
+            _set_nested(result, _GLOBAL_ENV_MAP[env_key], coerced)
             continue
 
         # 2. Namespace env_map (bare env var → namespace key).
+        # The mapped target may also be a dot-path within the namespace.
         if env_key in ns_env_maps:
             ns_name, config_key = ns_env_maps[env_key]
             ns_data = result.setdefault(ns_name, {})
-            ns_data[config_key] = coerced
+            if not isinstance(ns_data, dict):
+                ns_data = {}
+                result[ns_name] = ns_data
+            _set_nested(ns_data, config_key, coerced)
             continue
 
         # 3. Prefix-based dispatch.
@@ -781,22 +787,45 @@ class Config:
         """Resolve a dot-path key in namespace mode."""
         namespace, remainder = self._split_namespace_key(key)
         if namespace is None:
-            # §9.9.1: Fallback to the implicit "apcore" namespace if no registered namespace matches.
+            # §9.9.1: Fallback to the implicit "apcore" namespace.
             return self._get_namespace_mode(f"apcore.{key}", default)
 
-        ns_data = self._data.get(namespace, {})
-        if not isinstance(ns_data, dict):
+        ns_data = self._data.get(namespace)
+        if ns_data is None:
+            # §9.9.1: Fallback to implicit "apcore" namespace when the resolved
+            # top-level segment does not exist in data. Avoid infinite recursion
+            # once we are already probing under "apcore".
+            if namespace != "apcore":
+                return self._get_namespace_mode(f"apcore.{key}", default)
             return default
         if remainder is None:
-            return copy.deepcopy(ns_data)
+            if isinstance(ns_data, dict):
+                return copy.deepcopy(ns_data)
+            # Bare top-level value (e.g. set via global env_map with a single-
+            # segment target like ``port``). Return the value directly.
+            return ns_data
+        if not isinstance(ns_data, dict):
+            # Remainder requested but the resolved top-level value is not a
+            # dict — fall back to implicit apcore namespace.
+            if namespace != "apcore":
+                return self._get_namespace_mode(f"apcore.{key}", default)
+            return default
         return _get_nested(ns_data, remainder, default)
 
     def _split_namespace_key(self, key: str) -> tuple[str | None, str | None]:
         """Split key into (namespace, remainder) using longest-prefix matching.
 
-        Returns (None, None) if no registered namespace matches.
+        Resolution order (matches TypeScript ``resolveNamespacePath``):
+          1. Longest registered namespace prefix.
+          2. Built-in ``apcore`` namespace.
+          3. Naive first-segment split — allows top-level keys injected via
+             global ``env_map`` (e.g. ``server.port``) or unmatched ``APCORE_*``
+             fallback paths (e.g. ``executor.timeout``) to resolve against the
+             raw data root. Matches cross-language behavior per §9.8 / §9.9.1.
+
         Returns (namespace, None) if the key is exactly the namespace.
         Returns (namespace, remainder) otherwise.
+        Returns (None, None) only for a completely empty key.
         """
         with _GLOBAL_NS_REGISTRY_LOCK:
             known_names = sorted(_GLOBAL_NS_REGISTRY.keys(), key=len, reverse=True)
@@ -813,7 +842,13 @@ class Config:
         if key.startswith("apcore."):
             return "apcore", key[len("apcore") + 1 :]
 
-        return None, None
+        # Naive first-segment fallback for unregistered top-level keys.
+        if not key:
+            return None, None
+        dot_index = key.find(".")
+        if dot_index == -1:
+            return key, None
+        return key[:dot_index], key[dot_index + 1 :]
 
     def set(self, key: str, value: Any) -> None:
         """Set a configuration value by dot-path key."""
@@ -1141,7 +1176,7 @@ Config.register_namespace(
         "usage": {"enabled": True, "retention_hours": 168, "bucketing_strategy": "hourly"},
         "control": {"enabled": True},
         "events": {
-            "enabled": True,
+            "enabled": False,
             "thresholds": {"error_rate": 0.1, "latency_p99_ms": 5000.0},
         },
     },

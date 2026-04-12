@@ -9,7 +9,7 @@ from typing import Any
 
 from apcore.events.emitter import ApCoreEvent, EventEmitter
 from apcore.middleware.base import Context, Middleware
-from apcore.observability.metrics import MetricsCollector
+from apcore.observability.metrics import MetricsCollector, estimate_p99_latency_ms
 
 
 class PlatformNotifyMiddleware(Middleware):
@@ -101,40 +101,24 @@ class PlatformNotifyMiddleware(Middleware):
         bucket_data = histograms.get("buckets", {})
         counts = histograms.get("counts", {})
 
+        hist_name = "apcore_module_duration_seconds"
+
         # Find the total observation count for this module
-        total_key = None
+        labels_key = None
         total_count = 0
         for (name, labels_tuple), count in counts.items():
-            if name != "apcore_module_duration_seconds":
+            if name != hist_name:
                 continue
             labels = dict(labels_tuple)
             if labels.get("module_id") == module_id:
-                total_key = labels_tuple
+                labels_key = labels_tuple
                 total_count = count
                 break
 
-        if total_count == 0 or total_key is None:
+        if total_count == 0 or labels_key is None:
             return 0.0
 
-        p99_target = total_count * 0.99
-
-        # Walk buckets in ascending order to find the p99 bucket boundary
-        buckets_for_module: list[tuple[float, int]] = []
-        for (name, labels_tuple, boundary), count in bucket_data.items():
-            if name != "apcore_module_duration_seconds":
-                continue
-            if labels_tuple != total_key:
-                continue
-            buckets_for_module.append((boundary, count))
-
-        buckets_for_module.sort(key=lambda x: x[0])
-
-        for boundary, cumulative_count in buckets_for_module:
-            if cumulative_count >= p99_target:
-                # Convert seconds to ms
-                return boundary * 1000.0
-
-        return 0.0
+        return estimate_p99_latency_ms(hist_name, labels_key, bucket_data, total_count)
 
     def _check_error_rate_threshold(self, module_id: str) -> None:
         """Emit error_threshold_exceeded if rate is above threshold (with hysteresis)."""

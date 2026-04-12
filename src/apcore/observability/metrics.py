@@ -17,6 +17,49 @@ _DESCRIPTIONS = {
 }
 
 
+def estimate_p99_latency_ms(
+    hist_name: str,
+    labels_key: tuple[tuple[str, str], ...],
+    buckets: dict[tuple[str, tuple[tuple[str, str], ...], float], int],
+    total_count: int,
+) -> float:
+    """Estimate p99 latency in milliseconds from histogram buckets.
+
+    Walks cumulative bucket counts in ascending boundary order and returns
+    the first boundary (converted to ms) whose cumulative count reaches
+    99% of *total_count*.  Falls back to the last finite boundary, or 0.0
+    when no data is available.
+
+    Args:
+        hist_name: Histogram metric name (e.g. ``"apcore_module_duration_seconds"``).
+        labels_key: Sorted tuple-of-tuples label key matching the histogram.
+        buckets: Mapping from ``(name, labels_key, boundary)`` to cumulative count.
+        total_count: Total number of observations recorded for this histogram.
+
+    Returns:
+        Estimated p99 latency in milliseconds.
+    """
+    if total_count == 0:
+        return 0.0
+
+    target = total_count * 0.99
+
+    # Collect finite bucket boundaries and sort them
+    bucket_bounds: list[float] = sorted(
+        b for (name, lk, b) in buckets if name == hist_name and lk == labels_key and b != float("inf")
+    )
+
+    for bound in bucket_bounds:
+        count = buckets.get((hist_name, labels_key, bound), 0)
+        if count >= target:
+            return bound * 1000.0
+
+    # Fall back to last finite bucket or 0
+    if bucket_bounds:
+        return bucket_bounds[-1] * 1000.0
+    return 0.0
+
+
 class MetricsCollector:
     """Thread-safe in-memory metrics store for counters and histograms."""
 
@@ -201,4 +244,4 @@ class MetricsMiddleware(Middleware):
         return None
 
 
-__all__ = ["MetricsCollector", "MetricsMiddleware"]
+__all__ = ["MetricsCollector", "MetricsMiddleware", "estimate_p99_latency_ms"]

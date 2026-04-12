@@ -16,7 +16,7 @@ Recommended middleware registration order (outermost to innermost):
 
 from apcore.observability.context_logger import ContextLogger, ObsLoggingMiddleware
 from apcore.observability.error_history import ErrorEntry, ErrorHistory
-from apcore.observability.metrics import MetricsCollector, MetricsMiddleware
+from apcore.observability.metrics import MetricsCollector, MetricsMiddleware, estimate_p99_latency_ms
 from apcore.observability.tracing import (
     InMemoryExporter,
     OTLPExporter,
@@ -35,6 +35,7 @@ __all__ = [
     "InMemoryExporter",
     "MetricsCollector",
     "MetricsMiddleware",
+    "estimate_p99_latency_ms",
     "ObsLoggingMiddleware",
     "OTLPExporter",
     "Span",

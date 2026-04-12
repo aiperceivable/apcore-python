@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from apcore.registry.conflicts import ConflictResult, detect_id_conflicts
 from apcore.registry.dependencies import resolve_dependencies
-from apcore.registry.entry_point import resolve_entry_point, snake_to_pascal
+from apcore.registry.entry_point import resolve_entry_point
 from apcore.registry.metadata import load_id_map, load_metadata
 from apcore.registry.registry import MODULE_ID_PATTERN, Registry
 from apcore.registry.scanner import scan_extensions, scan_multi_root
@@ -35,6 +35,5 @@ __all__ = [
     "resolve_entry_point",
     "scan_extensions",
     "scan_multi_root",
-    "snake_to_pascal",
     "validate_module",
 ]

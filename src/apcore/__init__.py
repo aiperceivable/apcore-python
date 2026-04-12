@@ -184,6 +184,7 @@ from apcore.pipeline import (
     ExecutionStrategy,
     PipelineAbortError,
     PipelineContext,
+    PipelineEngine,
     PipelineTrace,
     Step,
     StepNameDuplicateError,
@@ -206,6 +207,17 @@ from apcore.pipeline_config import (
 
 # Pipeline Preset Builders (parity with apcore-typescript and apcore-rust)
 from apcore.builtin_steps import (
+    BuiltinACLCheck,
+    BuiltinApprovalGate,
+    BuiltinCallChainGuard,
+    BuiltinContextCreation,
+    BuiltinExecute,
+    BuiltinInputValidation,
+    BuiltinMiddlewareAfter,
+    BuiltinMiddlewareBefore,
+    BuiltinModuleLookup,
+    BuiltinOutputValidation,
+    BuiltinReturnResult,
     build_internal_strategy,
     build_minimal_strategy,
     build_performance_strategy,
@@ -228,6 +240,10 @@ from apcore.sys_modules.registration import (
 # Default client for simplified global access
 # ---------------------------------------------------------------------------
 
+# Module-level convenience wrappers — Python SDK only.
+# These forward to a default APCore singleton. TypeScript and Rust SDKs
+# do not provide equivalent top-level functions; users in those languages
+# must construct an APCore instance explicitly.
 _default_client = APCore()
 
 
@@ -558,6 +574,7 @@ __all__ = [
     "BaseStep",
     "StepResult",
     "PipelineContext",
+    "PipelineEngine",
     "PipelineTrace",
     "StepTrace",
     "ExecutionStrategy",
@@ -579,6 +596,18 @@ __all__ = [
     "build_testing_strategy",
     "build_performance_strategy",
     "build_minimal_strategy",
+    # Builtin Pipeline Steps (parity with apcore-typescript / apcore-rust)
+    "BuiltinContextCreation",
+    "BuiltinCallChainGuard",
+    "BuiltinModuleLookup",
+    "BuiltinACLCheck",
+    "BuiltinApprovalGate",
+    "BuiltinInputValidation",
+    "BuiltinMiddlewareBefore",
+    "BuiltinExecute",
+    "BuiltinOutputValidation",
+    "BuiltinMiddlewareAfter",
+    "BuiltinReturnResult",
     # System Modules
     "register_sys_modules",
     "register_subscriber_type",
