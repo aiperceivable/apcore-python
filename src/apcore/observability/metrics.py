@@ -10,10 +10,13 @@ from apcore.context_keys import METRICS_STARTS
 from apcore.errors import ModuleError
 from apcore.middleware.base import Middleware
 
+METRIC_CALLS_TOTAL = "apcore_module_calls_total"
+METRIC_DURATION_SECONDS = "apcore_module_duration_seconds"
+
 _DESCRIPTIONS = {
-    "apcore_module_calls_total": "Total module calls",
+    METRIC_CALLS_TOTAL: "Total module calls",
     "apcore_module_errors_total": "Total module errors",
-    "apcore_module_duration_seconds": "Module execution duration",
+    METRIC_DURATION_SECONDS: "Module execution duration",
 }
 
 

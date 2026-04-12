@@ -93,6 +93,25 @@ class UpdateConfigModule:
 
     description = "Update a runtime configuration value by dot-path key"
     annotations = ModuleAnnotations(requires_approval=True, destructive=False)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "key": {"type": "string", "description": "Dot-path config key"},
+            "value": {"description": "New value"},
+            "reason": {"type": "string", "description": "Audit reason"},
+        },
+        "required": ["key", "value", "reason"],
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "success": {"type": "boolean", "description": "Whether the update succeeded"},
+            "key": {"type": "string", "description": "Updated config key"},
+            "old_value": {"description": "Previous value (redacted for sensitive keys)"},
+            "new_value": {"description": "New value (redacted for sensitive keys)"},
+        },
+        "required": ["success", "key", "old_value", "new_value"],
+    }
 
     def __init__(
         self,
@@ -125,11 +144,12 @@ class UpdateConfigModule:
         self._emit_event(key, old_value, value)
         self._log_change(key, old_value, value, reason)
 
+        redacted = self._is_sensitive_key(key)
         return {
             "success": True,
             "key": key,
-            "old_value": old_value,
-            "new_value": value,
+            "old_value": "***" if redacted else old_value,
+            "new_value": "***" if redacted else value,
         }
 
     # ------------------------------------------------------------------
@@ -176,6 +196,7 @@ class UpdateConfigModule:
 
     def _emit_event(self, key: str, old_value: Any, new_value: Any) -> None:
         """Emit ``apcore.config.updated`` (canonical event)."""
+        redacted = self._is_sensitive_key(key)
         self._emitter.emit(
             ApCoreEvent(
                 event_type="apcore.config.updated",
@@ -184,8 +205,8 @@ class UpdateConfigModule:
                 severity="info",
                 data={
                     "key": key,
-                    "old_value": old_value,
-                    "new_value": new_value,
+                    "old_value": "***" if redacted else old_value,
+                    "new_value": "***" if redacted else new_value,
                 },
             )
         )
@@ -233,6 +254,25 @@ class ReloadModuleModule:
 
     description = "Hot-reload a module by safe unregister and re-discover"
     annotations = ModuleAnnotations(requires_approval=True, destructive=False)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "ID of the module to reload"},
+            "reason": {"type": "string", "description": "Audit reason for the reload"},
+        },
+        "required": ["module_id", "reason"],
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "success": {"type": "boolean", "description": "Whether the reload succeeded"},
+            "module_id": {"type": "string", "description": "ID of the reloaded module"},
+            "previous_version": {"type": "string", "description": "Version before reload"},
+            "new_version": {"type": "string", "description": "Version after reload"},
+            "reload_duration_ms": {"type": "number", "description": "Reload duration in milliseconds"},
+        },
+        "required": ["success", "module_id"],
+    }
 
     def __init__(
         self,
@@ -405,6 +445,24 @@ class ToggleFeatureModule:
 
     description = "Disable or enable a module without unloading it"
     annotations = ModuleAnnotations(requires_approval=True, destructive=False)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "ID of the module to toggle"},
+            "enabled": {"type": "boolean", "description": "True to enable, false to disable"},
+            "reason": {"type": "string", "description": "Audit reason for the toggle"},
+        },
+        "required": ["module_id", "enabled", "reason"],
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "success": {"type": "boolean", "description": "Whether the toggle succeeded"},
+            "module_id": {"type": "string", "description": "ID of the toggled module"},
+            "enabled": {"type": "boolean", "description": "Current enabled state"},
+        },
+        "required": ["success", "module_id", "enabled"],
+    }
 
     def __init__(
         self,

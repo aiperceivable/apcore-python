@@ -223,13 +223,15 @@ class TestIntrospection:
         assert ex.current_strategy.name == "internal"
 
     def test_describe_pipeline_readable(self) -> None:
-        """describe_pipeline returns a readable string."""
+        """describe_pipeline returns a StrategyInfo with readable string representation."""
         reg = _make_registry()
         ex = Executor(registry=reg, strategy="testing")
         desc = ex.describe_pipeline()
-        assert desc.startswith("8-step pipeline:")
-        assert "\u2192" in desc
-        assert "execute" in desc
+        assert desc.step_count == 8
+        assert "execute" in desc.step_names
+        desc_str = str(desc)
+        assert desc_str.startswith("8-step pipeline:")
+        assert "\u2192" in desc_str
 
     def test_list_strategies_includes_current(self) -> None:
         """list_strategies includes the current strategy."""

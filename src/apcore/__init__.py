@@ -87,6 +87,7 @@ from apcore.errors import (
     ErrorCodeRegistry,
     ErrorCodes,
     ErrorFormatterDuplicateError,
+    FRAMEWORK_ERROR_CODE_PREFIXES,
     FuncMissingReturnTypeError,
     FuncMissingTypeHintError,
     InternalError,
@@ -152,6 +153,8 @@ from apcore.version import negotiate_version as negotiate_version
 # Utilities
 from apcore.utils import match_pattern as match_pattern
 from apcore.utils.call_chain import guard_call_chain as guard_call_chain
+from apcore.utils.call_chain import DEFAULT_MAX_CALL_DEPTH as DEFAULT_MAX_CALL_DEPTH
+from apcore.utils.call_chain import DEFAULT_MAX_MODULE_REPEAT as DEFAULT_MAX_MODULE_REPEAT
 from apcore.utils.error_propagation import propagate_error as propagate_error
 from apcore.utils.normalize import normalize_to_canonical_id as normalize_to_canonical_id
 from apcore.utils.pattern import calculate_specificity as calculate_specificity
@@ -173,6 +176,10 @@ from apcore.observability import (
     UsageCollector,
     UsageMiddleware,
     create_span,
+)
+from apcore.observability.metrics import (
+    METRIC_CALLS_TOTAL,
+    METRIC_DURATION_SECONDS,
 )
 
 # Events
@@ -234,6 +241,24 @@ from apcore.sys_modules.registration import (
     register_sys_modules,
     reset_subscriber_registry,
     unregister_subscriber_type,
+)
+from apcore.sys_modules.health import (
+    HealthModuleModule,
+    HealthSummaryModule,
+    classify_health_status,
+)
+from apcore.sys_modules.manifest import (
+    ManifestFullModule,
+    ManifestModuleModule,
+)
+from apcore.sys_modules.usage import (
+    UsageModuleModule,
+    UsageSummaryModule,
+)
+from apcore.sys_modules.control import (
+    ReloadModuleModule,
+    ToggleFeatureModule,
+    UpdateConfigModule,
 )
 
 # ---------------------------------------------------------------------------
@@ -482,6 +507,7 @@ __all__ = [
     "ErrorFormatterDuplicateError",
     "ErrorCodeCollisionError",
     "ErrorCodeRegistry",
+    "FRAMEWORK_ERROR_CODE_PREFIXES",
     "FuncMissingReturnTypeError",
     "FuncMissingTypeHintError",
     "InternalError",
@@ -536,6 +562,8 @@ __all__ = [
     # Utilities
     "match_pattern",
     "guard_call_chain",
+    "DEFAULT_MAX_CALL_DEPTH",
+    "DEFAULT_MAX_MODULE_REPEAT",
     "normalize_to_canonical_id",
     "calculate_specificity",
     "propagate_error",
@@ -546,6 +574,8 @@ __all__ = [
     "ContextLogger",
     "ObsLoggingMiddleware",
     "MetricsMiddleware",
+    "METRIC_CALLS_TOTAL",
+    "METRIC_DURATION_SECONDS",
     "MetricsCollector",
     "Span",
     "StdoutExporter",
@@ -613,4 +643,15 @@ __all__ = [
     "register_subscriber_type",
     "unregister_subscriber_type",
     "reset_subscriber_registry",
+    # System Module Implementations
+    "HealthSummaryModule",
+    "HealthModuleModule",
+    "classify_health_status",
+    "ManifestFullModule",
+    "ManifestModuleModule",
+    "UsageSummaryModule",
+    "UsageModuleModule",
+    "UpdateConfigModule",
+    "ReloadModuleModule",
+    "ToggleFeatureModule",
 ]

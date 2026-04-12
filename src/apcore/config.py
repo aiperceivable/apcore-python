@@ -153,6 +153,9 @@ _DEFAULTS: dict[str, Any] = {
             "subscribers": [],
         },
     },
+    "stream": {
+        "max_merge_depth": 32,
+    },
 }
 
 # =============================================================================
@@ -559,6 +562,26 @@ class Config:
         self._mode: str = "legacy"
         self._mounts: dict[str, dict[str, Any]] = {}
         self._env_style: str = env_style
+
+    # ------------------------------------------------------------------
+    # Default value resolution (single source of truth)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def get_default(cls, key: str, fallback: Any = None) -> Any:
+        """Resolve a default value from _DEFAULTS by dot-path.
+
+        This is the single source of truth for all default values.
+        Components MUST use this instead of hardcoding defaults.
+        """
+        parts = key.split(".")
+        node: Any = _DEFAULTS
+        for part in parts:
+            if isinstance(node, dict) and part in node:
+                node = node[part]
+            else:
+                return fallback
+        return node
 
     # ------------------------------------------------------------------
     # Namespace registry (class-level)

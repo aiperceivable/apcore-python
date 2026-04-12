@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, runtime_checkable
 
+from apcore.config import Config
 from apcore.errors import (
     InvalidInputError,
     ModuleNotFoundError,
@@ -194,9 +195,9 @@ class Registry:
             if ext_root:
                 self._extension_roots = [{"root": ext_root}]
             else:
-                self._extension_roots = [{"root": "./extensions"}]
+                self._extension_roots = [{"root": Config.get_default("extensions.root")}]
         else:
-            self._extension_roots = [{"root": "./extensions"}]
+            self._extension_roots = [{"root": Config.get_default("extensions.root")}]
 
         # Internal state
         self._modules: dict[str, Any] = {}
@@ -730,8 +731,20 @@ class Registry:
                 except Exception:
                     pass
 
-        input_json = input_schema_cls.model_json_schema() if input_schema_cls else {}
-        output_json = output_schema_cls.model_json_schema() if output_schema_cls else {}
+        input_json = (
+            input_schema_cls
+            if isinstance(input_schema_cls, dict)
+            else input_schema_cls.model_json_schema()
+            if input_schema_cls
+            else {}
+        )
+        output_json = (
+            output_schema_cls
+            if isinstance(output_schema_cls, dict)
+            else output_schema_cls.model_json_schema()
+            if output_schema_cls
+            else {}
+        )
 
         effective_metadata = meta.get("metadata", {})
 
@@ -777,6 +790,55 @@ class Registry:
         if migration_guide:
             msg += f" Migration: {migration_guide}"
         logger.warning(msg)
+
+    def export_schema(self, module_id: str, strict: bool = False) -> dict[str, Any] | None:
+        """Export the schema definition for a registered module as a plain dict.
+
+        Returns the module's input and output schemas in the generic export
+        format (no platform-specific transformations).  Returns ``None`` if
+        the module is not registered.
+
+        Args:
+            module_id: The ID of the module whose schema should be exported.
+            strict: When True, applies strict JSON Schema constraints
+                (removes ``additionalProperties``, marks all required).
+                Defaults to False.
+
+        Returns:
+            A dict with keys ``module_id``, ``description``, ``input_schema``,
+            ``output_schema``, and ``definitions``; or ``None`` if the module
+            is not found.
+
+        Aligned with ``apcore-rust Registry::export_schema``.
+        """
+        descriptor = self.get_definition(module_id)
+        if descriptor is None:
+            return None
+
+        from apcore.schema.exporter import SchemaExporter
+        from apcore.schema.types import SchemaDefinition
+
+        schema_def = SchemaDefinition(
+            module_id=descriptor.module_id,
+            description=descriptor.description,
+            input_schema=descriptor.input_schema,
+            output_schema=descriptor.output_schema,
+        )
+
+        exporter = SchemaExporter()
+
+        if strict:
+            from apcore.schema.strict import to_strict_schema
+            import copy
+
+            schema_def = SchemaDefinition(
+                module_id=descriptor.module_id,
+                description=descriptor.description,
+                input_schema=to_strict_schema(copy.deepcopy(descriptor.input_schema)),
+                output_schema=to_strict_schema(copy.deepcopy(descriptor.output_schema)),
+            )
+
+        return exporter.export_generic(schema_def)
 
     def describe(self, module_id: str) -> str:
         """Return a human-readable description of a module.

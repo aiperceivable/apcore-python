@@ -83,6 +83,16 @@ def _find_apcore_fixtures() -> Path:
 
 
 FIXTURES_ROOT = _find_apcore_fixtures()
+SCHEMAS_ROOT = FIXTURES_ROOT.parent.parent / "schemas"
+
+
+def _load_schema(name: str) -> dict[str, Any]:
+    """Load a JSON Schema file from the apcore spec repo's schemas/ directory."""
+    path = SCHEMAS_ROOT / f"{name}.schema.json"
+    if not path.exists():
+        pytest.skip(f"Schema {name}.schema.json not found at {path}")
+    with open(path) as f:
+        return json.load(f)
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -581,3 +591,125 @@ def test_schema_validation(
         error_paths = [e.path for e in result.errors]
         expected_path = "/" + case["expected_error_path"].replace(".", "/").replace("[", "/").replace("]", "")
         assert any(expected_path in p for p in error_paths), f"Expected error at {expected_path}, got {error_paths}"
+
+
+# ---------------------------------------------------------------------------
+# 11. Config Defaults
+# ---------------------------------------------------------------------------
+
+_config_defaults_data = _load("config_defaults")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _config_defaults_data["test_cases"],
+    ids=[c["id"] for c in _config_defaults_data["test_cases"]],
+)
+def test_config_defaults(case: dict[str, Any]) -> None:
+    config = Config.from_defaults()
+    result = config.get(case["key"])
+    assert result == case["expected"], f"Default for {case['key']}: got {result}, expected {case['expected']}"
+
+
+# ---------------------------------------------------------------------------
+# 12. Stream Aggregation (deep merge)
+# ---------------------------------------------------------------------------
+
+_stream_agg_data = _load("stream_aggregation")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _stream_agg_data["test_cases"],
+    ids=[c["id"] for c in _stream_agg_data["test_cases"]],
+)
+def test_stream_aggregation(case: dict[str, Any]) -> None:
+    from apcore.executor import _deep_merge
+
+    chunks = case["chunks"]
+    if not chunks:
+        # no chunks -> null/empty
+        assert case["expected"] is None
+        return
+    accumulated: dict[str, Any] = {}
+    for chunk in chunks:
+        _deep_merge(accumulated, chunk)
+    assert accumulated == case["expected"]
+
+
+# ---------------------------------------------------------------------------
+# 13. Defaults Schema Completeness
+# ---------------------------------------------------------------------------
+
+
+def test_defaults_schema_completeness() -> None:
+    """Verify that all defaults defined in defaults.schema.json
+    are present and match the SDK's Config defaults."""
+    schema = _load_schema("defaults")
+
+    config = Config.from_defaults()
+
+    def extract_defaults(props: dict[str, Any], prefix: str = "") -> list[tuple[str, Any]]:
+        """Recursively extract (dot-path, default) pairs from schema properties."""
+        results: list[tuple[str, Any]] = []
+        for key, prop in props.items():
+            dot_path = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
+            if "default" in prop:
+                results.append((dot_path, prop["default"]))
+            if prop.get("type") == "object" and "properties" in prop:
+                results.extend(extract_defaults(prop["properties"], dot_path))
+        return results
+
+    defaults = extract_defaults(schema.get("properties", {}))
+    assert len(defaults) > 0, "Schema should define at least one default"
+
+    for dot_path, expected in defaults:
+        actual = config.get(dot_path)
+        assert actual == expected, f"Config default for '{dot_path}': got {actual!r}, " f"schema says {expected!r}"
+
+
+# ---------------------------------------------------------------------------
+# 14. Sys Module Output Schema Validation
+# ---------------------------------------------------------------------------
+
+
+def test_sys_module_output_schemas_match_spec() -> None:
+    """Verify that each sys module's output_schema matches the spec repo's schema file."""
+    from apcore.sys_modules.control import (
+        ReloadModuleModule,
+        ToggleFeatureModule,
+        UpdateConfigModule,
+    )
+    from apcore.sys_modules.health import HealthModuleModule, HealthSummaryModule
+    from apcore.sys_modules.manifest import ManifestFullModule, ManifestModuleModule
+
+    mapping: list[tuple[str, type]] = [
+        ("sys-control-update-config", UpdateConfigModule),
+        ("sys-control-reload-module", ReloadModuleModule),
+        ("sys-control-toggle-feature", ToggleFeatureModule),
+        ("sys-health-summary", HealthSummaryModule),
+        ("sys-health-module", HealthModuleModule),
+        ("sys-manifest-module", ManifestModuleModule),
+        ("sys-manifest-full", ManifestFullModule),
+    ]
+
+    for schema_name, module_cls in mapping:
+        spec_schema = _load_schema(schema_name)
+        # Get the module's output_schema (class attribute)
+        module_schema = getattr(module_cls, "output_schema", None)
+        if module_schema is None:
+            pytest.fail(f"{module_cls.__name__} has no output_schema")
+
+        # Verify required keys match
+        spec_required = set(spec_schema.get("required", []))
+        module_required = set(module_schema.get("required", []))
+        assert spec_required == module_required, (
+            f"{schema_name}: required mismatch — " f"spec={spec_required}, module={module_required}"
+        )
+
+        # Verify property keys match
+        spec_props = set(spec_schema.get("properties", {}).keys())
+        module_props = set(module_schema.get("properties", {}).keys())
+        assert spec_props == module_props, (
+            f"{schema_name}: properties mismatch — " f"spec={spec_props}, module={module_props}"
+        )

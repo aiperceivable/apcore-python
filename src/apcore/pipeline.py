@@ -135,6 +135,9 @@ class StrategyInfo:
     step_names: list[str]
     description: str
 
+    def __str__(self) -> str:
+        return f"{self.step_count}-step pipeline: " + " \u2192 ".join(self.step_names)
+
 
 class ExecutionStrategy:
     """An ordered sequence of steps that defines how a module is executed."""

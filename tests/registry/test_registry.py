@@ -968,6 +968,51 @@ class TestDescribe:
             reg.describe("nonexistent.module")
 
 
+# ===== export_schema =====
+
+
+class TestExportSchema:
+    def test_export_schema_returns_dict_for_registered_module(self) -> None:
+        """export_schema returns a dict with expected keys for a registered module."""
+        reg = Registry()
+        mod = _ValidModule()
+        reg.register("test.export", mod)
+        result = reg.export_schema("test.export")
+        assert result is not None
+        assert result["module_id"] == "test.export"
+        assert result["description"] == "A valid test module"
+        assert "input_schema" in result
+        assert "output_schema" in result
+
+    def test_export_schema_returns_none_for_unregistered_module(self) -> None:
+        """export_schema returns None for a module that is not registered."""
+        reg = Registry()
+        result = reg.export_schema("not.registered")
+        assert result is None
+
+    def test_export_schema_strict_mode(self) -> None:
+        """export_schema with strict=True applies strict schema constraints."""
+        reg = Registry()
+        mod = _ValidModule()
+        reg.register("test.strict", mod)
+        result = reg.export_schema("test.strict", strict=True)
+        assert result is not None
+        assert result["module_id"] == "test.strict"
+        input_schema = result["input_schema"]
+        # strict schema sets additionalProperties to False
+        assert input_schema.get("additionalProperties") is False
+
+    def test_export_schema_input_schema_properties(self) -> None:
+        """export_schema includes correct input schema properties."""
+        reg = Registry()
+        mod = _ValidModule()
+        reg.register("test.props", mod)
+        result = reg.export_schema("test.props")
+        assert result is not None
+        assert "properties" in result["input_schema"]
+        assert "value" in result["input_schema"]["properties"]
+
+
 # ===== Hot Reload (watch/unwatch) =====
 
 

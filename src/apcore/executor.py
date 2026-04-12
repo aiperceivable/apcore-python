@@ -162,18 +162,18 @@ class Executor:
 
         if config is not None:
             val = config.get("executor.default_timeout")
-            self._default_timeout: int = val if val is not None else 30000
+            self._default_timeout: int = val if val is not None else Config.get_default("executor.default_timeout")
             val = config.get("executor.global_timeout")
-            self._global_timeout: int = val if val is not None else 60000
+            self._global_timeout: int = val if val is not None else Config.get_default("executor.global_timeout")
             val = config.get("executor.max_call_depth")
-            self._max_call_depth: int = val if val is not None else 32
+            self._max_call_depth: int = val if val is not None else Config.get_default("executor.max_call_depth")
             val = config.get("executor.max_module_repeat")
-            self._max_module_repeat: int = val if val is not None else 3
+            self._max_module_repeat: int = val if val is not None else Config.get_default("executor.max_module_repeat")
         else:
-            self._default_timeout = 30000
-            self._global_timeout = 60000
-            self._max_call_depth = 32
-            self._max_module_repeat = 3
+            self._default_timeout = Config.get_default("executor.default_timeout")
+            self._global_timeout = Config.get_default("executor.global_timeout")
+            self._max_call_depth = Config.get_default("executor.max_call_depth")
+            self._max_module_repeat = Config.get_default("executor.max_module_repeat")
 
         if self._default_timeout < 0:
             raise InvalidInputError(
@@ -877,11 +877,11 @@ class Executor:
         """Return the current execution strategy."""
         return self._strategy
 
-    def describe_pipeline(self) -> str:
-        """Return a human-readable description of the current pipeline.
+    def describe_pipeline(self) -> StrategyInfo:
+        """Return an AI-introspectable description of the current pipeline.
 
         Returns:
-            A string like "11-step pipeline: step1 -> step2 -> ...".
+            A StrategyInfo dataclass with name, step_count, step_names, and
+            a human-readable description string.
         """
-        names = self._strategy.step_names()
-        return f"{len(names)}-step pipeline: " + " \u2192 ".join(names)
+        return self._strategy.info()

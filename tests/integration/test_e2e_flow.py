@@ -28,13 +28,13 @@ class TestEndToEndFlow:
         result = int_executor.call("greet", {"name": "Alice"})
         assert result == {"message": "Hello, Alice!"}
 
-    def test_trace_id_is_uuid_v4_format(self, int_registry):
+    def test_trace_id_is_32_hex_format(self, int_registry):
         recorder = _ContextRecorder()
         executor = Executor(registry=int_registry, middlewares=[recorder])
         executor.call("greet", {"name": "Alice"})
         assert len(recorder.contexts) == 1
         trace_id = recorder.contexts[0].trace_id
-        pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        pattern = r"^[0-9a-f]{32}$"
         assert re.match(pattern, trace_id)
 
     def test_trace_id_propagates_through_nested_calls(self):

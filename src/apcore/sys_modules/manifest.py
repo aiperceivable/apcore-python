@@ -36,6 +36,29 @@ class ManifestModuleModule:
 
     description = "Full manifest for a registered module including source path"
     annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "ID of the module to inspect"},
+        },
+        "required": ["module_id"],
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "Module identifier"},
+            "description": {"type": "string", "description": "Module description"},
+            "documentation": {"description": "Module documentation (Markdown)"},
+            "source_path": {"type": "string", "description": "Computed source file path"},
+            "input_schema": {"type": "object", "description": "Module input JSON Schema"},
+            "output_schema": {"type": "object", "description": "Module output JSON Schema"},
+            "annotations": {"type": "object", "description": "Module annotations"},
+            "tags": {"type": "array", "description": "Module tags"},
+            "dependencies": {"type": "array", "description": "Module dependencies"},
+            "metadata": {"type": "object", "description": "Additional metadata"},
+        },
+        "required": ["module_id", "description"],
+    }
 
     def __init__(
         self,
@@ -101,6 +124,32 @@ class ManifestFullModule:
 
     description = "Complete system manifest with filtering by prefix and tags"
     annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "include_schemas": {
+                "type": "boolean",
+                "description": "Whether to include input/output schemas",
+                "default": True,
+            },
+            "include_source_paths": {
+                "type": "boolean",
+                "description": "Whether to include source paths",
+                "default": True,
+            },
+            "prefix": {"type": "string", "description": "Filter modules by ID prefix"},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Filter modules by tags"},
+        },
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "project_name": {"type": "string", "description": "Project name from config"},
+            "module_count": {"type": "integer", "description": "Number of modules returned"},
+            "modules": {"type": "array", "description": "Module manifest entries"},
+        },
+        "required": ["project_name", "module_count", "modules"],
+    }
 
     def __init__(
         self,

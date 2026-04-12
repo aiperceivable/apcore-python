@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import uuid
 
 import pytest
 
@@ -26,8 +25,7 @@ class TestTraceContextInject:
         ctx = Context.create()
         headers = TraceContext.inject(ctx)
         parts = headers["traceparent"].split("-")
-        expected_hex = ctx.trace_id.replace("-", "")
-        assert parts[1] == expected_hex
+        assert parts[1] == ctx.trace_id
 
     def test_inject_version_is_00(self):
         ctx = Context.create()
@@ -176,8 +174,7 @@ class TestRoundTrip:
         parsed = TraceContext.extract(headers)
 
         assert parsed is not None
-        expected_hex = ctx.trace_id.replace("-", "")
-        assert parsed.trace_id == expected_hex
+        assert parsed.trace_id == ctx.trace_id
 
     def test_inject_then_extract_preserves_parent_id(self):
         ctx = Context.create()
@@ -201,10 +198,10 @@ class TestContextCreateWithTraceParent:
             trace_flags="01",
         )
         ctx = Context.create(trace_parent=tp)
-        # trace_id should be the 32 hex reformatted as UUID (8-4-4-4-12)
-        assert ctx.trace_id == "4bf92f35-77b3-4da6-a3ce-929d0e0e4736"
+        # trace_id should be the 32 hex chars directly
+        assert ctx.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
 
-    def test_context_create_with_trace_parent_produces_valid_uuid(self):
+    def test_context_create_with_trace_parent_produces_valid_32_hex(self):
         tp = TraceParent(
             version="00",
             trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
@@ -212,15 +209,15 @@ class TestContextCreateWithTraceParent:
             trace_flags="01",
         )
         ctx = Context.create(trace_parent=tp)
-        # Should be parseable as a UUID
-        parsed = uuid.UUID(ctx.trace_id)
-        assert str(parsed) == ctx.trace_id
+        # Should be 32 lowercase hex chars
+        assert len(ctx.trace_id) == 32
+        assert all(c in "0123456789abcdef" for c in ctx.trace_id)
 
     def test_context_create_without_trace_parent_still_works(self):
         ctx = Context.create()
-        # Should produce a valid UUID v4
-        parsed = uuid.UUID(ctx.trace_id)
-        assert str(parsed) == ctx.trace_id
+        # Should produce a valid 32-hex trace_id
+        assert len(ctx.trace_id) == 32
+        assert all(c in "0123456789abcdef" for c in ctx.trace_id)
 
     def test_context_create_without_trace_parent_generates_unique_ids(self):
         ctx1 = Context.create()

@@ -32,12 +32,12 @@ class TraceContext:
     def inject(context: Context) -> dict[str, str]:
         """Build a traceparent header dict from an apcore Context.
 
-        Converts ``context.trace_id`` (UUID with dashes) to the 32-hex
-        format required by the W3C traceparent spec.  Uses the first
-        span's ``span_id`` from the tracing stack if available, otherwise
-        generates a random 16-hex parent id.
+        Uses ``context.trace_id`` (already 32-hex format) directly for
+        the W3C traceparent spec.  Uses the first span's ``span_id``
+        from the tracing stack if available, otherwise generates a
+        random 16-hex parent id.
         """
-        trace_id_hex = context.trace_id.replace("-", "")
+        trace_id_hex = context.trace_id  # already 32-hex format
 
         spans_stack = context.data.get("_apcore.mw.tracing.spans")
         if spans_stack:

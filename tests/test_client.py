@@ -167,16 +167,10 @@ class TestAPCoreConstruction:
         config_data = {"extensions": {"root": "/custom/path"}}
         config_file.write_text(yaml.dump(config_data))
 
-        client = APCore(config_path=str(config_file))
+        config = Config.load(str(config_file))
+        client = APCore(config=config)
         assert client.config is not None
         assert client.config.get("extensions.root") == "/custom/path"
-
-    def test_mutually_exclusive_config(self) -> None:
-        from apcore.config import Config
-
-        config = Config({})
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            APCore(config=config, config_path="apcore.yaml")
 
 
 # ---------------------------------------------------------------------------

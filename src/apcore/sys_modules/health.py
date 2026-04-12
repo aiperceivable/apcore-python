@@ -66,6 +66,30 @@ class HealthSummaryModule:
 
     description = "Aggregated health overview of all registered modules"
     annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "error_rate_threshold": {
+                "type": "number",
+                "description": "Error rate threshold for healthy status",
+                "default": 0.01,
+            },
+            "include_healthy": {
+                "type": "boolean",
+                "description": "Whether to include healthy modules in output",
+                "default": True,
+            },
+        },
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "project": {"type": "object", "description": "Project information"},
+            "summary": {"type": "object", "description": "Aggregated health counts by status"},
+            "modules": {"type": "array", "description": "Per-module health entries"},
+        },
+        "required": ["project", "summary", "modules"],
+    }
 
     def __init__(
         self,
@@ -166,6 +190,28 @@ class HealthModuleModule:
 
     description = "Detailed health information for a single module"
     annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "ID of the module to inspect"},
+            "error_limit": {"type": "integer", "description": "Max number of recent errors to return", "default": 10},
+        },
+        "required": ["module_id"],
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "Module identifier"},
+            "status": {"type": "string", "description": "Health status: healthy, degraded, error, or unknown"},
+            "total_calls": {"type": "integer", "description": "Total number of calls"},
+            "error_count": {"type": "integer", "description": "Total number of errors"},
+            "error_rate": {"type": "number", "description": "Error rate as a float (0.0-1.0)"},
+            "avg_latency_ms": {"type": "number", "description": "Average latency in milliseconds"},
+            "p99_latency_ms": {"type": "number", "description": "99th percentile latency in milliseconds"},
+            "recent_errors": {"type": "array", "description": "Recent error entries"},
+        },
+        "required": ["module_id", "status", "total_calls", "error_count", "error_rate"],
+    }
 
     def __init__(
         self,

@@ -29,28 +29,16 @@ class APCore:
         executor: Executor | None = None,
         config: Config | None = None,
         metrics_collector: MetricsCollector | None = None,
-        config_path: str | None = None,
     ) -> None:
         """Initialize the APCore client.
 
         Args:
             registry: Optional Registry instance. Creates a new one if None.
             executor: Optional Executor instance. Creates a new one if None.
-            config: Optional Config instance.
+            config: Optional Config instance. Use Config.load() to load from a file.
             metrics_collector: Optional MetricsCollector for observability.
                                Auto-created when sys_modules are enabled and none is provided.
-            config_path: Optional path to a YAML configuration file.
-                         Mutually exclusive with 'config'.
-
-        Raises:
-            ValueError: If both 'config' and 'config_path' are provided.
         """
-        if config is not None and config_path is not None:
-            raise ValueError("Parameters 'config' and 'config_path' are mutually exclusive.")
-
-        if config_path is not None:
-            config = Config.load(config_path)
-
         self.registry = registry or Registry()
         self.config = config
         self.executor = executor or Executor(registry=self.registry, config=config)

@@ -40,6 +40,7 @@ from apcore.pipeline import (
     PipelineContext,
     StepResult,
 )
+from apcore.config import Config
 from apcore.utils.call_chain import guard_call_chain
 
 __all__ = [
@@ -121,9 +122,9 @@ class BuiltinContextCreation(BaseStep):
         self._executor = executor
         if config is not None:
             val = config.get("executor.global_timeout")
-            self._global_timeout: int = val if val is not None else 60000
+            self._global_timeout: int = val if val is not None else Config.get_default("executor.global_timeout")
         else:
-            self._global_timeout = 60000
+            self._global_timeout = Config.get_default("executor.global_timeout")
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         if ctx.context is None:
@@ -159,12 +160,12 @@ class BuiltinCallChainGuard(BaseStep):
         self._config = config
         if config is not None:
             val = config.get("executor.max_call_depth")
-            self._max_call_depth: int = val if val is not None else 32
+            self._max_call_depth: int = val if val is not None else Config.get_default("executor.max_call_depth")
             val = config.get("executor.max_module_repeat")
-            self._max_module_repeat: int = val if val is not None else 3
+            self._max_module_repeat: int = val if val is not None else Config.get_default("executor.max_module_repeat")
         else:
-            self._max_call_depth = 32
-            self._max_module_repeat = 3
+            self._max_call_depth = Config.get_default("executor.max_call_depth")
+            self._max_module_repeat = Config.get_default("executor.max_module_repeat")
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         call_chain = getattr(ctx.context, "call_chain", [])
@@ -517,9 +518,9 @@ class BuiltinExecute(BaseStep):
         self._config = config
         if config is not None:
             val = config.get("executor.default_timeout")
-            self._default_timeout: int = val if val is not None else 30000
+            self._default_timeout: int = val if val is not None else Config.get_default("executor.default_timeout")
         else:
-            self._default_timeout = 30000
+            self._default_timeout = Config.get_default("executor.default_timeout")
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         module = ctx.module

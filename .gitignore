@@ -15,3 +15,6 @@ build/
 venv/
 env/
 .env
+
+# Spec repo schemas — SSOT is in apcore/schemas/, do not copy
+schemas/

@@ -53,17 +53,20 @@ class Context(Generic[T]):
         trace_parent: TraceParent | None = None,
         services: T = None,  # type: ignore[assignment]
     ) -> Context[T]:
-        """Create a new top-level Context with a generated UUID v4 trace_id.
+        """Create a new top-level Context with a generated trace_id.
 
         When *trace_parent* is provided, its ``trace_id`` (32 hex chars) is
-        converted to UUID format (8-4-4-4-12) and used as the context's
-        ``trace_id`` instead of generating a new one.
+        validated and used as 32-character lowercase hex. If the format is
+        invalid, a new random 32-hex trace_id is generated instead.
         """
         if trace_parent is not None:
             hex_id = trace_parent.trace_id
-            trace_id = f"{hex_id[:8]}-{hex_id[8:12]}-{hex_id[12:16]}" f"-{hex_id[16:20]}-{hex_id[20:]}"
+            if len(hex_id) == 32 and all(c in "0123456789abcdef" for c in hex_id):
+                trace_id = hex_id
+            else:
+                trace_id = uuid.uuid4().hex
         else:
-            trace_id = str(uuid.uuid4())
+            trace_id = uuid.uuid4().hex
         return cls(
             trace_id=trace_id,
             caller_id=None,

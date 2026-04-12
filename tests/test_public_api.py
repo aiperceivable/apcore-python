@@ -582,6 +582,24 @@ class TestPublicAPIAll:
         "LOGGING_START",
         "REDACTED_OUTPUT",
         "RETRY_COUNT_BASE",
+        # System module classes
+        "HealthSummaryModule",
+        "HealthModuleModule",
+        "ManifestFullModule",
+        "ManifestModuleModule",
+        "UsageSummaryModule",
+        "UsageModuleModule",
+        "UpdateConfigModule",
+        "ReloadModuleModule",
+        "ToggleFeatureModule",
+        # Module-level constants (parity with apcore-typescript / apcore-rust)
+        "DEFAULT_MAX_CALL_DEPTH",
+        "DEFAULT_MAX_MODULE_REPEAT",
+        "FRAMEWORK_ERROR_CODE_PREFIXES",
+        "METRIC_CALLS_TOTAL",
+        "METRIC_DURATION_SECONDS",
+        # Health utility
+        "classify_health_status",
     }
 
     def test_all_contains_all_expected_names(self):
