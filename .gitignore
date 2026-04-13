@@ -16,5 +16,8 @@ venv/
 env/
 .env
 
+# Forge planning artifacts (internal only)
+.forge/
+
 # Spec repo schemas — SSOT is in apcore/schemas/, do not copy
 schemas/
