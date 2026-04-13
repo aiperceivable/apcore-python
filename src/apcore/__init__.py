@@ -244,20 +244,24 @@ from apcore.sys_modules.registration import (
     unregister_subscriber_type,
 )
 from apcore.sys_modules.health import (
-    HealthModuleModule,
+    HealthModule,
+    HealthModuleModule,  # backward-compat alias
     HealthSummaryModule,
     classify_health_status,
 )
 from apcore.sys_modules.manifest import (
     ManifestFullModule,
-    ManifestModuleModule,
+    ManifestModule,
+    ManifestModuleModule,  # backward-compat alias
 )
 from apcore.sys_modules.usage import (
-    UsageModuleModule,
+    UsageModule,
+    UsageModuleModule,  # backward-compat alias
     UsageSummaryModule,
 )
 from apcore.sys_modules.control import (
-    ReloadModuleModule,
+    ReloadModule,
+    ReloadModuleModule,  # backward-compat alias
     ToggleFeatureModule,
     ToggleState,
     UpdateConfigModule,
@@ -648,14 +652,18 @@ __all__ = [
     "SysModulesContext",
     # System Module Implementations
     "HealthSummaryModule",
-    "HealthModuleModule",
+    "HealthModule",
+    "HealthModuleModule",  # backward-compat alias
     "classify_health_status",
     "ManifestFullModule",
-    "ManifestModuleModule",
+    "ManifestModule",
+    "ManifestModuleModule",  # backward-compat alias
     "UsageSummaryModule",
-    "UsageModuleModule",
+    "UsageModule",
+    "UsageModuleModule",  # backward-compat alias
     "UpdateConfigModule",
-    "ReloadModuleModule",
+    "ReloadModule",
+    "ReloadModuleModule",  # backward-compat alias
     "ToggleFeatureModule",
     "ToggleState",
 ]

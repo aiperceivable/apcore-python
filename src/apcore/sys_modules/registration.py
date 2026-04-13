@@ -15,10 +15,10 @@ from apcore.middleware.platform_notify import PlatformNotifyMiddleware
 from apcore.observability.error_history import ErrorHistory
 from apcore.observability.metrics import MetricsCollector
 from apcore.registry.registry import Registry
-from apcore.sys_modules.control import ReloadModuleModule, ToggleFeatureModule, UpdateConfigModule
-from apcore.sys_modules.health import HealthModuleModule, HealthSummaryModule
-from apcore.sys_modules.manifest import ManifestFullModule, ManifestModuleModule
-from apcore.sys_modules.usage import UsageModuleModule, UsageSummaryModule
+from apcore.sys_modules.control import ReloadModule, ToggleFeatureModule, UpdateConfigModule
+from apcore.sys_modules.health import HealthModule, HealthSummaryModule
+from apcore.sys_modules.manifest import ManifestFullModule, ManifestModule
+from apcore.sys_modules.usage import UsageModule, UsageSummaryModule
 from apcore.observability.usage import UsageCollector, UsageMiddleware
 
 logger = logging.getLogger(__name__)
@@ -236,7 +236,7 @@ def _register_sys_modules(
     usage_collector: UsageCollector,
 ) -> None:
     """Register all sys.* modules: health, manifest, and usage."""
-    # HealthSummaryModule and HealthModuleModule require a non-None
+    # HealthSummaryModule and HealthModule require a non-None
     # MetricsCollector. When the caller did not supply one, fall back to a
     # fresh empty collector so health modules degrade to "no recorded
     # metrics" rather than crashing at registration.
@@ -251,7 +251,7 @@ def _register_sys_modules(
     )
     _register_sys_module(registry, "system.health.summary", health_summary)
 
-    health_module = HealthModuleModule(
+    health_module = HealthModule(
         registry=registry,
         metrics_collector=effective_metrics,
         error_history=error_history,
@@ -259,7 +259,7 @@ def _register_sys_modules(
     _register_sys_module(registry, "system.health.module", health_module)
 
     # Manifest modules
-    manifest_module = ManifestModuleModule(
+    manifest_module = ManifestModule(
         registry=registry,
         config=config,
     )
@@ -275,7 +275,7 @@ def _register_sys_modules(
     usage_summary = UsageSummaryModule(collector=usage_collector)
     _register_sys_module(registry, "system.usage.summary", usage_summary)
 
-    usage_module = UsageModuleModule(
+    usage_module = UsageModule(
         registry=registry,
         usage_collector=usage_collector,
     )
@@ -323,7 +323,7 @@ def _register_control_modules(
     update_config = UpdateConfigModule(config=config, event_emitter=event_emitter)
     _register_sys_module(registry, "system.control.update_config", update_config)
 
-    reload_module = ReloadModuleModule(registry=registry, event_emitter=event_emitter)
+    reload_module = ReloadModule(registry=registry, event_emitter=event_emitter)
     _register_sys_module(registry, "system.control.reload_module", reload_module)
 
     toggle_feature = ToggleFeatureModule(registry=registry, event_emitter=event_emitter)

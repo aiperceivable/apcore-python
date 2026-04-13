@@ -11,7 +11,7 @@ from apcore.observability.error_history import ErrorHistory
 from apcore.observability.metrics import MetricsCollector, estimate_p99_latency_ms
 from apcore.registry.registry import Registry
 
-__all__ = ["HealthSummaryModule", "HealthModuleModule", "classify_health_status"]
+__all__ = ["HealthSummaryModule", "HealthModule", "HealthModuleModule", "classify_health_status"]
 
 # Default thresholds for status classification.
 _DEFAULT_HEALTHY_THRESHOLD = 0.01  # < 1% error rate
@@ -185,7 +185,7 @@ class HealthSummaryModule:
 # ------------------------------------------------------------------
 
 
-class HealthModuleModule:
+class HealthModule:
     """Detailed health information for a single module."""
 
     description = "Detailed health information for a single module"
@@ -292,3 +292,7 @@ class HealthModuleModule:
             }
             for e in entries
         ]
+
+
+#: Backward-compatible alias for :class:`HealthModule`.
+HealthModuleModule = HealthModule

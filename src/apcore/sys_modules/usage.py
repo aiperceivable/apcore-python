@@ -17,7 +17,7 @@ from apcore.observability.usage import (
 )
 from apcore.registry.registry import Registry
 
-__all__ = ["UsageModuleModule", "UsageSummaryModule"]
+__all__ = ["UsageModule", "UsageModuleModule", "UsageSummaryModule"]
 
 
 @dataclass
@@ -203,7 +203,7 @@ def _pad_hourly_distribution(
     return result
 
 
-class UsageModuleModule:
+class UsageModule:
     """Detailed usage statistics for a single module with per-caller breakdown."""
 
     description = "Detailed usage statistics for a single module"
@@ -288,3 +288,7 @@ class UsageModuleModule:
             "callers": callers,
             "hourly_distribution": [h.to_dict() for h in hourly],
         }
+
+
+#: Backward-compatible alias for :class:`UsageModule`.
+UsageModuleModule = UsageModule

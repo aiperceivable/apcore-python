@@ -10,7 +10,7 @@ from apcore.errors import InvalidInputError, ModuleNotFoundError
 from apcore.module import ModuleAnnotations
 from apcore.registry.registry import Registry
 
-__all__ = ["ManifestFullModule", "ManifestModuleModule"]
+__all__ = ["ManifestFullModule", "ManifestModule", "ManifestModuleModule"]
 
 
 def _compute_source_path(config: Config | None, module_id: str) -> str | None:
@@ -31,7 +31,7 @@ def _serialize_annotations(annotations: ModuleAnnotations | None) -> dict[str, A
     return asdict(annotations)
 
 
-class ManifestModuleModule:
+class ManifestModule:
     """Return the full manifest (metadata, schemas, annotations, source path) for a single registered module."""
 
     description = "Full manifest for a registered module including source path"
@@ -117,6 +117,10 @@ class ManifestModuleModule:
         """Retrieve extra metadata from registry metadata."""
         meta = self._registry.get_module_metadata(module_id)
         return meta.get("metadata", {})
+
+
+#: Backward-compatible alias for :class:`ManifestModule`.
+ManifestModuleModule = ManifestModule
 
 
 class ManifestFullModule:

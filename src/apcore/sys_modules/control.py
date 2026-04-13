@@ -23,8 +23,10 @@ from apcore.registry.registry import Registry
 
 __all__ = [
     "UpdateConfigModule",
-    "ReloadModuleModule",
+    "ReloadModule",
+    "ReloadModuleModule",  # backward-compat alias
     "ToggleFeatureModule",
+    "ToggleState",
 ]
 
 # ---------------------------------------------------------------------------
@@ -245,7 +247,7 @@ class UpdateConfigModule:
             )
 
 
-class ReloadModuleModule:
+class ReloadModule:
     """Hot-reload a module via safe unregister + re-discover (PRD F10).
 
     Safely unregisters a module with drain, re-discovers its source,
@@ -551,3 +553,11 @@ class ToggleFeatureModule:
             enabled,
             reason,
         )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat alias — removes doubled "Module" suffix
+# ---------------------------------------------------------------------------
+
+#: Backward-compatible alias for :class:`ReloadModule`.
+ReloadModuleModule = ReloadModule
