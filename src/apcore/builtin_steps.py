@@ -29,6 +29,7 @@ from apcore.errors import (
     ApprovalPendingError,
     ApprovalTimeoutError,
     InvalidInputError,
+    ModuleDisabledError,
     ModuleNotFoundError,
     ModuleTimeoutError,
     SchemaValidationError,
@@ -184,9 +185,20 @@ class BuiltinCallChainGuard(BaseStep):
 
 
 class BuiltinModuleLookup(BaseStep):
-    """Resolve module from registry by ID with optional version hint."""
+    """Resolve module from registry by ID with optional version hint.
 
-    def __init__(self, *, registry: Any) -> None:
+    After a successful registry lookup, checks the toggle state and raises
+    ``ModuleDisabledError`` if the module has been disabled via
+    ``ToggleFeatureModule`` / ``ToggleState.disable()``.  This mirrors the
+    MODULE_DISABLED (HTTP 403) behaviour in the TypeScript and Rust SDKs.
+    """
+
+    def __init__(
+        self,
+        *,
+        registry: Any,
+        toggle_state: Any | None = None,
+    ) -> None:
         super().__init__(
             name="module_lookup",
             description="Look up module in registry",
@@ -196,6 +208,14 @@ class BuiltinModuleLookup(BaseStep):
             provides=("module",),
         )
         self._registry = registry
+        # Use the injected toggle_state when provided (e.g. for testing);
+        # fall back to the package-level default singleton.
+        if toggle_state is not None:
+            self._toggle_state = toggle_state
+        else:
+            from apcore.sys_modules.control import _default_toggle_state
+
+            self._toggle_state = _default_toggle_state
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         version_hint = getattr(ctx, "version_hint", None)
@@ -205,6 +225,13 @@ class BuiltinModuleLookup(BaseStep):
             module = self._registry.get(ctx.module_id)
         if module is None:
             raise ModuleNotFoundError(module_id=ctx.module_id)
+
+        # Spec §"Toggle" — disabled modules must not be executed.
+        # Check AFTER registry lookup so we still return ModuleNotFoundError
+        # for unregistered IDs (not ModuleDisabledError).
+        if self._toggle_state.is_disabled(ctx.module_id):
+            raise ModuleDisabledError(module_id=ctx.module_id)
+
         ctx.module = module
         return StepResult(action="continue")
 
