@@ -390,14 +390,6 @@ class TestPublicAPIAll:
         "ModuleDescriptor",
         "DiscoveredModule",
         "DependencyInfo",
-        # Registry constants
-        "REGISTRY_EVENTS",
-        "MODULE_ID_PATTERN",
-        "MAX_MODULE_ID_LENGTH",
-        "RESERVED_WORDS",
-        # Registry protocols
-        "Discoverer",
-        "ModuleValidator",
         # Config
         "Config",
         "discover_config_file",
@@ -450,8 +442,6 @@ class TestPublicAPIAll:
         # Decorators
         "module",
         "FunctionModule",
-        # Docstring parsing
-        "parse_docstring",
         # Extensions
         "ExtensionManager",
         "ExtensionPoint",
@@ -584,14 +574,26 @@ class TestPublicAPIAll:
         "RETRY_COUNT_BASE",
         # System module classes
         "HealthSummaryModule",
-        "HealthModuleModule",
+        "HealthModule",
+        "HealthModuleModule",  # backward-compat alias
         "ManifestFullModule",
-        "ManifestModuleModule",
+        "ManifestModule",
+        "ManifestModuleModule",  # backward-compat alias
         "UsageSummaryModule",
-        "UsageModuleModule",
+        "UsageModule",
+        "UsageModuleModule",  # backward-compat alias
         "UpdateConfigModule",
-        "ReloadModuleModule",
+        "ReloadModule",
+        "ReloadModuleModule",  # backward-compat alias
         "ToggleFeatureModule",
+        "ToggleState",
+        # System Modules context type
+        "SysModulesContext",
+        # System module registration
+        "register_sys_modules",
+        "register_subscriber_type",
+        "unregister_subscriber_type",
+        "reset_subscriber_registry",
         # Module-level constants (parity with apcore-typescript / apcore-rust)
         "DEFAULT_MAX_CALL_DEPTH",
         "DEFAULT_MAX_MODULE_REPEAT",

@@ -475,14 +475,10 @@ __all__ = [
     # Error Formatter
     "ErrorFormatter",
     "ErrorFormatterRegistry",
-    # Registry constants
-    "REGISTRY_EVENTS",
-    "MODULE_ID_PATTERN",
-    "MAX_MODULE_ID_LENGTH",
-    "RESERVED_WORDS",
-    # Registry protocols
-    "Discoverer",
-    "ModuleValidator",
+    # Registry types (module-path imports: from apcore.registry import Discoverer, etc.)
+    # NOTE: REGISTRY_EVENTS, MODULE_ID_PATTERN, MAX_MODULE_ID_LENGTH, RESERVED_WORDS,
+    #       Discoverer, and ModuleValidator are intentionally NOT in __all__ — they are
+    #       implementation details importable via apcore.registry, not the public API surface.
     # Errors
     "ErrorCodes",
     "ModuleError",
@@ -546,8 +542,8 @@ __all__ = [
     # Decorators
     "module",
     "FunctionModule",
-    # Docstring parsing
-    "parse_docstring",
+    # NOTE: parse_docstring is intentionally NOT in __all__ — it is an
+    #       implementation detail importable via apcore._docstrings.
     # Extensions
     "ExtensionManager",
     "ExtensionPoint",
