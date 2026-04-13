@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 
-from apcore.executor import redact_sensitive
+from apcore.utils.redaction import redact_sensitive
 
 
 class TestRedactSensitiveBasic:

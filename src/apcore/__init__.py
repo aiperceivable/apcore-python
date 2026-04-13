@@ -38,7 +38,8 @@ from apcore.registry.registry import (
     ModuleValidator,
 )
 from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescriptor
-from apcore.executor import Executor, redact_sensitive, REDACTED_VALUE
+from apcore.executor import Executor
+from apcore.utils.redaction import REDACTED_VALUE, redact_sensitive
 
 # Module types
 from apcore.module import (

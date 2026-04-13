@@ -44,7 +44,9 @@ from apcore.registry import MODULE_ID_PATTERN, Registry
 
 from apcore.utils.redaction import REDACTED_VALUE, redact_sensitive
 
-__all__ = ["redact_sensitive", "REDACTED_VALUE", "Executor"]
+__all__ = ["Executor"]
+# NOTE: redact_sensitive and REDACTED_VALUE are kept importable from this module
+# for backward compatibility but their canonical path is apcore.utils.redaction.
 
 _logger = logging.getLogger(__name__)
 
