@@ -38,7 +38,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 | Class | Description |
 |-------|-------------|
 | `APCore` | High-level client -- register modules, call, stream, validate |
-| `Registry` | Module storage -- discover, register, get, list, watch |
+| `Registry` | Module storage -- discover, register, get, list |
 | `Executor` | Execution engine -- call with middleware pipeline, ACL, approval |
 | `Context` | Request context -- trace ID, identity, call chain, cancel token |
 | `Config` | Configuration -- load from YAML, get/set values, namespace-partitioned Config Bus |
