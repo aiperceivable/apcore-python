@@ -62,7 +62,7 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
     "aiohttp>=3.9",
-    "apdev[dev]>=0.2.3",
+    "apdev[dev]>=0.1.6",
 ]
 
 [tool.setuptools.packages.find]
