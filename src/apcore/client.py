@@ -1,4 +1,17 @@
-"""High-level client for apcore to simplify interaction."""
+"""High-level client for apcore to simplify interaction.
+
+Cross-language note — sync vs async divergence
+-----------------------------------------------
+The TypeScript and Rust SDKs expose ``call()``, ``validate()``, ``disable()``,
+and ``enable()`` as *async* functions (``Promise``/``Future``).  The Python SDK
+keeps these methods *synchronous* for ergonomics: internally they run the async
+pipeline on a cached event loop (or a background thread when a loop is already
+running — the "sync-in-thread" model).
+
+When porting code from TypeScript/Rust to Python, remove ``await`` from these
+calls.  When writing Python code that must itself be async, prefer the
+``call_async()`` / ``stream()`` counterparts which are true coroutines.
+"""
 
 from __future__ import annotations
 
@@ -131,6 +144,11 @@ class APCore:
 
         Returns:
             The module output.
+
+        Cross-language note:
+            TypeScript and Rust expose this as an async method (``await client.call(...)``).
+            Python keeps it synchronous using the sync-in-thread model; do not ``await`` it.
+            Use ``call_async()`` instead when calling from an async context.
         """
         return self.executor.call(module_id, inputs, context, version_hint=version_hint)
 
@@ -190,6 +208,10 @@ class APCore:
 
         Returns:
             PreflightResult with per-check status.
+
+        Cross-language note:
+            TypeScript and Rust expose this as an async method.
+            Python keeps it synchronous; do not ``await`` it.
         """
         return self.executor.validate(module_id, inputs, context)
 
@@ -324,6 +346,10 @@ class APCore:
 
         Raises:
             RuntimeError: If sys_modules are not enabled in config.
+
+        Cross-language note:
+            TypeScript and Rust expose this as an async method.
+            Python keeps it synchronous; do not ``await`` it.
         """
         self._require_sys_modules("disable")
         return self.call(
@@ -345,6 +371,10 @@ class APCore:
 
         Raises:
             RuntimeError: If sys_modules are not enabled in config.
+
+        Cross-language note:
+            TypeScript and Rust expose this as an async method.
+            Python keeps it synchronous; do not ``await`` it.
         """
         self._require_sys_modules("enable")
         return self.call(
