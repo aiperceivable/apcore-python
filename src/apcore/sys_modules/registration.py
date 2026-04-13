@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict
 
 from apcore.config import Config
 from apcore.events.emitter import ApCoreEvent, EventEmitter, EventSubscriber
@@ -28,7 +28,24 @@ __all__ = [
     "register_subscriber_type",
     "unregister_subscriber_type",
     "reset_subscriber_registry",
+    "SysModulesContext",
 ]
+
+
+class SysModulesContext(TypedDict, total=False):
+    """Type of the dict returned by :func:`register_sys_modules`.
+
+    Exported at the package root (``from apcore import SysModulesContext``) for
+    cross-language parity with the TypeScript and Rust SDKs.
+
+    All keys are optional because they are only present when the corresponding
+    feature is enabled in the ``sys_modules`` config section.
+    """
+
+    error_history: Any
+    event_emitter: Any
+    metrics_collector: Any
+    usage_collector: Any
 
 
 # ---------------------------------------------------------------------------

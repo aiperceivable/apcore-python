@@ -237,6 +237,7 @@ from apcore.trace_context import TraceContext, TraceParent
 
 # System Modules
 from apcore.sys_modules.registration import (
+    SysModulesContext,
     register_subscriber_type,
     register_sys_modules,
     reset_subscriber_registry,
@@ -258,6 +259,7 @@ from apcore.sys_modules.usage import (
 from apcore.sys_modules.control import (
     ReloadModuleModule,
     ToggleFeatureModule,
+    ToggleState,
     UpdateConfigModule,
 )
 
@@ -643,6 +645,7 @@ __all__ = [
     "register_subscriber_type",
     "unregister_subscriber_type",
     "reset_subscriber_registry",
+    "SysModulesContext",
     # System Module Implementations
     "HealthSummaryModule",
     "HealthModuleModule",
@@ -654,4 +657,5 @@ __all__ = [
     "UpdateConfigModule",
     "ReloadModuleModule",
     "ToggleFeatureModule",
+    "ToggleState",
 ]
