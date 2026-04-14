@@ -344,6 +344,20 @@ class TestPublicAPIImports:
         ):
             assert name in apcore.__all__, f"{name} missing from apcore.__all__"
 
+    # -- ID conflict detection (D1-004) --
+    # Regression: detect_id_conflicts, ConflictResult were defined in
+    # apcore.registry.conflicts but not re-exported from the package root.
+
+    def test_detect_id_conflicts_importable_from_package_root(self):
+        from apcore import ConflictResult, detect_id_conflicts
+
+        assert callable(detect_id_conflicts)
+        assert ConflictResult is not None
+
+    def test_detect_id_conflicts_in_all(self):
+        assert "detect_id_conflicts" in apcore.__all__, "detect_id_conflicts missing from apcore.__all__"
+        assert "ConflictResult" in apcore.__all__, "ConflictResult missing from apcore.__all__"
+
 
 class TestPublicAPIAll:
     """Verify __all__ is comprehensive and matches actual exports."""
@@ -390,6 +404,9 @@ class TestPublicAPIAll:
         "ModuleDescriptor",
         "DiscoveredModule",
         "DependencyInfo",
+        # ID conflict detection
+        "ConflictResult",
+        "detect_id_conflicts",
         # Registry protocols
         "Discoverer",
         "ModuleValidator",

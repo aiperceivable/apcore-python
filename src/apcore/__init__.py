@@ -28,6 +28,7 @@ from apcore.context_keys import (
     TRACING_SPANS,
 )
 from apcore.registry import Registry
+from apcore.registry.conflicts import ConflictResult, detect_id_conflicts
 from apcore.registry.registry import Discoverer, ModuleValidator
 from apcore.client import APCore
 from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescriptor
@@ -463,6 +464,9 @@ __all__ = [
     "ModuleDescriptor",
     "DiscoveredModule",
     "DependencyInfo",
+    # ID conflict detection
+    "ConflictResult",
+    "detect_id_conflicts",
     # Config
     "Config",
     "discover_config_file",
