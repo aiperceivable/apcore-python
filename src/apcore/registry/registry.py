@@ -949,6 +949,25 @@ class Registry:
                     if event:
                         event.set()
 
+    def release(self, module_id: str) -> None:
+        """Decrement the reference count for a module.
+
+        Standalone counterpart to the ``acquire()`` context manager for
+        cases where the caller cannot use a ``with`` block (e.g. async
+        streams that span multiple await points).
+
+        If the ref count reaches zero and the module is draining, the
+        drain event is signalled.
+        """
+        with self._lock:
+            count = self._ref_counts.get(module_id, 1) - 1
+            self._ref_counts[module_id] = count
+            if count <= 0:
+                self._ref_counts.pop(module_id, None)
+                event = self._drain_events.get(module_id)
+                if event:
+                    event.set()
+
     def is_draining(self, module_id: str) -> bool:
         """Check whether a module is marked for unload (draining).
 
