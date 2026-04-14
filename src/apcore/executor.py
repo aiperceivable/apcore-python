@@ -42,7 +42,6 @@ from apcore.pipeline import (
 )
 from apcore.registry import MODULE_ID_PATTERN, Registry
 
-from apcore.utils.redaction import REDACTED_VALUE, redact_sensitive
 
 __all__ = ["Executor"]
 # NOTE: redact_sensitive and REDACTED_VALUE are kept importable from this module

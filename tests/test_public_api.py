@@ -390,6 +390,9 @@ class TestPublicAPIAll:
         "ModuleDescriptor",
         "DiscoveredModule",
         "DependencyInfo",
+        # Registry protocols
+        "Discoverer",
+        "ModuleValidator",
         # Config
         "Config",
         "discover_config_file",

@@ -28,15 +28,8 @@ from apcore.context_keys import (
     TRACING_SPANS,
 )
 from apcore.registry import Registry
+from apcore.registry.registry import Discoverer, ModuleValidator
 from apcore.client import APCore
-from apcore.registry.registry import (
-    MAX_MODULE_ID_LENGTH,
-    MODULE_ID_PATTERN,
-    REGISTRY_EVENTS,
-    RESERVED_WORDS,
-    Discoverer,
-    ModuleValidator,
-)
 from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescriptor
 from apcore.executor import Executor
 from apcore.utils.redaction import REDACTED_VALUE, redact_sensitive
@@ -476,10 +469,9 @@ __all__ = [
     # Error Formatter
     "ErrorFormatter",
     "ErrorFormatterRegistry",
-    # Registry types (module-path imports: from apcore.registry import Discoverer, etc.)
-    # NOTE: REGISTRY_EVENTS, MODULE_ID_PATTERN, MAX_MODULE_ID_LENGTH, RESERVED_WORDS,
-    #       Discoverer, and ModuleValidator are intentionally NOT in __all__ — they are
-    #       implementation details importable via apcore.registry, not the public API surface.
+    # Registry protocols
+    "Discoverer",
+    "ModuleValidator",
     # Errors
     "ErrorCodes",
     "ModuleError",
