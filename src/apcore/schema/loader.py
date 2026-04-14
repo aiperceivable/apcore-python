@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 import yaml
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.functional_validators import AfterValidator
 from pydantic_core import PydanticUndefined
 
@@ -120,6 +120,10 @@ class SchemaLoader:
         properties = json_schema.get("properties", {})
         required = set(json_schema.get("required", []))
 
+        # Respect additionalProperties: false → Pydantic extra="forbid"
+        additional = json_schema.get("additionalProperties", True)
+        config = ConfigDict(extra="forbid") if additional is False else ConfigDict()
+
         field_definitions: dict[str, Any] = {}
         for prop_name, prop_schema in properties.items():
             python_type, field_info = self._schema_to_field_info(prop_schema, prop_name, model_name)
@@ -135,7 +139,7 @@ class SchemaLoader:
 
             field_definitions[prop_name] = (python_type, field_info)
 
-        return create_model(model_name, **field_definitions)  # type: ignore[call-overload]
+        return create_model(model_name, __config__=config, **field_definitions)  # type: ignore[call-overload]
 
     def _schema_to_field_info(self, prop_schema: dict[str, Any], prop_name: str, parent_name: str) -> tuple[Any, Any]:
         """Convert a JSON Schema property to (python_type, FieldInfo)."""

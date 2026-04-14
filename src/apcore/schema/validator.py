@@ -48,8 +48,18 @@ class SchemaValidator:
     def __init__(self, coerce_types: bool = True) -> None:
         self._coerce_types = coerce_types
 
-    def validate(self, data: dict[str, Any], model: type[BaseModel]) -> SchemaValidationResult:
-        """Validate data against a Pydantic model, returning a result object."""
+    def validate(self, data: Any, model: type[BaseModel]) -> SchemaValidationResult:
+        """Validate data against a Pydantic model, returning a result object.
+
+        For models generated from an empty JSON Schema (``{}``), any input
+        value is accepted per Draft 2020-12 (the always-true schema).
+        """
+        # Empty schema (always-true) — accept any value, including non-dict.
+        if not model.model_fields:
+            extra_cfg = model.model_config.get("extra", "ignore")
+            if extra_cfg != "forbid":
+                return SchemaValidationResult(valid=True, errors=[])
+
         try:
             model.model_validate(data, strict=not self._coerce_types)
             return SchemaValidationResult(valid=True, errors=[])

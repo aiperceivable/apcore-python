@@ -524,14 +524,7 @@ def test_context_identity_types_serialize(sub: dict[str, Any]) -> None:
 _schema_val_data = _load("schema_validation")
 
 # Cases that require features the Python SDK doesn't yet implement
-_SCHEMA_XFAIL_IDS = {
-    # Pydantic-based models always expect dict input; empty schema {} still
-    # generates a BaseModel which rejects raw strings.
-    "empty_schema_accepts_string",
-    # generate_model doesn't set Pydantic extra="forbid" for
-    # additionalProperties: false
-    "additional_properties_rejected_when_false",
-}
+_SCHEMA_XFAIL_IDS: set[str] = set()
 
 
 @pytest.fixture(scope="module")
@@ -561,11 +554,9 @@ def test_schema_validation(
     schema = case["schema"]
     input_data = case["input"]
 
-    # Empty schema with no properties — Pydantic model accepts any dict
+    # Empty schema with no properties — validator accepts any value (Draft 2020-12)
     if not schema.get("properties"):
         model = loader.generate_model(schema, f"Model_{case['id']}")
-        if not isinstance(input_data, dict):
-            pytest.xfail("Pydantic models only accept dict input")
         result = validator.validate(input_data, model)
         assert result.valid == case.get("expected_valid", True)
         return
