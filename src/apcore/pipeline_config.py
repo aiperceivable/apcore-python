@@ -44,11 +44,6 @@ def registered_step_types() -> list[str]:
     return list(_step_type_registry.keys())
 
 
-def _reset_registry() -> None:
-    """Clear registry (for testing only)."""
-    _step_type_registry.clear()
-
-
 def _resolve_step(step_def: dict[str, Any]) -> BaseStep:
     """Resolve a step definition dict into a BaseStep instance.
 
