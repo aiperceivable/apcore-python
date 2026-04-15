@@ -406,6 +406,8 @@ class TestPublicAPIAll:
         "DependencyInfo",
         # ID conflict detection
         "ConflictResult",
+        "ConflictSeverity",
+        "ConflictType",
         "detect_id_conflicts",
         # Registry protocols
         "Discoverer",
@@ -532,6 +534,7 @@ class TestPublicAPIAll:
         "PlatformNotifyMiddleware",
         # System Modules
         "register_sys_modules",
+        # deprecated in next major — use EventEmitter directly
         "register_subscriber_type",
         "unregister_subscriber_type",
         "reset_subscriber_registry",
@@ -564,16 +567,6 @@ class TestPublicAPIAll:
         "build_minimal_strategy",
         # Builtin Pipeline Steps (parity with apcore-typescript / apcore-rust)
         "BuiltinContextCreation",
-        "BuiltinCallChainGuard",
-        "BuiltinModuleLookup",
-        "BuiltinACLCheck",
-        "BuiltinApprovalGate",
-        "BuiltinInputValidation",
-        "BuiltinMiddlewareBefore",
-        "BuiltinExecute",
-        "BuiltinOutputValidation",
-        "BuiltinMiddlewareAfter",
-        "BuiltinReturnResult",
         # Config Bus (0.15.0)
         "ConfigBindError",
         "ConfigEnvMapConflictError",
@@ -595,25 +588,18 @@ class TestPublicAPIAll:
         # System module classes
         "HealthSummaryModule",
         "HealthModule",
-        "HealthModuleModule",  # backward-compat alias
         "ManifestFullModule",
         "ManifestModule",
-        "ManifestModuleModule",  # backward-compat alias
         "UsageSummaryModule",
         "UsageModule",
-        "UsageModuleModule",  # backward-compat alias
         "UpdateConfigModule",
         "ReloadModule",
-        "ReloadModuleModule",  # backward-compat alias
         "ToggleFeatureModule",
         "ToggleState",
         # System Modules context type
         "SysModulesContext",
         # System module registration
         "register_sys_modules",
-        "register_subscriber_type",
-        "unregister_subscriber_type",
-        "reset_subscriber_registry",
         # Module-level constants (parity with apcore-typescript / apcore-rust)
         "DEFAULT_MAX_CALL_DEPTH",
         "DEFAULT_MAX_MODULE_REPEAT",

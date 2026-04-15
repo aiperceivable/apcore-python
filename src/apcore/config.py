@@ -473,12 +473,8 @@ def _validate_namespace_schema(
     ns_data: dict[str, Any],
     schema: dict[str, Any] | str,
 ) -> None:
-    """Validate ns_data against schema if jsonschema is available (silently skip otherwise)."""
-    try:
-        import jsonschema  # type: ignore[import-untyped]
-    except ImportError:
-        _logger.debug("jsonschema not available; skipping schema validation for namespace %r", namespace)
-        return
+    """Validate ns_data against schema."""
+    import jsonschema  # type: ignore[import-untyped]
 
     if isinstance(schema, str):
         schema_path = Path(schema)

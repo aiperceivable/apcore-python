@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
-__all__ = ["detect_id_conflicts", "ConflictResult"]
+__all__ = ["detect_id_conflicts", "ConflictResult", "ConflictSeverity", "ConflictType"]
+
+
+class ConflictSeverity(StrEnum):
+    """Severity level for a detected module ID conflict."""
+
+    ERROR = "error"
+    WARNING = "warning"
+
+
+class ConflictType(StrEnum):
+    """Category of a detected module ID conflict."""
+
+    DUPLICATE_ID = "duplicate_id"
+    RESERVED_WORD = "reserved_word"
+    CASE_COLLISION = "case_collision"
 
 
 @dataclass(frozen=True)
 class ConflictResult:
-    """Result of an ID conflict check."""
+    """Result of an ID conflict check.
 
-    type: str  # "duplicate_id", "reserved_word", "case_collision"
-    severity: str  # "error" or "warning"
+    Use :class:`ConflictType` and :class:`ConflictSeverity` members to compare
+    ``type`` and ``severity`` values (e.g. ``result.severity == ConflictSeverity.ERROR``).
+    """
+
+    type: str  # one of the ConflictType values
+    severity: str  # one of the ConflictSeverity values
     message: str
 
 
@@ -42,8 +62,8 @@ def detect_id_conflicts(
     # Step 1: Exact duplicate
     if new_id in existing_ids:
         return ConflictResult(
-            type="duplicate_id",
-            severity="error",
+            type=ConflictType.DUPLICATE_ID,
+            severity=ConflictSeverity.ERROR,
             message=f"Module ID '{new_id}' is already registered",
         )
 
@@ -51,8 +71,8 @@ def detect_id_conflicts(
     for segment in new_id.split("."):
         if segment in reserved_words:
             return ConflictResult(
-                type="reserved_word",
-                severity="error",
+                type=ConflictType.RESERVED_WORD,
+                severity=ConflictSeverity.ERROR,
                 message=f"Module ID '{new_id}' contains reserved word '{segment}'",
             )
 
@@ -62,16 +82,16 @@ def detect_id_conflicts(
         if normalized_new in lowercase_map and lowercase_map[normalized_new] != new_id:
             existing = lowercase_map[normalized_new]
             return ConflictResult(
-                type="case_collision",
-                severity="warning",
+                type=ConflictType.CASE_COLLISION,
+                severity=ConflictSeverity.WARNING,
                 message=f"Module ID '{new_id}' has a case collision with existing '{existing}'",
             )
     else:
         for existing_id in existing_ids:
             if existing_id.lower() == normalized_new and existing_id != new_id:
                 return ConflictResult(
-                    type="case_collision",
-                    severity="warning",
+                    type=ConflictType.CASE_COLLISION,
+                    severity=ConflictSeverity.WARNING,
                     message=f"Module ID '{new_id}' has a case collision with existing '{existing_id}'",
                 )
 

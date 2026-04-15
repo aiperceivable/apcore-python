@@ -42,6 +42,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
+    "jsonschema>=4.21",
 ]
 
 [project.urls]
@@ -61,7 +62,6 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.15.0",
     "mypy>=1.0",
-    "aiohttp>=3.9",
     "apdev[dev]>=0.1.6",
 ]
 

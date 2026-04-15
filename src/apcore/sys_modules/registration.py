@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from datetime import datetime, timezone
 from typing import Any, Callable, TypedDict
 
@@ -96,6 +97,11 @@ def register_subscriber_type(
         factory: Callable that receives the subscriber config dict and returns
                  an EventSubscriber instance.
     """
+    warnings.warn(
+        "register_subscriber_type is deprecated and will be removed in the next major release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _subscriber_factories[type_name] = factory
 
 
@@ -110,6 +116,11 @@ def unregister_subscriber_type(type_name: str) -> None:
     Raises:
         KeyError: If the type_name is not registered.
     """
+    warnings.warn(
+        "unregister_subscriber_type is deprecated and will be removed in the next major release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     del _subscriber_factories[type_name]
 
 
@@ -119,6 +130,11 @@ def reset_subscriber_registry() -> None:
     Useful in tests to ensure isolation between test cases that
     register custom subscriber types.
     """
+    warnings.warn(
+        "reset_subscriber_registry is deprecated and will be removed in the next major release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _subscriber_factories.clear()
     _subscriber_factories["webhook"] = _default_webhook_factory
     _subscriber_factories["a2a"] = _default_a2a_factory

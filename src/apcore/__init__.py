@@ -28,7 +28,12 @@ from apcore.context_keys import (
     TRACING_SPANS,
 )
 from apcore.registry import Registry
-from apcore.registry.conflicts import ConflictResult as ConflictResult, detect_id_conflicts as detect_id_conflicts
+from apcore.registry.conflicts import (
+    ConflictResult as ConflictResult,
+    ConflictSeverity as ConflictSeverity,
+    ConflictType as ConflictType,
+    detect_id_conflicts as detect_id_conflicts,
+)
 from apcore.registry.registry import Discoverer, ModuleValidator
 from apcore.client import APCore
 from apcore.registry.types import DependencyInfo, DiscoveredModule, ModuleDescriptor
@@ -209,17 +214,7 @@ from apcore.pipeline_config import (
 
 # Pipeline Preset Builders (parity with apcore-typescript and apcore-rust)
 from apcore.builtin_steps import (
-    BuiltinACLCheck,
-    BuiltinApprovalGate,
-    BuiltinCallChainGuard,
     BuiltinContextCreation,
-    BuiltinExecute,
-    BuiltinInputValidation,
-    BuiltinMiddlewareAfter,
-    BuiltinMiddlewareBefore,
-    BuiltinModuleLookup,
-    BuiltinOutputValidation,
-    BuiltinReturnResult,
     build_internal_strategy,
     build_minimal_strategy,
     build_performance_strategy,
@@ -233,30 +228,26 @@ from apcore.trace_context import TraceContext, TraceParent
 # System Modules
 from apcore.sys_modules.registration import (
     SysModulesContext,
-    register_subscriber_type,
     register_sys_modules,
-    reset_subscriber_registry,
+    register_subscriber_type,
     unregister_subscriber_type,
+    reset_subscriber_registry,
 )
 from apcore.sys_modules.health import (
     HealthModule,
-    HealthModuleModule,  # backward-compat alias
     HealthSummaryModule,
     classify_health_status,
 )
 from apcore.sys_modules.manifest import (
     ManifestFullModule,
     ManifestModule,
-    ManifestModuleModule,  # backward-compat alias
 )
 from apcore.sys_modules.usage import (
     UsageModule,
-    UsageModuleModule,  # backward-compat alias
     UsageSummaryModule,
 )
 from apcore.sys_modules.control import (
     ReloadModule,
-    ReloadModuleModule,  # backward-compat alias
     ToggleFeatureModule,
     ToggleState,
     UpdateConfigModule,
@@ -304,7 +295,12 @@ def module(
     examples: list[Any] | None = None,
     registry: Any = None,
 ) -> Any:
-    """Global decorator that uses the default client (if no registry is provided)."""
+    """Register a module on the default APCore instance.
+
+    This wrapper accepts an extra ``registry`` keyword argument not present on
+    APCore.module() — it is an intentional escape hatch that lets global-decorator
+    usage target a specific Registry instance rather than the default one.
+    """
     if registry is not None:
         from apcore.decorator import module as original_module
 
@@ -466,6 +462,8 @@ __all__ = [
     "DependencyInfo",
     # ID conflict detection
     "ConflictResult",
+    "ConflictSeverity",
+    "ConflictType",
     "detect_id_conflicts",
     # Config
     "Config",
@@ -627,36 +625,23 @@ __all__ = [
     "build_minimal_strategy",
     # Builtin Pipeline Steps (parity with apcore-typescript / apcore-rust)
     "BuiltinContextCreation",
-    "BuiltinCallChainGuard",
-    "BuiltinModuleLookup",
-    "BuiltinACLCheck",
-    "BuiltinApprovalGate",
-    "BuiltinInputValidation",
-    "BuiltinMiddlewareBefore",
-    "BuiltinExecute",
-    "BuiltinOutputValidation",
-    "BuiltinMiddlewareAfter",
-    "BuiltinReturnResult",
     # System Modules
     "register_sys_modules",
+    "SysModulesContext",
+    # deprecated in next major — use EventEmitter directly
     "register_subscriber_type",
     "unregister_subscriber_type",
     "reset_subscriber_registry",
-    "SysModulesContext",
     # System Module Implementations
     "HealthSummaryModule",
     "HealthModule",
-    "HealthModuleModule",  # backward-compat alias
     "classify_health_status",
     "ManifestFullModule",
     "ManifestModule",
-    "ManifestModuleModule",  # backward-compat alias
     "UsageSummaryModule",
     "UsageModule",
-    "UsageModuleModule",  # backward-compat alias
     "UpdateConfigModule",
     "ReloadModule",
-    "ReloadModuleModule",  # backward-compat alias
     "ToggleFeatureModule",
     "ToggleState",
 ]
