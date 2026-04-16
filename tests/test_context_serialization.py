@@ -65,7 +65,7 @@ class TestContextSerialize:
         result = ctx.serialize()
         assert "cancel_token" not in result
 
-    def test_serialize_excludes_global_deadline(self) -> None:
+    def test_serialize_excludesglobal_deadline(self) -> None:
         """AC-004: global_deadline is not in serialized output."""
         ctx = self._make_ctx()
         result = ctx.serialize()
@@ -129,12 +129,12 @@ class TestContextDeserialize:
         restored = Context.deserialize(serialized)
         assert restored.cancel_token is None
 
-    def test_deserialize_global_deadline_is_none(self) -> None:
+    def test_deserializeglobal_deadline_is_none(self) -> None:
         """After deserialization, global_deadline is None."""
         ctx = Context.create(executor=None)
         serialized = ctx.serialize()
         restored = Context.deserialize(serialized)
-        assert restored._global_deadline is None
+        assert restored.global_deadline is None
 
     def test_deserialize_future_version_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """Deserializing _context_version > 1 logs warning but succeeds."""

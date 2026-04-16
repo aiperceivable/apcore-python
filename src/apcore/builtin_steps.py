@@ -132,7 +132,7 @@ class BuiltinContextCreation(BaseStep):
             new_ctx = Context.create(executor=self._executor)
             new_ctx = new_ctx.child(ctx.module_id)
             if self._global_timeout > 0:
-                new_ctx._global_deadline = time.monotonic() + self._global_timeout / 1000.0
+                new_ctx.global_deadline = time.monotonic() + self._global_timeout / 1000.0
             ctx.context = new_ctx
         else:
             # Derive child context to add module_id to call chain
@@ -560,7 +560,7 @@ class BuiltinExecute(BaseStep):
             raise ExecutionCancelledError()
 
         # Check global deadline
-        global_deadline = getattr(ctx.context, "_global_deadline", None)
+        global_deadline = getattr(ctx.context, "global_deadline", None)
         if global_deadline is not None and time.monotonic() > global_deadline:
             timeout_ms = int(self._default_timeout)
             raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms)

@@ -42,7 +42,7 @@ class Context(Generic[T]):
     data: dict[str, Any] = field(default_factory=dict)
     services: T = None  # type: ignore[assignment]
     cancel_token: CancelToken | None = None
-    _global_deadline: float | None = field(default=None, repr=False)
+    global_deadline: float | None = field(default=None, repr=False)
 
     @classmethod
     def create(
@@ -82,7 +82,7 @@ class Context(Generic[T]):
 
         Includes ``_context_version: 1`` at top level for forward
         compatibility. Excludes non-serializable / transient fields
-        (``executor``, ``services``, ``cancel_token``, ``_global_deadline``)
+        (``executor``, ``services``, ``cancel_token``, ``global_deadline``)
         and filters ``_``-prefixed keys from ``data``.
         """
         result: dict[str, Any] = {
@@ -110,7 +110,7 @@ class Context(Generic[T]):
         """Reconstruct a Context from its :meth:`serialize` output.
 
         Non-serializable fields (``executor``, ``services``, ``cancel_token``,
-        ``_global_deadline``) are set to ``None``; callers that need them
+        ``global_deadline``) are set to ``None``; callers that need them
         should re-inject after deserialization. A ``_context_version`` greater
         than 1 logs a warning and best-effort proceeds (forward compatibility).
         """
@@ -167,7 +167,7 @@ class Context(Generic[T]):
             data=self.data,
             services=self.services,
             cancel_token=self.cancel_token,
-            _global_deadline=self._global_deadline,
+            global_deadline=self.global_deadline,
         )
 
 

@@ -78,7 +78,7 @@ def _make_executor(
 
 
 class TestGlobalDeadlineSetOnRootCall:
-    def test_global_deadline_set_on_root_call(self) -> None:
+    def testglobal_deadline_set_on_root_call(self) -> None:
         captured_ctx: list[Context] = []
 
         class CapturingModule:
@@ -95,23 +95,23 @@ class TestGlobalDeadlineSetOnRootCall:
 
         assert len(captured_ctx) == 1
         ctx = captured_ctx[0]
-        assert ctx._global_deadline is not None
-        remaining = ctx._global_deadline - time.monotonic()
+        assert ctx.global_deadline is not None
+        remaining = ctx.global_deadline - time.monotonic()
         assert 0 < remaining <= 5.0
 
 
 class TestGlobalDeadlineInheritedByChild:
-    def test_child_inherits_global_deadline(self) -> None:
+    def test_child_inheritsglobal_deadline(self) -> None:
         parent = Context.create()
-        parent._global_deadline = 12345.678
+        parent.global_deadline = 12345.678
 
         child = parent.child("child.module")
 
-        assert child._global_deadline == parent._global_deadline
+        assert child.global_deadline == parent.global_deadline
 
 
 class TestGlobalDeadlineNotSetWhenDisabled:
-    def test_global_deadline_none_when_timeout_zero(self) -> None:
+    def testglobal_deadline_none_when_timeout_zero(self) -> None:
         captured_ctx: list[Context] = []
 
         class CapturingModule:
@@ -127,7 +127,7 @@ class TestGlobalDeadlineNotSetWhenDisabled:
         executor.call("cap.mod", {})
 
         assert len(captured_ctx) == 1
-        assert captured_ctx[0]._global_deadline is None
+        assert captured_ctx[0].global_deadline is None
 
 
 class TestGlobalTimeoutTriggersBeforeDefault:
@@ -170,22 +170,22 @@ class TestGlobalTimeoutAcrossChain:
 
 
 class TestContextSerializationExcludesDeadline:
-    def test_serialize_excludes_global_deadline(self) -> None:
+    def test_serialize_excludesglobal_deadline(self) -> None:
         ctx = Context(trace_id="t1", data={"key": "val"})
-        ctx._global_deadline = 99999.0
+        ctx.global_deadline = 99999.0
 
         serialized = ctx.serialize()
 
-        assert "_global_deadline" not in serialized
+        assert "global_deadline" not in serialized
 
     def test_deserialize_does_not_restore_deadline(self) -> None:
         ctx = Context(trace_id="t1")
-        ctx._global_deadline = 99999.0
+        ctx.global_deadline = 99999.0
 
         serialized = ctx.serialize()
         restored = Context.deserialize(serialized)
 
-        assert restored._global_deadline is None
+        assert restored.global_deadline is None
 
 
 class TestGlobalTimeoutAsync:

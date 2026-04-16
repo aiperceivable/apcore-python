@@ -82,7 +82,7 @@ class FakeContext:
     def __init__(self, caller_id: str = "user-1") -> None:
         self.caller_id = caller_id
         self.call_chain: list[str] = []
-        self._global_deadline: float | None = None
+        self.global_deadline: float | None = None
 
     def child(self, module_id: str) -> FakeContext:
         c = FakeContext(caller_id=self.caller_id)
