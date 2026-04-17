@@ -501,9 +501,7 @@ class CallDepthExceededError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(
-        self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any
-    ) -> None:
+    def __init__(self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any) -> None:
         kwargs.setdefault(
             "ai_guidance",
             f"Call depth {depth} exceeds maximum {max_depth}. "
@@ -608,9 +606,7 @@ class FuncMissingTypeHintError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(
-        self, *, function_name: str, parameter_name: str, **kwargs: Any
-    ) -> None:
+    def __init__(self, *, function_name: str, parameter_name: str, **kwargs: Any) -> None:
         super().__init__(
             code="FUNC_MISSING_TYPE_HINT",
             message=(
@@ -1049,9 +1045,7 @@ FRAMEWORK_ERROR_CODE_PREFIXES: frozenset[str] = frozenset(
 def _collect_framework_codes() -> frozenset[str]:
     """Collect all error codes defined on ``ErrorCodes``."""
     return frozenset(
-        value
-        for name, value in vars(ErrorCodes).items()
-        if not name.startswith("_") and isinstance(value, str)
+        value for name, value in vars(ErrorCodes).items() if not name.startswith("_") and isinstance(value, str)
     )
 
 
@@ -1143,15 +1137,10 @@ class ErrorCodeCollisionError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(
-        self, code: str, module_id: str, conflict_source: str, **kwargs: Any
-    ) -> None:
+    def __init__(self, code: str, module_id: str, conflict_source: str, **kwargs: Any) -> None:
         super().__init__(
             code="ERROR_CODE_COLLISION",
-            message=(
-                f"Error code '{code}' from module '{module_id}' "
-                f"collides with {conflict_source}"
-            ),
+            message=(f"Error code '{code}' from module '{module_id}' " f"collides with {conflict_source}"),
             details={
                 "error_code": code,
                 "module_id": module_id,

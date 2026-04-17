@@ -20,7 +20,7 @@ def _make_context(
     ctx = MagicMock()
     ctx.trace_id = trace_id
     ctx.caller_id = caller_id
-    ctx.redacted_inputs = redacted_inputs or {}
+    ctx.redacted_inputs = redacted_inputs
     ctx.data = {}
     return ctx
 

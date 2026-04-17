@@ -56,19 +56,14 @@ class ContextLogger:
         logger._caller_id = context.caller_id
         return logger
 
-    def _emit(
-        self, level_name: str, message: str, extra: dict[str, Any] | None
-    ) -> None:
+    def _emit(self, level_name: str, message: str, extra: dict[str, Any] | None) -> None:
         level_value = _LEVELS.get(level_name, 20)
         if level_value < self._level_value:
             return
 
         redacted_extra = extra
         if extra is not None and self._redact_sensitive:
-            redacted_extra = {
-                k: (_REDACTED if k.startswith("_secret_") else v)
-                for k, v in extra.items()
-            }
+            redacted_extra = {k: (_REDACTED if k.startswith("_secret_") else v) for k, v in extra.items()}
 
         now = datetime.now(timezone.utc)
         entry = {
@@ -91,12 +86,8 @@ class ContextLogger:
             mod = self._module_id or "none"
             extras_str = ""
             if redacted_extra:
-                extras_str = " " + " ".join(
-                    f"{k}={v}" for k, v in redacted_extra.items()
-                )
-            self._output.write(
-                f"{ts} [{lvl}] [trace={trace}] [module={mod}] {message}{extras_str}\n"
-            )
+                extras_str = " " + " ".join(f"{k}={v}" for k, v in redacted_extra.items())
+            self._output.write(f"{ts} [{lvl}] [trace={trace}] [module={mod}] {message}{extras_str}\n")
 
     def trace(self, message: str, extra: dict[str, Any] | None = None) -> None:
         self._emit("trace", message, extra)
@@ -129,15 +120,11 @@ class ObsLoggingMiddleware(Middleware):
         log_inputs: bool = True,
         log_outputs: bool = True,
     ) -> None:
-        self._logger = (
-            logger if logger is not None else ContextLogger(name="apcore.obs_logging")
-        )
+        self._logger = logger if logger is not None else ContextLogger(name="apcore.obs_logging")
         self._log_inputs = log_inputs
         self._log_outputs = log_outputs
 
-    def before(
-        self, module_id: str, inputs: dict[str, Any], context: Any
-    ) -> dict[str, Any] | None:
+    def before(self, module_id: str, inputs: dict[str, Any], context: Any) -> dict[str, Any] | None:
         starts = LOGGING_STARTS.get(context, default=[])
         starts.append(time.time())
         LOGGING_STARTS.set(context, starts)
@@ -146,11 +133,7 @@ class ObsLoggingMiddleware(Middleware):
             "caller_id": context.caller_id,
         }
         if self._log_inputs:
-            extra["inputs"] = (
-                context.redacted_inputs
-                if context.redacted_inputs is not None
-                else inputs
-            )
+            extra["inputs"] = context.redacted_inputs if context.redacted_inputs is not None else inputs
         self._logger.info("Module call started", extra=extra)
         return None
 
@@ -175,9 +158,7 @@ class ObsLoggingMiddleware(Middleware):
         self._logger.info("Module call completed", extra=extra)
         return None
 
-    def on_error(
-        self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any
-    ) -> dict[str, Any] | None:
+    def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Any) -> dict[str, Any] | None:
         starts = LOGGING_STARTS.get(context, default=[])
         if not starts:
             return None

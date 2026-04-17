@@ -62,9 +62,7 @@ _STRICT_INCOMPATIBLE_FORMATS = {
 }
 
 
-def _build_model_from_json_schema(
-    schema: dict[str, Any], model_name: str = "DynamicModel"
-) -> type[BaseModel]:
+def _build_model_from_json_schema(schema: dict[str, Any], model_name: str = "DynamicModel") -> type[BaseModel]:
     """Build a Pydantic model from a simple JSON Schema dict."""
     if _UNSUPPORTED_KEYS & schema.keys():
         return create_model(model_name, __config__=ConfigDict(extra="allow"))
@@ -102,9 +100,7 @@ def _normalize_auto_schema(value: Any) -> str | None:
         return None
     if isinstance(value, str) and value in _AUTO_SCHEMA_VALID_STRINGS:
         return "permissive" if value == "true" else value
-    raise ValueError(
-        f"auto_schema must be a boolean or one of {sorted(_AUTO_SCHEMA_VALID_STRINGS)}; got {value!r}"
-    )
+    raise ValueError(f"auto_schema must be a boolean or one of {sorted(_AUTO_SCHEMA_VALID_STRINGS)}; got {value!r}")
 
 
 def _detect_strict_incompatibilities(schema_dict: dict[str, Any]) -> list[str]:
@@ -161,17 +157,13 @@ class BindingLoader:
         try:
             data = yaml.safe_load(content)
         except yaml.YAMLError as exc:
-            raise BindingFileInvalidError(
-                file_path=file_path, reason=f"YAML parse error: {exc}"
-            ) from exc
+            raise BindingFileInvalidError(file_path=file_path, reason=f"YAML parse error: {exc}") from exc
 
         if data is None:
             raise BindingFileInvalidError(file_path=file_path, reason="File is empty")
 
         if not isinstance(data, dict):
-            raise BindingFileInvalidError(
-                file_path=file_path, reason="Top-level must be a mapping"
-            )
+            raise BindingFileInvalidError(file_path=file_path, reason="Top-level must be a mapping")
 
         spec_version = data.get("spec_version")
         if spec_version is None:
@@ -190,15 +182,11 @@ class BindingLoader:
             )
 
         if "bindings" not in data:
-            raise BindingFileInvalidError(
-                file_path=file_path, reason="Missing 'bindings' key"
-            )
+            raise BindingFileInvalidError(file_path=file_path, reason="Missing 'bindings' key")
 
         bindings = data["bindings"]
         if not isinstance(bindings, list):
-            raise BindingFileInvalidError(
-                file_path=file_path, reason="'bindings' must be a list"
-            )
+            raise BindingFileInvalidError(file_path=file_path, reason="'bindings' must be a list")
 
         results: list[FunctionModule] = []
         for entry in bindings:
@@ -217,9 +205,7 @@ class BindingLoader:
                     file_path=file_path,
                     reason="Binding entry missing 'target'",
                 )
-            fm = self._create_module_from_binding(
-                entry, binding_file_dir, file_path=file_path
-            )
+            fm = self._create_module_from_binding(entry, binding_file_dir, file_path=file_path)
             registry.register(entry["module_id"], fm)
             results.append(fm)
 
@@ -234,9 +220,7 @@ class BindingLoader:
         """Load all binding files matching pattern in directory."""
         p = pathlib.Path(dir_path)
         if not p.is_dir():
-            raise BindingFileInvalidError(
-                file_path=dir_path, reason="Directory does not exist"
-            )
+            raise BindingFileInvalidError(file_path=dir_path, reason="Directory does not exist")
 
         results: list[FunctionModule] = []
         for f in sorted(p.glob(pattern)):
@@ -260,9 +244,7 @@ class BindingLoader:
             try:
                 cls = getattr(mod, class_name)
             except AttributeError as exc:
-                raise BindingCallableNotFoundError(
-                    callable_name=class_name, module_path=module_path
-                ) from exc
+                raise BindingCallableNotFoundError(callable_name=class_name, module_path=module_path) from exc
             try:
                 instance = cls()
             except TypeError as exc:
@@ -273,16 +255,12 @@ class BindingLoader:
             try:
                 result = getattr(instance, method_name)
             except AttributeError as exc:
-                raise BindingCallableNotFoundError(
-                    callable_name=callable_name, module_path=module_path
-                ) from exc
+                raise BindingCallableNotFoundError(callable_name=callable_name, module_path=module_path) from exc
         else:
             try:
                 result = getattr(mod, callable_name)
             except AttributeError as exc:
-                raise BindingCallableNotFoundError(
-                    callable_name=callable_name, module_path=module_path
-                ) from exc
+                raise BindingCallableNotFoundError(callable_name=callable_name, module_path=module_path) from exc
 
         if not callable(result):
             raise BindingNotCallableError(target=target_string)
@@ -340,12 +318,8 @@ class BindingLoader:
             if ref_data is None:
                 ref_data = {}
             return (
-                _build_model_from_json_schema(
-                    ref_data.get("input_schema", {}), "InputModel"
-                ),
-                _build_model_from_json_schema(
-                    ref_data.get("output_schema", {}), "OutputModel"
-                ),
+                _build_model_from_json_schema(ref_data.get("input_schema", {}), "InputModel"),
+                _build_model_from_json_schema(ref_data.get("output_schema", {}), "OutputModel"),
             )
 
         # Mode 3: explicit auto_schema OR mode 4: implicit auto (default)
@@ -379,12 +353,8 @@ class BindingLoader:
             ) from exc
 
         if auto_mode == "strict":
-            self._enforce_strict_or_raise(
-                input_schema, "input", module_id=module_id, file_path=file_path
-            )
-            self._enforce_strict_or_raise(
-                output_schema, "output", module_id=module_id, file_path=file_path
-            )
+            self._enforce_strict_or_raise(input_schema, "input", module_id=module_id, file_path=file_path)
+            self._enforce_strict_or_raise(output_schema, "output", module_id=module_id, file_path=file_path)
 
         return input_schema, output_schema
 

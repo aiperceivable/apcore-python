@@ -39,11 +39,7 @@ class LoggingMiddleware(Middleware):
         LOGGING_START.set(context, time.time())
 
         if self._log_inputs:
-            redacted = (
-                context.redacted_inputs
-                if context.redacted_inputs is not None
-                else inputs
-            )
+            redacted = context.redacted_inputs if context.redacted_inputs is not None else inputs
             self._logger.info(
                 f"[{context.trace_id}] START {module_id}",
                 extra={
@@ -80,16 +76,10 @@ class LoggingMiddleware(Middleware):
 
         return None
 
-    def on_error(
-        self, module_id: str, inputs: dict[str, Any], error: Exception, context: Context
-    ) -> None:
+    def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Context) -> None:
         """Log module error with redacted inputs and traceback."""
         if self._log_errors:
-            redacted = (
-                context.redacted_inputs
-                if context.redacted_inputs is not None
-                else inputs
-            )
+            redacted = context.redacted_inputs if context.redacted_inputs is not None else inputs
             self._logger.error(
                 f"[{context.trace_id}] ERROR {module_id}: {error}",
                 extra={

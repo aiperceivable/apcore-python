@@ -77,9 +77,7 @@ def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str
     ]
 
 
-def _ensure_middleware_manager(
-    manager: Any | None, middlewares: list[Any] | None
-) -> Any:
+def _ensure_middleware_manager(manager: Any | None, middlewares: list[Any] | None) -> Any:
     """Return *manager* if provided, otherwise build a fresh one from *middlewares*.
 
     Lets ``BuiltinMiddlewareBefore`` and ``BuiltinMiddlewareAfter`` keep a
@@ -124,11 +122,7 @@ class BuiltinContextCreation(BaseStep):
         self._executor = executor
         if config is not None:
             val = config.get("executor.global_timeout")
-            self._global_timeout: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.global_timeout")
-            )
+            self._global_timeout: int = val if val is not None else Config.get_default("executor.global_timeout")
         else:
             self._global_timeout = Config.get_default("executor.global_timeout")
 
@@ -137,9 +131,7 @@ class BuiltinContextCreation(BaseStep):
             new_ctx = Context.create(executor=self._executor)
             new_ctx = new_ctx.child(ctx.module_id)
             if self._global_timeout > 0:
-                new_ctx.global_deadline = (
-                    time.monotonic() + self._global_timeout / 1000.0
-                )
+                new_ctx.global_deadline = time.monotonic() + self._global_timeout / 1000.0
             ctx.context = new_ctx
         else:
             # Derive child context to add module_id to call chain
@@ -168,17 +160,9 @@ class BuiltinCallChainGuard(BaseStep):
         self._config = config
         if config is not None:
             val = config.get("executor.max_call_depth")
-            self._max_call_depth: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.max_call_depth")
-            )
+            self._max_call_depth: int = val if val is not None else Config.get_default("executor.max_call_depth")
             val = config.get("executor.max_module_repeat")
-            self._max_module_repeat: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.max_module_repeat")
-            )
+            self._max_module_repeat: int = val if val is not None else Config.get_default("executor.max_module_repeat")
         else:
             self._max_call_depth = Config.get_default("executor.max_call_depth")
             self._max_module_repeat = Config.get_default("executor.max_module_repeat")
@@ -256,11 +240,7 @@ class BuiltinModuleLookup(BaseStep):
         # only redacts for observability.
         if ctx.context is not None and hasattr(ctx.context, "redacted_inputs"):
             input_schema = getattr(module, "input_schema", None)
-            schema_dict_fn = (
-                getattr(input_schema, "model_json_schema", None)
-                if input_schema
-                else None
-            )
+            schema_dict_fn = getattr(input_schema, "model_json_schema", None) if input_schema else None
             if schema_dict_fn is not None and callable(schema_dict_fn):
                 from apcore.utils.redaction import redact_sensitive
 
@@ -425,9 +405,7 @@ def _coerce_annotations(annotations: Any) -> ModuleAnnotations:
         return annotations
     if isinstance(annotations, dict):
         valid_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
-        return ModuleAnnotations(
-            **{k: v for k, v in annotations.items() if k in valid_fields}
-        )
+        return ModuleAnnotations(**{k: v for k, v in annotations.items() if k in valid_fields})
     return ModuleAnnotations()
 
 
@@ -585,11 +563,7 @@ class BuiltinExecute(BaseStep):
         self._config = config
         if config is not None:
             val = config.get("executor.default_timeout")
-            self._default_timeout: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.default_timeout")
-            )
+            self._default_timeout: int = val if val is not None else Config.get_default("executor.default_timeout")
         else:
             self._default_timeout = Config.get_default("executor.default_timeout")
 
@@ -609,9 +583,7 @@ class BuiltinExecute(BaseStep):
             timeout_ms = int(self._default_timeout)
             raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms)
 
-        inputs = (
-            ctx.validated_inputs if ctx.validated_inputs is not None else ctx.inputs
-        )
+        inputs = ctx.validated_inputs if ctx.validated_inputs is not None else ctx.inputs
 
         # Stream mode: set up output_stream if module has stream()
         if ctx.stream and hasattr(module, "stream") and callable(module.stream):
@@ -635,18 +607,12 @@ class BuiltinExecute(BaseStep):
         if global_deadline is not None:
             remaining = global_deadline - time.monotonic()
             if remaining <= 0:
-                raise ModuleTimeoutError(
-                    module_id=ctx.module_id, timeout_ms=int(self._default_timeout)
-                )
+                raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=int(self._default_timeout))
             if timeout_s is None or remaining < timeout_s:
                 timeout_s = remaining
 
         # Stream mode: set output_stream and skip to return_result (no execution)
-        if (
-            getattr(ctx, "stream", False)
-            and hasattr(module, "stream")
-            and module.stream is not None
-        ):
+        if getattr(ctx, "stream", False) and hasattr(module, "stream") and module.stream is not None:
             ctx.output_stream = module.stream(inputs, ctx.context)
             return StepResult(action="skip_to", skip_to="return_result")
 

@@ -1229,10 +1229,16 @@ class TestRegistryConstants:
             reg.register("system", _ValidModule())
 
     def test_reserved_words_rejects_reserved_segment(self) -> None:
-        """Registry.register() rejects module IDs with a reserved word as a segment."""
+        """Registry.register() rejects module IDs with a reserved word as the first segment."""
         reg = Registry()
         with pytest.raises(InvalidInputError, match="reserved word"):
-            reg.register("my.internal.module", _ValidModule())
+            reg.register("internal.my.module", _ValidModule())
+
+    def test_reserved_words_allows_middle_segment(self) -> None:
+        """Registry.register() allows module IDs with a reserved word in middle segments."""
+        reg = Registry()
+        reg.register("my.internal.module", _ValidModule())
+        assert reg.has("my.internal.module")
 
     def test_max_module_id_length_enforced(self) -> None:
         """Registry.register() rejects module IDs exceeding MAX_MODULE_ID_LENGTH."""

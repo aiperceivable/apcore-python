@@ -122,13 +122,13 @@ __all__ = [
 def _validate_module_id(module_id: str, *, allow_reserved: bool = False) -> None:
     """Validate a module ID against PROTOCOL_SPEC §2.7 in canonical order.
 
-    Order: empty → pattern → length → reserved (per-segment).
+    Order: empty → pattern → length → reserved (first-segment).
     Duplicate detection is the caller's responsibility (it requires registry
     state).
 
     Args:
         module_id: Candidate module ID to validate.
-        allow_reserved: When True, the per-segment reserved word check is
+        allow_reserved: When True, the first-segment reserved word check is
             skipped — used by ``Registry.register_internal`` to allow sys
             modules to use the ``system.*`` prefix. All other validations
             (empty, pattern, length) still apply.
@@ -154,11 +154,11 @@ def _validate_module_id(module_id: str, *, allow_reserved: bool = False) -> None
     if len(module_id) > MAX_MODULE_ID_LENGTH:
         raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
 
-    # 4. reserved word per-segment check (skipped for register_internal)
+    # 4. reserved word first-segment check (skipped for register_internal)
     if not allow_reserved:
-        for segment in module_id.split("."):
-            if segment in RESERVED_WORDS:
-                raise InvalidInputError(f"Module ID contains reserved word: '{segment}'")
+        first_segment = module_id.split(".")[0]
+        if first_segment in RESERVED_WORDS:
+            raise InvalidInputError(f"Module ID contains reserved word: '{first_segment}'")
 
 
 class Registry:

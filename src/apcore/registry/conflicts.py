@@ -47,13 +47,13 @@ def detect_id_conflicts(
 
     Steps:
         1. Exact duplicate detection.
-        2. Reserved word detection (per segment).
+        2. Reserved word detection (first segment).
         3. Case collision detection.
 
     Args:
         new_id: Canonical ID to be registered.
         existing_ids: Set of already registered IDs.
-        reserved_words: Reserved words that cannot be used as ID segments.
+        reserved_words: Reserved words that cannot be used as the first ID segment.
         lowercase_map: Optional pre-built lowercase-to-original_id mapping for O(1) case collision.
 
     Returns:
@@ -67,14 +67,14 @@ def detect_id_conflicts(
             message=f"Module ID '{new_id}' is already registered",
         )
 
-    # Step 2: Reserved word check
-    for segment in new_id.split("."):
-        if segment in reserved_words:
-            return ConflictResult(
-                type=ConflictType.RESERVED_WORD,
-                severity=ConflictSeverity.ERROR,
-                message=f"Module ID '{new_id}' contains reserved word '{segment}'",
-            )
+    # Step 2: Reserved word check (first segment only)
+    first_segment = new_id.split(".")[0]
+    if first_segment in reserved_words:
+        return ConflictResult(
+            type=ConflictType.RESERVED_WORD,
+            severity=ConflictSeverity.ERROR,
+            message=f"Module ID '{new_id}' contains reserved word '{first_segment}'",
+        )
 
     # Step 3: Case collision
     normalized_new = new_id.lower()

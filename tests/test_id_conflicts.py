@@ -99,10 +99,10 @@ class TestDetectIdConflictsReservedWord:
         assert "reserved word" in result.message
         assert "'system'" in result.message
 
-    def test_reserved_word_in_segment(self) -> None:
-        """ID containing a reserved word segment returns error."""
+    def test_reserved_word_in_first_segment(self) -> None:
+        """ID starting with a reserved word returns error."""
         result = detect_id_conflicts(
-            new_id="my.internal.handler",
+            new_id="internal.my.handler",
             existing_ids=set(),
             reserved_words=RESERVED_WORDS,
         )
@@ -110,6 +110,15 @@ class TestDetectIdConflictsReservedWord:
         assert result.type == "reserved_word"
         assert result.severity == "error"
         assert "'internal'" in result.message
+
+    def test_reserved_word_in_middle_segment_is_legal(self) -> None:
+        """ID containing a reserved word in middle segments is legal."""
+        result = detect_id_conflicts(
+            new_id="my.internal.handler",
+            existing_ids=set(),
+            reserved_words=RESERVED_WORDS,
+        )
+        assert result is None
 
     def test_all_reserved_words_detected(self) -> None:
         """Each reserved word is detected when used as a segment."""
@@ -218,10 +227,10 @@ class TestRegistryIntegrationDuplicate:
             reg.register("system", _ValidModule())
 
     def test_register_raises_on_reserved_word_segment(self) -> None:
-        """Registry.register() raises InvalidInputError on reserved word in segment."""
+        """Registry.register() raises InvalidInputError when first segment is a reserved word."""
         reg = Registry()
         with pytest.raises(InvalidInputError, match="reserved word"):
-            reg.register("my.internal.module", _ValidModule())
+            reg.register("internal.my.module", _ValidModule())
 
 
 class TestRegistryIntegrationCaseCollision:
