@@ -704,3 +704,55 @@ def test_sys_module_output_schemas_match_spec() -> None:
         assert spec_props == module_props, (
             f"{schema_name}: properties mismatch — " f"spec={spec_props}, module={module_props}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Context.create trace_parent handling (PROTOCOL_SPEC §10.5)
+# ---------------------------------------------------------------------------
+
+from apcore.trace_context import TraceParent  # noqa: E402
+
+_trace_parent_data = _load("context_trace_parent")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _trace_parent_data["test_cases"],
+    ids=[c["id"] for c in _trace_parent_data["test_cases"]],
+)
+def test_context_create_trace_parent(case: dict[str, Any], caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    incoming = case["input"]["trace_parent_trace_id"]
+    expected = case["expected"]
+
+    if incoming is None:
+        tp = None
+    else:
+        # Bypass TraceParent's own post-init guards so we can exercise
+        # Context.create's defensive validation with every fixture input,
+        # including those that a well-behaved TraceParent parser would
+        # never emit (uppercase, wrong length, non-hex, empty).
+        tp = TraceParent.__new__(TraceParent)
+        object.__setattr__(tp, "version", "00")
+        object.__setattr__(tp, "trace_id", incoming)
+        object.__setattr__(tp, "parent_id", "0" * 15 + "1")
+        object.__setattr__(tp, "trace_flags", "01")
+
+    with caplog.at_level(logging.WARNING, logger="apcore.context"):
+        ctx = Context.create(trace_parent=tp)
+
+    # trace_id must always be a valid 32-char lowercase hex
+    assert len(ctx.trace_id) == 32
+    assert all(c in "0123456789abcdef" for c in ctx.trace_id)
+    assert ctx.trace_id not in ("0" * 32, "f" * 32)
+
+    if expected["regenerated"]:
+        assert ctx.trace_id != incoming, f"Expected regeneration but kept {incoming!r}"
+    else:
+        assert ctx.trace_id == expected["trace_id"]
+
+    warn_seen = any("Invalid trace_id format" in record.getMessage() for record in caplog.records)
+    assert (
+        warn_seen == expected["warn_logged"]
+    ), f"warn_logged mismatch: expected {expected['warn_logged']}, got {warn_seen}"

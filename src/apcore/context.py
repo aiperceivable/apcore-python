@@ -56,13 +56,22 @@ class Context(Generic[T]):
     ) -> Context[T]:
         """Create a new top-level Context with a generated trace_id.
 
-        When *trace_parent* is provided, its ``trace_id`` (32 hex chars) is
-        validated and used as 32-character lowercase hex. If the format is
-        invalid, a new random 32-hex trace_id is generated instead.
+        When *trace_parent* is provided, its ``trace_id`` is accepted only if
+        it is exactly 32 lowercase hex characters and not the W3C-reserved
+        all-zero or all-f value. Otherwise a fresh 32-hex trace_id is
+        generated and a WARN-level log is emitted. No normalization (dashed
+        UUID stripping, case folding) is performed here; such normalization
+        is the responsibility of the TraceParent header parser or the
+        caller's ContextFactory.
         """
         if trace_parent is not None:
             hex_id = trace_parent.trace_id
-            if len(hex_id) == 32 and all(c in "0123456789abcdef" for c in hex_id):
+            if (
+                len(hex_id) == 32
+                and all(c in "0123456789abcdef" for c in hex_id)
+                and hex_id != "0" * 32
+                and hex_id != "f" * 32
+            ):
                 trace_id = hex_id
             else:
                 logging.getLogger(__name__).warning(
