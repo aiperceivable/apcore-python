@@ -23,6 +23,7 @@ from apcore.errors import (
     BindingInvalidTargetError,
     BindingModuleNotFoundError,
     BindingNotCallableError,
+    BindingSchemaInferenceFailedError,
     BindingSchemaMissingError,
     FuncMissingReturnTypeError,
     FuncMissingTypeHintError,
@@ -137,18 +138,34 @@ class TestBindingNotCallableError:
         assert isinstance(err, ModuleError)
 
 
-class TestBindingSchemaMissingError:
-    """Tests for BindingSchemaMissingError."""
+class TestBindingSchemaInferenceFailedError:
+    """Tests for BindingSchemaInferenceFailedError (canonical name in spec 1.0)."""
 
     def test_has_correct_code(self):
-        """Error code is BINDING_SCHEMA_MISSING."""
-        err = BindingSchemaMissingError(target="myapp:func")
-        assert err.code == "BINDING_SCHEMA_MISSING"
+        """Error code is BINDING_SCHEMA_INFERENCE_FAILED."""
+        err = BindingSchemaInferenceFailedError(target="myapp:func")
+        assert err.code == "BINDING_SCHEMA_INFERENCE_FAILED"
 
     def test_inherits_from_module_error(self):
         """Error inherits from ModuleError."""
-        err = BindingSchemaMissingError(target="x")
+        err = BindingSchemaInferenceFailedError(target="x")
         assert isinstance(err, ModuleError)
+
+    def test_legacy_alias_points_to_canonical(self):
+        """BindingSchemaMissingError is a deprecated alias for the canonical class."""
+        assert BindingSchemaMissingError is BindingSchemaInferenceFailedError
+
+    def test_includes_module_id_and_remediation_in_message(self):
+        """Message includes module_id and remediation hint when supplied."""
+        err = BindingSchemaInferenceFailedError(
+            target="myapp:func",
+            module_id="app.thing",
+            file_path="b.yaml",
+            line=12,
+        )
+        assert "app.thing" in err.message
+        assert "b.yaml:12" in err.message
+        assert "DECLARATIVE_CONFIG_SPEC.md §6" in err.message
 
 
 class TestBindingFileInvalidError:
@@ -213,7 +230,7 @@ class TestAllErrorsInheritFromModuleError:
                 "BINDING_CALLABLE_NOT_FOUND",
             ),
             (BindingNotCallableError, {"target": "t"}, "BINDING_NOT_CALLABLE"),
-            (BindingSchemaMissingError, {"target": "t"}, "BINDING_SCHEMA_MISSING"),
+            (BindingSchemaInferenceFailedError, {"target": "t"}, "BINDING_SCHEMA_INFERENCE_FAILED"),
             (
                 BindingFileInvalidError,
                 {"file_path": "f", "reason": "r"},

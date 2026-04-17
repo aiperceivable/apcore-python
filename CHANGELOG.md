@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.19.0] - 2026-04-17
+
+### Added
+
+- **`DECLARATIVE_CONFIG_SPEC.md` v1.0** — Canonical spec for bindings, pipeline config, and entry-point YAML. Lives in `apcore/docs/spec/`. Defines cross-SDK YAML syntax parity, error model, configurable policy limits, and auto_schema semantics. All three SDKs (Python, TypeScript, Rust) now conform to this unified specification.
+- **`auto_schema: true | permissive | strict`** — Explicit auto-schema mode selection. `strict` mode enforces OpenAI/Anthropic-compatible schemas (`additionalProperties: false`, all properties required, restricted type set). Incompatible features produce `BindingStrictSchemaIncompatibleError` at parse time.
+- **`auto_schema` as implicit default** — When no schema mode is specified in a binding entry, auto-schema inference is attempted automatically. This formalizes Python's existing behavior as cross-SDK spec.
+- **Schema mode conflict detection** — Specifying multiple schema modes (e.g., `auto_schema` + `input_schema`) now produces `BindingSchemaModeConflictError` at parse time.
+- **`spec_version` field** in binding YAML files. Defaults to `"1.0"` with deprecation warning when absent (mandatory in spec 1.1).
+- **New canonical error classes**: `BindingSchemaInferenceFailedError`, `BindingSchemaModeConflictError`, `BindingStrictSchemaIncompatibleError`, `BindingPolicyViolationError`. Each includes file path, line, module ID, and spec section reference.
+- **`display` field** support on `FunctionModule` and binding YAML entries. Surface overlay for CLI/MCP/A2A presentation per `binding.schema.json#/DisplayOverlay`.
+- **`documentation`, `annotations`, `metadata`** fields now round-trip through `BindingLoader` → `FunctionModule`.
+- **Cross-SDK conformance fixtures** in `apcore/conformance/fixtures/`: `binding_yaml_canonical.yaml` (YAML parse parity), `binding_errors.json` (error message parity).
+
+### Changed
+
+- **`BindingSchemaMissingError`** is now a deprecated alias for `BindingSchemaInferenceFailedError`. Error code changed from `BINDING_SCHEMA_MISSING` to `BINDING_SCHEMA_INFERENCE_FAILED`. Existing `except BindingSchemaMissingError` catch clauses continue to work.
+- **`BindingLoader._create_module_from_binding`** rewritten to implement DECLARATIVE_CONFIG_SPEC.md §3.4 schema resolution: explicit schemas > schema_ref > explicit auto > implicit auto default. Replaces the previous if/elif chain.
+- **`FunctionModule.__init__`** now accepts `display: dict | None` parameter.
+- **`Annotations` in `binding.schema.json`** expanded from 5 to 12 fields (added `streaming`, `cacheable`, `cache_ttl`, `cache_key_fields`, `paginated`, `pagination_style`, `extra`) to align with `module-meta.schema.json`.
+
+### Removed
+
+- **Implicit auto_schema as Python-specific behavior** — this is now a cross-SDK spec-defined behavior, not a Python-only quirk.
+
 ## [0.18.0] - 2026-04-15
 
 ### Added

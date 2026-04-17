@@ -46,6 +46,10 @@ __all__ = [
     "BindingCallableNotFoundError",
     "BindingNotCallableError",
     "BindingSchemaMissingError",
+    "BindingSchemaInferenceFailedError",
+    "BindingSchemaModeConflictError",
+    "BindingStrictSchemaIncompatibleError",
+    "BindingPolicyViolationError",
     "BindingFileInvalidError",
     "CircularDependencyError",
     "ModuleLoadError",
@@ -497,7 +501,9 @@ class CallDepthExceededError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any) -> None:
+    def __init__(
+        self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any
+    ) -> None:
         kwargs.setdefault(
             "ai_guidance",
             f"Call depth {depth} exceeds maximum {max_depth}. "
@@ -602,7 +608,9 @@ class FuncMissingTypeHintError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, *, function_name: str, parameter_name: str, **kwargs: Any) -> None:
+    def __init__(
+        self, *, function_name: str, parameter_name: str, **kwargs: Any
+    ) -> None:
         super().__init__(
             code="FUNC_MISSING_TYPE_HINT",
             message=(
@@ -684,16 +692,179 @@ class BindingNotCallableError(ModuleError):
         )
 
 
-class BindingSchemaMissingError(ModuleError):
-    """Raised when no schema is provided and auto-generation from type hints fails."""
+class BindingSchemaInferenceFailedError(ModuleError):
+    """Raised when auto-schema mode (explicit or implicit) cannot infer a schema from the target.
+
+    See DECLARATIVE_CONFIG_SPEC.md §3.4 and §6.6.
+    """
 
     _default_retryable: bool | None = False
 
-    def __init__(self, *, target: str, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        target: str,
+        module_id: str | None = None,
+        file_path: str | None = None,
+        line: int | None = None,
+        remediation: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        loc = ""
+        if file_path is not None:
+            loc = f"{file_path}"
+            if line is not None:
+                loc += f":{line}"
+            loc += ": "
+        mod_part = f"binding '{module_id}' " if module_id else ""
+        rem = (
+            remediation
+            or "target function lacks complete type hints. Add type annotations to all parameters and the return type, or specify input_schema/output_schema explicitly."
+        )
         super().__init__(
-            code="BINDING_SCHEMA_MISSING",
-            message=f"No schema available for target '{target}'. Add type hints or provide an explicit schema.",
-            details={"target": target},
+            code="BINDING_SCHEMA_INFERENCE_FAILED",
+            message=(
+                f"{loc}{mod_part}auto schema inference failed for target '{target}'. "
+                f"{rem} See DECLARATIVE_CONFIG_SPEC.md §6"
+            ),
+            details={
+                "target": target,
+                "module_id": module_id,
+                "file_path": file_path,
+                "line": line,
+            },
+            **kwargs,
+        )
+
+
+# Deprecated alias kept for backward compatibility in 0.19.x; canonical name is
+# BindingSchemaInferenceFailedError per DECLARATIVE_CONFIG_SPEC.md §7.1.
+BindingSchemaMissingError = BindingSchemaInferenceFailedError
+
+
+class BindingSchemaModeConflictError(ModuleError):
+    """Raised when a binding entry specifies multiple schema modes simultaneously.
+
+    See DECLARATIVE_CONFIG_SPEC.md §3.4.
+    """
+
+    _default_retryable: bool | None = False
+
+    def __init__(
+        self,
+        *,
+        module_id: str,
+        modes_listed: list[str],
+        file_path: str | None = None,
+        line: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        loc = ""
+        if file_path is not None:
+            loc = f"{file_path}"
+            if line is not None:
+                loc += f":{line}"
+            loc += ": "
+        modes_str = ", ".join(modes_listed)
+        super().__init__(
+            code="BINDING_SCHEMA_MODE_CONFLICT",
+            message=(
+                f"{loc}binding '{module_id}' specifies multiple schema modes ({modes_str}). "
+                "Choose one. See DECLARATIVE_CONFIG_SPEC.md §3.4"
+            ),
+            details={
+                "module_id": module_id,
+                "modes_listed": modes_listed,
+                "file_path": file_path,
+                "line": line,
+            },
+            **kwargs,
+        )
+
+
+class BindingStrictSchemaIncompatibleError(ModuleError):
+    """Raised when auto_schema: strict is requested but inferred schema contains incompatible features.
+
+    See DECLARATIVE_CONFIG_SPEC.md §6.2.
+    """
+
+    _default_retryable: bool | None = False
+
+    def __init__(
+        self,
+        *,
+        module_id: str,
+        features_listed: list[str],
+        file_path: str | None = None,
+        line: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        loc = ""
+        if file_path is not None:
+            loc = f"{file_path}"
+            if line is not None:
+                loc += f":{line}"
+            loc += ": "
+        features_str = ", ".join(features_listed)
+        super().__init__(
+            code="BINDING_STRICT_SCHEMA_INCOMPATIBLE",
+            message=(
+                f"{loc}binding '{module_id}' uses auto_schema: strict but inferred schema "
+                f"contains incompatible features: {features_str}. "
+                "See DECLARATIVE_CONFIG_SPEC.md §6.2"
+            ),
+            details={
+                "module_id": module_id,
+                "features_listed": features_listed,
+                "file_path": file_path,
+                "line": line,
+            },
+            **kwargs,
+        )
+
+
+class BindingPolicyViolationError(ModuleError):
+    """Raised when a binding entry field violates a configured policy limit.
+
+    See DECLARATIVE_CONFIG_SPEC.md §9 and §7.1.
+    """
+
+    _default_retryable: bool | None = False
+
+    def __init__(
+        self,
+        *,
+        module_id: str,
+        field_name: str,
+        policy_path: str,
+        reason: str,
+        limit_value: Any,
+        file_path: str | None = None,
+        line: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        loc = ""
+        if file_path is not None:
+            loc = f"{file_path}"
+            if line is not None:
+                loc += f":{line}"
+            loc += ": "
+        super().__init__(
+            code="BINDING_POLICY_VIOLATION",
+            message=(
+                f"{loc}binding '{module_id}' field '{field_name}' violates policy "
+                f"'{policy_path}': {reason} (configured limit: {limit_value}). "
+                "Adjust the limit in apcore.yaml or shorten the value."
+            ),
+            details={
+                "module_id": module_id,
+                "field_name": field_name,
+                "policy_path": policy_path,
+                "reason": reason,
+                "limit_value": limit_value,
+                "file_path": file_path,
+                "line": line,
+            },
             **kwargs,
         )
 
@@ -759,7 +930,12 @@ class ModuleExecuteError(ModuleError):
 
     _default_retryable: bool | None = None
 
-    def __init__(self, module_id: str = "", message: str = "Module execution failed", **kwargs: Any) -> None:
+    def __init__(
+        self,
+        module_id: str = "",
+        message: str = "Module execution failed",
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             code="MODULE_EXECUTE_ERROR",
             message=message,
@@ -873,7 +1049,9 @@ FRAMEWORK_ERROR_CODE_PREFIXES: frozenset[str] = frozenset(
 def _collect_framework_codes() -> frozenset[str]:
     """Collect all error codes defined on ``ErrorCodes``."""
     return frozenset(
-        value for name, value in vars(ErrorCodes).items() if not name.startswith("_") and isinstance(value, str)
+        value
+        for name, value in vars(ErrorCodes).items()
+        if not name.startswith("_") and isinstance(value, str)
     )
 
 
@@ -965,10 +1143,15 @@ class ErrorCodeCollisionError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, code: str, module_id: str, conflict_source: str, **kwargs: Any) -> None:
+    def __init__(
+        self, code: str, module_id: str, conflict_source: str, **kwargs: Any
+    ) -> None:
         super().__init__(
             code="ERROR_CODE_COLLISION",
-            message=(f"Error code '{code}' from module '{module_id}' " f"collides with {conflict_source}"),
+            message=(
+                f"Error code '{code}' from module '{module_id}' "
+                f"collides with {conflict_source}"
+            ),
             details={
                 "error_code": code,
                 "module_id": module_id,

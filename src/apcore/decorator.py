@@ -94,7 +94,9 @@ def generate_input_model(
 
     # Create the model, with extra="allow" if **kwargs was present
     if has_kwargs:
-        return create_model("InputModel", __config__=ConfigDict(extra="allow"), **field_dict)
+        return create_model(
+            "InputModel", __config__=ConfigDict(extra="allow"), **field_dict
+        )
     return create_model("InputModel", **field_dict)
 
 
@@ -181,6 +183,7 @@ class FunctionModule:
         version: str = "1.0.0",
         annotations: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        display: dict[str, Any] | None = None,
         examples: list[ModuleExample] | None = None,
         input_schema: type[BaseModel] | None = None,
         output_schema: type[BaseModel] | None = None,
@@ -191,8 +194,14 @@ class FunctionModule:
         # Parse docstring once for reuse by input model and documentation
         doc_desc, doc_body, param_descs = parse_docstring(func)
 
-        self.input_schema = input_schema if input_schema is not None else generate_input_model(func, param_descs)
-        self.output_schema = output_schema if output_schema is not None else generate_output_model(func)
+        self.input_schema = (
+            input_schema
+            if input_schema is not None
+            else generate_input_model(func, param_descs)
+        )
+        self.output_schema = (
+            output_schema if output_schema is not None else generate_output_model(func)
+        )
 
         context_param_name = _context_param_name(func)
 
@@ -211,18 +220,25 @@ class FunctionModule:
             known_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
             unknown = [k for k in annotations if k not in known_fields]
             if unknown:
-                _logger.warning("Unknown annotation keys ignored for '%s': %s", module_id, unknown)
-            self.annotations = ModuleAnnotations(**{k: v for k, v in annotations.items() if k in known_fields})
+                _logger.warning(
+                    "Unknown annotation keys ignored for '%s': %s", module_id, unknown
+                )
+            self.annotations = ModuleAnnotations(
+                **{k: v for k, v in annotations.items() if k in known_fields}
+            )
         else:
             self.annotations = annotations
         self.metadata = metadata
+        self.display = display
         self.examples = examples
 
         # Create execute closures — two separate defs required so that
         # inspect.iscoroutinefunction returns the correct value.
         if inspect.iscoroutinefunction(func):
 
-            async def _async_execute(inputs: dict[str, Any], context: Context) -> dict[str, Any]:
+            async def _async_execute(
+                inputs: dict[str, Any], context: Context
+            ) -> dict[str, Any]:
                 call_kwargs = dict(inputs)
                 if context_param_name is not None:
                     call_kwargs[context_param_name] = context
@@ -232,7 +248,9 @@ class FunctionModule:
             self.execute = _async_execute
         else:
 
-            def _sync_execute(inputs: dict[str, Any], context: Context) -> dict[str, Any]:
+            def _sync_execute(
+                inputs: dict[str, Any], context: Context
+            ) -> dict[str, Any]:
                 call_kwargs = dict(inputs)
                 if context_param_name is not None:
                     call_kwargs[context_param_name] = context
@@ -264,6 +282,7 @@ def module(
     tags: list[str] | None = None,
     version: str = "1.0.0",
     metadata: dict[str, Any] | None = None,
+    display: dict[str, Any] | None = None,
     examples: list[ModuleExample] | None = None,
     registry: Any = None,
 ) -> Any:
@@ -283,6 +302,7 @@ def module(
             tags=tags,
             version=version,
             metadata=metadata,
+            display=display,
             examples=examples,
         )
         if registry is not None:
