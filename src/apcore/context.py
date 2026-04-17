@@ -39,6 +39,7 @@ class Context(Generic[T]):
     executor: Any = None
     identity: Identity | None = None
     redacted_inputs: dict[str, Any] | None = None
+    redacted_output: dict[str, Any] | None = None
     data: dict[str, Any] = field(default_factory=dict)
     services: T = None  # type: ignore[assignment]
     cancel_token: CancelToken | None = None
@@ -64,6 +65,10 @@ class Context(Generic[T]):
             if len(hex_id) == 32 and all(c in "0123456789abcdef" for c in hex_id):
                 trace_id = hex_id
             else:
+                logging.getLogger(__name__).warning(
+                    "Invalid trace_id format in trace_parent: %s. Restarting trace.",
+                    hex_id,
+                )
                 trace_id = uuid.uuid4().hex
         else:
             trace_id = uuid.uuid4().hex
@@ -102,6 +107,8 @@ class Context(Generic[T]):
             result["identity"] = None
         if self.redacted_inputs is not None:
             result["redacted_inputs"] = dict(self.redacted_inputs)
+        if self.redacted_output is not None:
+            result["redacted_output"] = dict(self.redacted_output)
         result["data"] = {k: v for k, v in self.data.items() if not k.startswith("_")}
         return result
 
@@ -138,6 +145,7 @@ class Context(Generic[T]):
             executor=None,
             identity=identity,
             redacted_inputs=data.get("redacted_inputs"),
+            redacted_output=data.get("redacted_output"),
             data=dict(data.get("data", {})),
             services=None,  # type: ignore[arg-type]
             cancel_token=None,

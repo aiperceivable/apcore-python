@@ -22,7 +22,6 @@ import pydantic
 from apcore.approval import ApprovalRequest, ApprovalResult
 from apcore.cancel import ExecutionCancelledError
 from apcore.context import Context
-from apcore.context_keys import REDACTED_OUTPUT
 from apcore.errors import (
     ACLDeniedError,
     ApprovalDeniedError,
@@ -78,7 +77,9 @@ def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str
     ]
 
 
-def _ensure_middleware_manager(manager: Any | None, middlewares: list[Any] | None) -> Any:
+def _ensure_middleware_manager(
+    manager: Any | None, middlewares: list[Any] | None
+) -> Any:
     """Return *manager* if provided, otherwise build a fresh one from *middlewares*.
 
     Lets ``BuiltinMiddlewareBefore`` and ``BuiltinMiddlewareAfter`` keep a
@@ -123,7 +124,11 @@ class BuiltinContextCreation(BaseStep):
         self._executor = executor
         if config is not None:
             val = config.get("executor.global_timeout")
-            self._global_timeout: int = val if val is not None else Config.get_default("executor.global_timeout")
+            self._global_timeout: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.global_timeout")
+            )
         else:
             self._global_timeout = Config.get_default("executor.global_timeout")
 
@@ -132,7 +137,9 @@ class BuiltinContextCreation(BaseStep):
             new_ctx = Context.create(executor=self._executor)
             new_ctx = new_ctx.child(ctx.module_id)
             if self._global_timeout > 0:
-                new_ctx.global_deadline = time.monotonic() + self._global_timeout / 1000.0
+                new_ctx.global_deadline = (
+                    time.monotonic() + self._global_timeout / 1000.0
+                )
             ctx.context = new_ctx
         else:
             # Derive child context to add module_id to call chain
@@ -161,9 +168,17 @@ class BuiltinCallChainGuard(BaseStep):
         self._config = config
         if config is not None:
             val = config.get("executor.max_call_depth")
-            self._max_call_depth: int = val if val is not None else Config.get_default("executor.max_call_depth")
+            self._max_call_depth: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.max_call_depth")
+            )
             val = config.get("executor.max_module_repeat")
-            self._max_module_repeat: int = val if val is not None else Config.get_default("executor.max_module_repeat")
+            self._max_module_repeat: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.max_module_repeat")
+            )
         else:
             self._max_call_depth = Config.get_default("executor.max_call_depth")
             self._max_module_repeat = Config.get_default("executor.max_module_repeat")
@@ -233,6 +248,29 @@ class BuiltinModuleLookup(BaseStep):
             raise ModuleDisabledError(module_id=ctx.module_id)
 
         ctx.module = module
+
+        # Early input redaction: set context.redacted_inputs BEFORE any
+        # middleware runs (step 6: BuiltinMiddlewareBefore). This ensures
+        # logging middleware's before() hook sees redacted inputs instead
+        # of None. Input validation (step 7) still validates; this step
+        # only redacts for observability.
+        if ctx.context is not None and hasattr(ctx.context, "redacted_inputs"):
+            input_schema = getattr(module, "input_schema", None)
+            schema_dict_fn = (
+                getattr(input_schema, "model_json_schema", None)
+                if input_schema
+                else None
+            )
+            if schema_dict_fn is not None and callable(schema_dict_fn):
+                from apcore.utils.redaction import redact_sensitive
+
+                schema = cast(dict[str, Any], schema_dict_fn())
+                ctx.context.redacted_inputs = redact_sensitive(ctx.inputs, schema)
+            else:
+                # No schema → no redaction needed; store raw inputs so
+                # downstream consumers don't see None.
+                ctx.context.redacted_inputs = dict(ctx.inputs)
+
         return StepResult(action="continue")
 
 
@@ -387,7 +425,9 @@ def _coerce_annotations(annotations: Any) -> ModuleAnnotations:
         return annotations
     if isinstance(annotations, dict):
         valid_fields = {f.name for f in dataclasses.fields(ModuleAnnotations)}
-        return ModuleAnnotations(**{k: v for k, v in annotations.items() if k in valid_fields})
+        return ModuleAnnotations(
+            **{k: v for k, v in annotations.items() if k in valid_fields}
+        )
     return ModuleAnnotations()
 
 
@@ -545,7 +585,11 @@ class BuiltinExecute(BaseStep):
         self._config = config
         if config is not None:
             val = config.get("executor.default_timeout")
-            self._default_timeout: int = val if val is not None else Config.get_default("executor.default_timeout")
+            self._default_timeout: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.default_timeout")
+            )
         else:
             self._default_timeout = Config.get_default("executor.default_timeout")
 
@@ -565,7 +609,9 @@ class BuiltinExecute(BaseStep):
             timeout_ms = int(self._default_timeout)
             raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms)
 
-        inputs = ctx.validated_inputs if ctx.validated_inputs is not None else ctx.inputs
+        inputs = (
+            ctx.validated_inputs if ctx.validated_inputs is not None else ctx.inputs
+        )
 
         # Stream mode: set up output_stream if module has stream()
         if ctx.stream and hasattr(module, "stream") and callable(module.stream):
@@ -589,12 +635,18 @@ class BuiltinExecute(BaseStep):
         if global_deadline is not None:
             remaining = global_deadline - time.monotonic()
             if remaining <= 0:
-                raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=int(self._default_timeout))
+                raise ModuleTimeoutError(
+                    module_id=ctx.module_id, timeout_ms=int(self._default_timeout)
+                )
             if timeout_s is None or remaining < timeout_s:
                 timeout_s = remaining
 
         # Stream mode: set output_stream and skip to return_result (no execution)
-        if getattr(ctx, "stream", False) and hasattr(module, "stream") and module.stream is not None:
+        if (
+            getattr(ctx, "stream", False)
+            and hasattr(module, "stream")
+            and module.stream is not None
+        ):
             ctx.output_stream = module.stream(inputs, ctx.context)
             return StepResult(action="skip_to", skip_to="return_result")
 
@@ -668,15 +720,18 @@ class BuiltinOutputValidation(BaseStep):
 
         ctx.validated_output = ctx.output
 
-        # Store redacted output in context
-        if ctx.context is not None and hasattr(ctx.context, "data"):
+        # Store redacted output as first-class Context field (symmetric with
+        # redacted_inputs). Previously stored under ctx.context.data["_apcore.
+        # executor.redacted_output"] which was filtered out by serialize().
+        if ctx.context is not None and hasattr(ctx.context, "redacted_output"):
             schema_dict_fn = getattr(output_schema, "model_json_schema", None)
             if schema_dict_fn is not None and callable(schema_dict_fn):
                 from apcore.utils.redaction import redact_sensitive
 
                 schema = cast(dict[str, Any], schema_dict_fn())
-                redacted = redact_sensitive(ctx.output, schema)
-                ctx.context.data[REDACTED_OUTPUT.name] = redacted
+                ctx.context.redacted_output = redact_sensitive(ctx.output, schema)
+            else:
+                ctx.context.redacted_output = dict(ctx.output) if ctx.output else None
 
         return StepResult(action="continue")
 
