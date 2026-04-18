@@ -21,6 +21,9 @@ from apcore.config import Config
 from apcore.context import Context
 from apcore.errors import (
     ACLDeniedError,
+    CallDepthExceededError,
+    CallFrequencyExceededError,
+    CircularCallError,
     InvalidInputError,
     ModuleError,
     ModuleExecuteError,
@@ -33,6 +36,7 @@ from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
 from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
 from apcore.module import ModuleAnnotations, PreflightCheckResult, PreflightResult
 from apcore.pipeline import (
+    AbortReason,
     ExecutionStrategy,
     PipelineAbortError,
     PipelineContext,
@@ -80,6 +84,33 @@ def _trace_to_checks(trace: PipelineTrace) -> list[PreflightCheckResult]:
             PreflightCheckResult(check=check_name, passed=passed, error=error)
         )
     return checks
+
+
+_PREFLIGHT_CHECK_BY_TYPE: list[tuple[type[BaseException], str]] = [
+    # Ordered: more specific first. isinstance() matches subclasses, so
+    # walking in declaration order is enough to give the narrowest label.
+    (ModuleNotFoundError, "module_lookup"),
+    (ACLDeniedError, "acl"),
+    (SchemaValidationError, "schema"),
+    (InvalidInputError, "schema"),
+    (CallDepthExceededError, "call_chain"),
+    (CircularCallError, "call_chain"),
+    (CallFrequencyExceededError, "call_chain"),
+]
+
+
+def _preflight_check_for(exc: BaseException) -> str:
+    """Map an exception raised mid-pipeline to a preflight check name.
+
+    Drives off the error class hierarchy (``isinstance``) rather than error
+    code strings so adding a new ``Approval*Error`` or ``Config*Error``
+    subclass inherits a sensible check label via its base class instead of
+    silently falling through to ``"unknown"``.
+    """
+    for error_cls, check_name in _PREFLIGHT_CHECK_BY_TYPE:
+        if isinstance(exc, error_cls):
+            return check_name
+    return "unknown"
 
 
 _MAX_MERGE_DEPTH = 32
@@ -468,26 +499,13 @@ class Executor:
                 produced = to_dict_fn()
                 if isinstance(produced, dict):
                     error_dict = produced
-            code = getattr(e, "code", type(e).__name__)
-
-            # Determine which check failed based on error type
-            if code == "MODULE_NOT_FOUND":
-                check_name = "module_lookup"
-            elif code == "ACL_DENIED":
-                check_name = "acl"
-            elif code in ("SCHEMA_VALIDATION_ERROR", "INVALID_INPUT"):
-                check_name = "schema"
-            elif code in (
-                "CALL_DEPTH_EXCEEDED",
-                "CIRCULAR_CALL",
-                "CALL_FREQUENCY_EXCEEDED",
-            ):
-                check_name = "call_chain"
-            else:
-                check_name = "unknown"
 
             checks.append(
-                PreflightCheckResult(check=check_name, passed=False, error=error_dict)
+                PreflightCheckResult(
+                    check=_preflight_check_for(e),
+                    passed=False,
+                    error=error_dict,
+                )
             )
 
         # Convert pipeline trace to PreflightResult checks
@@ -548,18 +566,32 @@ class Executor:
     def _translate_abort(self, abort: PipelineAbortError) -> ModuleError:
         """Translate PipelineAbortError into the appropriate ModuleError subclass.
 
-        Maps pipeline step abort explanations back to the error types callers expect.
+        Dispatches on stable signals (``abort.step`` name and
+        ``abort.abort_reason``) rather than free-form explanation text so a
+        change in step-level wording does not silently break error
+        translation.
         """
         explanation = abort.explanation or ""
         step = abort.step
+        reason = abort.abort_reason
 
-        if step == "module_lookup" and "not found" in explanation.lower():
-            # Extract module_id from explanation
+        # Honour typed abort_reason first (new in v0.20). Older call paths
+        # still default to AbortReason.OTHER and fall through to step-based
+        # dispatch below.
+        if reason is AbortReason.MODULE_TIMEOUT:
+            return ModuleTimeoutError(module_id="", timeout_ms=0)
+        if reason is AbortReason.MODULE_CANCELLED:
+            from apcore.cancel import ExecutionCancelledError
+
+            return ExecutionCancelledError()
+
+        if step == "module_lookup":
+            # Explanation format: "Module 'id' not found" — extract the id.
             return ModuleNotFoundError(
                 module_id=explanation.split(": ")[-1] if ": " in explanation else ""
             )
-        if step == "acl_check" and "denied" in explanation.lower():
-            # Parse "Access denied: {caller} -> {target}" from BuiltinACLCheck
+        if step == "acl_check":
+            # Explanation format: "Access denied: {caller} -> {target}"
             caller_id = ""
             target_id = ""
             if " -> " in explanation:
@@ -575,17 +607,8 @@ class Executor:
         # approval steps MUST follow the same contract: raise the typed
         # Approval*Error subclass with a real ApprovalResult — do NOT abort
         # via StepResult(action="abort", explanation="...rejected...").
-        if step == "input_validation" and "validation failed" in explanation.lower():
+        if step in ("input_validation", "output_validation"):
             return SchemaValidationError(message=explanation)
-        if step == "output_validation" and "validation failed" in explanation.lower():
-            return SchemaValidationError(message=explanation)
-        if step == "execute":
-            if "cancelled" in explanation.lower():
-                from apcore.cancel import ExecutionCancelledError
-
-                return ExecutionCancelledError()
-            if "deadline" in explanation.lower() or "timed out" in explanation.lower():
-                return ModuleTimeoutError(module_id="", timeout_ms=0)
 
         # Fallback: return as ModuleError
         return ModuleError(code="PIPELINE_ABORT", message=explanation)

@@ -7,6 +7,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from apcore.errors import ModuleError
@@ -324,6 +325,7 @@ class PipelineEngine:
                     step=step.name,
                     explanation=f"Step timed out after {timeout_ms}ms",
                     trace=trace,
+                    abort_reason=AbortReason.MODULE_TIMEOUT,
                 )
             except Exception as exc:
                 duration = (time.monotonic() - step_start) * 1000
@@ -408,6 +410,24 @@ class PipelineEngine:
 # ---------------------------------------------------------------------------
 
 
+class AbortReason(str, Enum):
+    """Stable, typed discriminator for why a pipeline step aborted.
+
+    Prefer this over inspecting ``PipelineAbortError.explanation`` strings:
+    the explanation is user-facing text that may change between releases,
+    while ``AbortReason`` is a committed contract consumed by the executor
+    when translating aborts back to typed errors.
+    """
+
+    MODULE_NOT_FOUND = "module_not_found"
+    ACL_DENIED = "acl_denied"
+    INPUT_VALIDATION_FAILED = "input_validation_failed"
+    OUTPUT_VALIDATION_FAILED = "output_validation_failed"
+    MODULE_CANCELLED = "module_cancelled"
+    MODULE_TIMEOUT = "module_timeout"
+    OTHER = "other"
+
+
 class PipelineAbortError(ModuleError):
     """Raised when a pipeline is aborted at a step."""
 
@@ -417,6 +437,7 @@ class PipelineAbortError(ModuleError):
         explanation: str | None = None,
         alternatives: list[str] | None = None,
         trace: PipelineTrace | None = None,
+        abort_reason: AbortReason | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -428,6 +449,7 @@ class PipelineAbortError(ModuleError):
         self.explanation = explanation
         self.alternatives = alternatives
         self.pipeline_trace = trace
+        self.abort_reason: AbortReason = abort_reason or AbortReason.OTHER
 
 
 class StepNotFoundError(ModuleError):
