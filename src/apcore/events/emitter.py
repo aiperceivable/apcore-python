@@ -52,7 +52,20 @@ class EventEmitter:
         self._loop_lock = threading.Lock()
 
     def subscribe(self, subscriber: EventSubscriber) -> None:
-        """Add a subscriber to receive future events."""
+        """Add a subscriber to receive future events.
+
+        Raises:
+            TypeError: If ``subscriber.on_event`` is not a coroutine function.
+                The emitter awaits deliveries via ``run_until_complete``; a
+                plain function would fail at delivery time with a confusing
+                error. Failing in ``subscribe`` gives callers an actionable
+                signal at registration time.
+        """
+        if not asyncio.iscoroutinefunction(getattr(subscriber, "on_event", None)):
+            raise TypeError(
+                f"Subscriber {subscriber!r} must define an async on_event(event) "
+                "method; synchronous on_event is not supported."
+            )
         with self._lock:
             self._subscribers.append(subscriber)
 

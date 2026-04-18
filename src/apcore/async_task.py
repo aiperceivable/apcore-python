@@ -249,4 +249,4 @@ class AsyncTaskManager:
             info.status = TaskStatus.FAILED
             info.completed_at = time.time()
             info.error = str(exc)
-            _logger.error("Task %s failed: %s", task_id, exc)
+            _logger.error("Task %s failed: %s", task_id, exc, exc_info=True)

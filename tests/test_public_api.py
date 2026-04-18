@@ -542,10 +542,6 @@ class TestPublicAPIAll:
         "PlatformNotifyMiddleware",
         # System Modules
         "register_sys_modules",
-        # deprecated in next major — use EventEmitter directly
-        "register_subscriber_type",
-        "unregister_subscriber_type",
-        "reset_subscriber_registry",
         # Pipeline
         "Step",
         "BaseStep",
@@ -643,3 +639,17 @@ class TestPublicAPIAll:
         for name in apcore.__all__:
             obj = getattr(apcore, name, _MISSING)
             assert obj is not _MISSING, f"Name '{name}' listed in __all__ but not found on module"
+
+    def test_deprecated_subscriber_apis_not_advertised(self):
+        """Deprecated subscriber registry APIs must not appear in __all__ but remain importable."""
+        deprecated = (
+            "register_subscriber_type",
+            "unregister_subscriber_type",
+            "reset_subscriber_registry",
+        )
+        for name in deprecated:
+            assert name not in apcore.__all__, (
+                f"Deprecated {name} should not be advertised in __all__"
+            )
+            # Back-compat: still importable via attribute access.
+            assert hasattr(apcore, name), f"Deprecated {name} must remain importable"

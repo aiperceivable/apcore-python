@@ -6,6 +6,7 @@ pattern-based access control between modules.
 
 from __future__ import annotations
 
+import contextvars
 import inspect
 import logging
 import os
@@ -31,6 +32,13 @@ from apcore.utils.pattern import match_pattern
 __all__ = ["ACLRule", "AuditEntry", "ACL"]
 
 _logger = logging.getLogger(__name__)
+
+# Surfaces condition-handler failures into the AuditEntry built for the current
+# check() / async_check() invocation. Reset at the start of each public check so
+# nested calls do not leak handler errors across audit entries.
+_handler_error_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_apcore_acl_handler_error", default=None
+)
 
 
 @dataclass
@@ -63,6 +71,7 @@ class AuditEntry:
     roles: tuple[str, ...] = field(default_factory=tuple)
     call_depth: int | None = None
     trace_id: str | None = None
+    handler_error: str | None = None  # set when a condition handler raised during evaluation
 
 
 class ACL:
@@ -100,8 +109,9 @@ class ACL:
                 return False
             try:
                 result = handler.evaluate(value, context)
-            except Exception:
+            except Exception as exc:
                 _logger.exception("Handler for condition %r raised — treated as unsatisfied", key)
+                _handler_error_var.set(f"{key}: {type(exc).__name__}: {exc}")
                 return False
             if inspect.isawaitable(result):
                 result.close()  # prevent "coroutine never awaited" warning
@@ -130,8 +140,9 @@ class ACL:
                 result = handler.evaluate(value, context)
                 if inspect.isawaitable(result):
                     result = await result
-            except Exception:
+            except Exception as exc:
                 _logger.exception("Handler for condition %r raised — treated as unsatisfied", key)
+                _handler_error_var.set(f"{key}: {type(exc).__name__}: {exc}")
                 return False
             if not result:
                 return False
@@ -249,23 +260,27 @@ class ACL:
         """
         effective_caller, rules, default_effect, audit_logger = self._snapshot(caller_id)
 
-        matched: tuple[int, ACLRule] | None = None
-        for idx, rule in enumerate(rules):
-            if self._matches_rule(rule, effective_caller, target_id, context):
-                matched = (idx, rule)
-                break
+        token = _handler_error_var.set(None)
+        try:
+            matched: tuple[int, ACLRule] | None = None
+            for idx, rule in enumerate(rules):
+                if self._matches_rule(rule, effective_caller, target_id, context):
+                    matched = (idx, rule)
+                    break
 
-        return self._finalize_check(
-            log_method="check",
-            caller_id=caller_id,
-            effective_caller=effective_caller,
-            target_id=target_id,
-            rules_present=bool(rules),
-            default_effect=default_effect,
-            matched=matched,
-            audit_logger=audit_logger,
-            context=context,
-        )
+            return self._finalize_check(
+                log_method="check",
+                caller_id=caller_id,
+                effective_caller=effective_caller,
+                target_id=target_id,
+                rules_present=bool(rules),
+                default_effect=default_effect,
+                matched=matched,
+                audit_logger=audit_logger,
+                context=context,
+            )
+        finally:
+            _handler_error_var.reset(token)
 
     async def async_check(
         self,
@@ -285,23 +300,27 @@ class ACL:
         """
         effective_caller, rules, default_effect, audit_logger = self._snapshot(caller_id)
 
-        matched: tuple[int, ACLRule] | None = None
-        for idx, rule in enumerate(rules):
-            if await self._matches_rule_async(rule, effective_caller, target_id, context):
-                matched = (idx, rule)
-                break
+        token = _handler_error_var.set(None)
+        try:
+            matched: tuple[int, ACLRule] | None = None
+            for idx, rule in enumerate(rules):
+                if await self._matches_rule_async(rule, effective_caller, target_id, context):
+                    matched = (idx, rule)
+                    break
 
-        return self._finalize_check(
-            log_method="async_check",
-            caller_id=caller_id,
-            effective_caller=effective_caller,
-            target_id=target_id,
-            rules_present=bool(rules),
-            default_effect=default_effect,
-            matched=matched,
-            audit_logger=audit_logger,
-            context=context,
-        )
+            return self._finalize_check(
+                log_method="async_check",
+                caller_id=caller_id,
+                effective_caller=effective_caller,
+                target_id=target_id,
+                rules_present=bool(rules),
+                default_effect=default_effect,
+                matched=matched,
+                audit_logger=audit_logger,
+                context=context,
+            )
+        finally:
+            _handler_error_var.reset(token)
 
     def _snapshot(self, caller_id: str | None) -> tuple[str, list[ACLRule], str, Callable[[AuditEntry], None] | None]:
         """Atomically snapshot mutable state for a check call."""
@@ -420,6 +439,7 @@ class ACL:
             roles=roles,
             call_depth=call_depth,
             trace_id=trace_id,
+            handler_error=_handler_error_var.get(),
         )
 
     def _match_pattern(self, pattern: str, value: str, context: Context | None = None) -> bool:

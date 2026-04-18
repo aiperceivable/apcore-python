@@ -275,3 +275,46 @@ class TestAuditEntryFrozen:
             raise AssertionError("Expected FrozenInstanceError")  # pragma: no cover
         except AttributeError:
             pass  # Expected: frozen dataclass
+
+
+class TestAuditEntryHandlerError:
+    """AuditEntry.handler_error surfaces condition-handler failures into the audit trail."""
+
+    def test_handler_error_none_when_no_failure(self) -> None:
+        entries: list[AuditEntry] = []
+        rule = ACLRule(callers=["*"], targets=["*"], effect="allow")
+        acl = ACL(rules=[rule], default_effect="deny", audit_logger=entries.append)
+
+        acl.check(caller_id="a", target_id="b")
+
+        assert entries[0].handler_error is None
+
+    def test_handler_error_set_when_condition_handler_raises(self) -> None:
+        """When a condition handler raises, the failure is surfaced in handler_error."""
+
+        class BoomHandler:
+            def evaluate(self, value, context):  # type: ignore[no-untyped-def]
+                raise RuntimeError("boom")
+
+        ACL.register_condition("boom", BoomHandler())
+        try:
+            entries: list[AuditEntry] = []
+            rule = ACLRule(
+                callers=["*"],
+                targets=["*"],
+                effect="allow",
+                conditions={"boom": True},
+            )
+            acl = ACL(rules=[rule], default_effect="deny", audit_logger=entries.append)
+
+            ctx = Context.create()
+            result = acl.check(caller_id="a", target_id="b", context=ctx)
+
+            assert result is False  # fail-closed
+            assert len(entries) == 1
+            assert entries[0].handler_error is not None
+            assert "boom" in entries[0].handler_error
+            assert "RuntimeError" in entries[0].handler_error
+        finally:
+            # Restore known condition handlers (the class registry is a classvar)
+            ACL._condition_handlers.pop("boom", None)

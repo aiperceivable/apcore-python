@@ -179,3 +179,19 @@ class TestEventEmitter:
         assert delivered.event_type == "health.degraded"
         assert delivered.module_id == "mod.x"
         assert delivered.data == {"error_rate": 0.15, "threshold": 0.1}
+
+    def test_subscribe_rejects_sync_on_event(self) -> None:
+        """subscribe() raises TypeError if on_event is not a coroutine function."""
+        emitter = EventEmitter()
+
+        class SyncSubscriber:
+            def on_event(self, event: ApCoreEvent) -> None:
+                pass
+
+        with pytest.raises(TypeError, match="async on_event"):
+            emitter.subscribe(SyncSubscriber())
+
+    def test_subscribe_rejects_object_without_on_event(self) -> None:
+        emitter = EventEmitter()
+        with pytest.raises(TypeError, match="async on_event"):
+            emitter.subscribe(object())  # type: ignore[arg-type]

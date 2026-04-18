@@ -682,10 +682,6 @@ __all__ = [
     # System Modules
     "register_sys_modules",
     "SysModulesContext",
-    # deprecated in next major — use EventEmitter directly
-    "register_subscriber_type",
-    "unregister_subscriber_type",
-    "reset_subscriber_registry",
     # System Module Implementations
     "HealthSummaryModule",
     "HealthModule",
