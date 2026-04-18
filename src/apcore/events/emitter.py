@@ -50,6 +50,7 @@ class EventEmitter:
         # Persistent event loop for async subscriber delivery
         self._loop = asyncio.new_event_loop()
         self._loop_lock = threading.Lock()
+        self._shutdown = False
 
     def subscribe(self, subscriber: EventSubscriber) -> None:
         """Add a subscriber to receive future events.
@@ -81,7 +82,11 @@ class EventEmitter:
         """Fan-out event to all subscribers via thread pool.
 
         Returns immediately. Subscriber errors are logged but not propagated.
+        After :meth:`shutdown`, further emits are silently dropped so
+        late-arriving events in a shutting-down process do not raise.
         """
+        if self._shutdown:
+            return
         with self._lock:
             snapshot = list(self._subscribers)
 
@@ -122,3 +127,22 @@ class EventEmitter:
                         subscriber,
                         event.event_type,
                     )
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        """Release the executor thread pool and asyncio loop.
+
+        Stops accepting new emits, flushes pending deliveries (bounded by
+        ``timeout``), shuts the ThreadPoolExecutor with ``wait=True`` +
+        ``cancel_futures=True``, and closes the persistent event loop. Safe
+        to call multiple times — subsequent calls are no-ops.
+        """
+        if self._shutdown:
+            return
+        self._shutdown = True
+        try:
+            self.flush(timeout=timeout)
+        finally:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            with self._loop_lock:
+                if not self._loop.is_closed():
+                    self._loop.close()

@@ -195,3 +195,33 @@ class TestEventEmitter:
         emitter = EventEmitter()
         with pytest.raises(TypeError, match="async on_event"):
             emitter.subscribe(object())  # type: ignore[arg-type]
+
+    def test_shutdown_releases_executor_and_loop(self) -> None:
+        """shutdown() closes the thread pool and asyncio loop."""
+        emitter = EventEmitter()
+        subscriber = AsyncMock()
+        emitter.subscribe(subscriber)
+        emitter.emit(self._make_event())
+
+        emitter.shutdown(timeout=1.0)
+
+        # Loop closed.
+        assert emitter._loop.is_closed()
+        # Executor no longer accepts new work.
+        with pytest.raises(RuntimeError):
+            emitter._executor.submit(lambda: None)
+
+    def test_shutdown_is_idempotent(self) -> None:
+        emitter = EventEmitter()
+        emitter.shutdown(timeout=0.5)
+        emitter.shutdown(timeout=0.5)  # must not raise
+
+    def test_emit_after_shutdown_is_noop(self) -> None:
+        emitter = EventEmitter()
+        subscriber = AsyncMock()
+        emitter.subscribe(subscriber)
+        emitter.shutdown(timeout=0.5)
+
+        # Does not raise, does not deliver.
+        emitter.emit(self._make_event())
+        subscriber.on_event.assert_not_called()
