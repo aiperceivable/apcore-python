@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -1086,6 +1087,47 @@ class TestHotReload:
         reg.register("my_module", _ValidModule())
         result = reg._path_to_module_id("/some/path/unknown_file.py")
         assert result is None
+
+    def test_module_change_handler_is_module_level(self) -> None:
+        """_ModuleChangeHandler is hoisted out of watch() so it is testable."""
+        from apcore.registry.registry import _ModuleChangeHandler
+
+        reg = Registry()
+        handler = _ModuleChangeHandler(reg)
+        # weakref holds the registry; direct debounce dict available for tests.
+        assert handler._registry() is reg
+        assert isinstance(handler._debounce_timer, dict)
+
+    def test_module_change_handler_debounce_bounds_memory(self) -> None:
+        """Debounce dict is pruned when it exceeds the bound."""
+        from apcore.registry.registry import _ModuleChangeHandler
+
+        reg = Registry()
+        handler = _ModuleChangeHandler(reg)
+        # Force enough entries past the bound by bypassing the time window:
+        # _should_process returns False for repeats under the 0.3s window, so
+        # for the memory-bound test we populate the dict directly.
+        for i in range(_ModuleChangeHandler._MAX_DEBOUNCE_ENTRIES + 50):
+            handler._debounce_timer[f"/path/{i}.py"] = float(i)
+        # Now trigger a single _should_process call to exercise pruning.
+        ok = handler._should_process(f"/path/new_{time.time()}.py")
+        assert ok is True
+        assert (
+            len(handler._debounce_timer)
+            <= _ModuleChangeHandler._DEBOUNCE_PRUNE_KEEP + 1
+        )
+
+    def test_handle_file_deletion_clears_versioned_stores(self) -> None:
+        """_handle_file_deletion removes from both _modules and _versioned_modules."""
+        reg = Registry()
+        reg.register("my_module", _ValidModule())
+        # register() already populated _versioned_modules.
+        assert reg._versioned_modules.has("my_module")
+
+        reg._handle_file_deletion("/some/path/my_module.py")
+
+        assert "my_module" not in reg._modules
+        assert not reg._versioned_modules.has("my_module")
 
     def test_handle_file_deletion_unregisters_module(self) -> None:
         """_handle_file_deletion() unregisters a known module."""

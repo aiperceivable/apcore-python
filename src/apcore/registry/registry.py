@@ -178,6 +178,73 @@ def _validate_module_id(module_id: str, *, allow_reserved: bool = False) -> None
             )
 
 
+class _ModuleChangeHandler:
+    """Watchdog event handler for file-system events on extension roots.
+
+    Hoisted to module scope (from an inline class inside ``Registry.watch``)
+    so it can be unit-tested directly and so the debounce dict stays on a
+    long-lived object with bounded memory. Registry is held via a weakref to
+    avoid extending its lifetime beyond the caller's expectation.
+    """
+
+    _DEBOUNCE_WINDOW_SEC: float = 0.3
+    _MAX_DEBOUNCE_ENTRIES: int = 1024
+    _DEBOUNCE_PRUNE_KEEP: int = 256
+
+    def __init__(self, registry: "Registry") -> None:
+        import weakref
+
+        self._registry_ref: Any = weakref.ref(registry)
+        self._debounce_timer: dict[str, float] = {}
+
+    def _registry(self) -> "Registry | None":
+        return self._registry_ref()
+
+    def _should_process(self, path: str) -> bool:
+        if not path.endswith(".py"):
+            return False
+        now = time.time()
+        last = self._debounce_timer.get(path, 0.0)
+        if now - last < self._DEBOUNCE_WINDOW_SEC:
+            return False
+        self._debounce_timer[path] = now
+        # Bounded memory: prune oldest entries when the dict grows too large.
+        if len(self._debounce_timer) > self._MAX_DEBOUNCE_ENTRIES:
+            sorted_by_age = sorted(self._debounce_timer.items(), key=lambda kv: kv[1])
+            self._debounce_timer = dict(sorted_by_age[-self._DEBOUNCE_PRUNE_KEEP:])
+        return True
+
+    def on_modified(self, event: Any) -> None:
+        if event.is_directory:
+            return
+        path = str(event.src_path)
+        if not self._should_process(path):
+            return
+        reg = self._registry()
+        if reg is not None:
+            reg._handle_file_change(path)
+
+    def on_created(self, event: Any) -> None:
+        if event.is_directory:
+            return
+        path = str(event.src_path)
+        if not self._should_process(path):
+            return
+        reg = self._registry()
+        if reg is not None:
+            reg._handle_file_change(path)
+
+    def on_deleted(self, event: Any) -> None:
+        if event.is_directory:
+            return
+        path = str(event.src_path)
+        if not path.endswith(".py"):
+            return
+        reg = self._registry()
+        if reg is not None:
+            reg._handle_file_deletion(path)
+
+
 class Registry:
     """Central module registry for discovering, registering, and querying modules."""
 
@@ -1259,7 +1326,6 @@ class Registry:
         """
         try:
             from watchdog.observers import Observer  # type: ignore[import-not-found]
-            from watchdog.events import FileSystemEventHandler, FileSystemEvent  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "watchdog is required for hot reload. Install it with: pip install watchdog"
@@ -1268,49 +1334,8 @@ class Registry:
         if hasattr(self, "_observer") and self._observer is not None:
             return  # Already watching
 
-        outer_registry = self
-
-        class _ModuleChangeHandler(FileSystemEventHandler):
-            def __init__(self) -> None:
-                self._registry = outer_registry
-                self._debounce_timer: dict[str, float] = {}
-
-            def _should_process(self, path: str) -> bool:
-                if not path.endswith(".py"):
-                    return False
-                now = time.time()
-                last = self._debounce_timer.get(path, 0.0)
-                if now - last < 0.3:
-                    return False
-                self._debounce_timer[path] = now
-                return True
-
-            def on_modified(self, event: FileSystemEvent) -> None:
-                if event.is_directory:
-                    return
-                path = str(event.src_path)
-                if not self._should_process(path):
-                    return
-                self._registry._handle_file_change(path)
-
-            def on_created(self, event: FileSystemEvent) -> None:
-                if event.is_directory:
-                    return
-                path = str(event.src_path)
-                if not self._should_process(path):
-                    return
-                self._registry._handle_file_change(path)
-
-            def on_deleted(self, event: FileSystemEvent) -> None:
-                if event.is_directory:
-                    return
-                path = str(event.src_path)
-                if not path.endswith(".py"):
-                    return
-                self._registry._handle_file_deletion(path)
-
         self._observer = Observer()
-        handler = _ModuleChangeHandler()
+        handler = _ModuleChangeHandler(self)
 
         for root_config in self._extension_roots:
             root_path = root_config.get("root", "")
@@ -1340,74 +1365,20 @@ class Registry:
     def _handle_file_change(self, path: str) -> None:
         """Handle a file modification or creation event.
 
-        Resolves the module class via ``resolve_entry_point`` (the same path
-        the rest of the registry uses for discovery) instead of the historical
-        ``dir(mod)`` + ``hasattr(attr, "execute")`` scan, which would pick up
-        imports, helpers, and base classes non-deterministically.
+        Performs arbitrary-Python import (``resolve_entry_point``) and user
+        hooks (``on_suspend``/``on_unload``/``on_resume``) OUTSIDE
+        ``self._lock`` so a slow or re-entrant module cannot block unrelated
+        registry queries or deadlock a callback that calls back into the
+        registry. Lock is acquired only for the two short atomic sections:
+        capturing the old module's snapshot + state maps, and inserting the
+        new instance into all internal maps (``_modules``, ``_lowercase_map``,
+        ``_versioned_modules``, ``_versioned_meta``).
         """
-        with self._lock:
-            module_id = self._path_to_module_id(path)
-            suspended_state = self._suspend_and_unregister_for_hot_reload(module_id)
-            self._reload_module_from_path(path, module_id, suspended_state)
-
-    def _suspend_and_unregister_for_hot_reload(
-        self, module_id: str | None
-    ) -> dict[str, Any] | None:
-        """Capture suspend state and unregister the existing module, if any."""
-        if not module_id or module_id not in self._modules:
-            return None
-
-        old_module = self._modules.get(module_id)
-        suspended_state: dict[str, Any] | None = None
-
-        if (
-            old_module
-            and hasattr(old_module, "on_suspend")
-            and callable(old_module.on_suspend)
-        ):
-            try:
-                raw_state: Any = old_module.on_suspend()
-                if raw_state is None:
-                    suspended_state = None
-                elif isinstance(raw_state, dict):
-                    suspended_state = raw_state
-                else:
-                    logger.warning(
-                        "on_suspend() for module '%s' returned non-dict; ignoring",
-                        module_id,
-                    )
-            except Exception as e:
-                logger.error(
-                    "on_suspend() failed for module '%s' during hot reload: %s",
-                    module_id,
-                    e,
-                )
-
-        if old_module and hasattr(old_module, "on_unload"):
-            try:
-                old_module.on_unload()
-            except Exception as e:
-                logger.warning(
-                    "on_unload() failed for module '%s' during hot reload: %s",
-                    module_id,
-                    e,
-                )
-
-        self._inline_unregister(module_id)
-        self._trigger_event("unregister", module_id, old_module)
-        return suspended_state
-
-    def _reload_module_from_path(
-        self,
-        path: str,
-        existing_module_id: str | None,
-        suspended_state: dict[str, Any] | None,
-    ) -> None:
-        """Re-import the file via the canonical entry-point resolver and register it."""
+        # Phase 1 (outside lock): compile + instantiate + validate new module.
         try:
             cls = resolve_entry_point(Path(path))
         except Exception as e:
-            logger.warning("Hot reload failed for %s: %s", path, e)
+            logger.warning("Hot reload failed to resolve entry point for %s: %s", path, e)
             return
 
         try:
@@ -1418,17 +1389,52 @@ class Registry:
             )
             return
 
-        new_id = existing_module_id or os.path.splitext(os.path.basename(path))[0]
+        validation_errors = validate_module(instance)
+        if validation_errors:
+            logger.warning(
+                "Hot reload rejected module from %s: validation failed (%s)",
+                path,
+                "; ".join(validation_errors),
+            )
+            return
+        if self._custom_validator is not None:
+            try:
+                self._custom_validator.validate(instance)
+            except Exception as e:
+                logger.warning(
+                    "Hot reload rejected module from %s: custom validator raised: %s",
+                    path,
+                    e,
+                )
+                return
 
-        if new_id in self._modules:
-            old = self._inline_unregister(new_id)
-            if old is not None:
-                self._trigger_event("unregister", new_id, old)
+        # Phase 2 (under lock): snapshot old module + inline unregister from
+        # all stores. Do NOT call user hooks or fire events while holding the lock.
+        with self._lock:
+            module_id = self._path_to_module_id(path)
+            new_id = module_id or os.path.splitext(os.path.basename(path))[0]
+            old_module = self._modules.get(new_id)
+            self._inline_unregister(new_id)
+            self._versioned_modules.remove_all(new_id)
+            self._versioned_meta.remove_all(new_id)
 
-        self._modules[new_id] = instance
-        self._lowercase_map[new_id.lower()] = new_id
+        # Phase 3 (outside lock): user hooks on the old module + unregister event.
+        suspended_state: dict[str, Any] | None = None
+        if old_module is not None:
+            suspended_state = self._call_on_suspend(new_id, old_module)
+            self._call_on_unload(new_id, old_module)
+            self._trigger_event("unregister", new_id, old_module)
+
+        # Phase 4 (under lock): insert the new instance into every store.
+        effective_version = getattr(instance, "version", None) or "1.0.0"
+        with self._lock:
+            self._modules[new_id] = instance
+            self._lowercase_map[new_id.lower()] = new_id
+            self._versioned_modules.add(new_id, effective_version, instance)
+            self._versioned_meta.add(new_id, effective_version, {"version": effective_version})
+
+        # Phase 5 (outside lock): register event + on_resume hook on new module.
         self._trigger_event("register", new_id, instance)
-
         if (
             suspended_state is not None
             and hasattr(instance, "on_resume")
@@ -1443,23 +1449,60 @@ class Registry:
                     e,
                 )
 
+    def _call_on_suspend(self, module_id: str, module: Any) -> dict[str, Any] | None:
+        """Call on_suspend on ``module`` outside the registry lock; return state dict or None."""
+        if not (hasattr(module, "on_suspend") and callable(module.on_suspend)):
+            return None
+        try:
+            raw_state: Any = module.on_suspend()
+        except Exception as e:
+            logger.error(
+                "on_suspend() failed for module '%s' during hot reload: %s",
+                module_id,
+                e,
+            )
+            return None
+        if raw_state is None:
+            return None
+        if isinstance(raw_state, dict):
+            return raw_state
+        logger.warning(
+            "on_suspend() for module '%s' returned non-dict; ignoring", module_id
+        )
+        return None
+
+    def _call_on_unload(self, module_id: str, module: Any) -> None:
+        """Call on_unload on ``module`` outside the registry lock."""
+        if not hasattr(module, "on_unload"):
+            return
+        try:
+            module.on_unload()
+        except Exception as e:
+            logger.warning(
+                "on_unload() failed for module '%s' during hot reload: %s",
+                module_id,
+                e,
+            )
+
     def _handle_file_deletion(self, path: str) -> None:
-        """Handle a file deletion event."""
+        """Handle a file deletion event.
+
+        Snapshots the module under the lock, removes it from every internal
+        store (including versioned), then calls ``on_unload`` and fires the
+        unregister event OUTSIDE the lock.
+        """
         with self._lock:
             module_id = self._path_to_module_id(path)
-            if module_id and module_id in self._modules:
-                module = self._modules.get(module_id)
-                if module and hasattr(module, "on_unload"):
-                    try:
-                        module.on_unload()
-                    except Exception as e:
-                        logger.warning(
-                            "on_unload() failed for module '%s' during hot reload: %s",
-                            module_id,
-                            e,
-                        )
-                self._inline_unregister(module_id)
-                self._trigger_event("unregister", module_id, module)
+            if not module_id or module_id not in self._modules:
+                return
+            module = self._modules.get(module_id)
+            self._inline_unregister(module_id)
+            self._versioned_modules.remove_all(module_id)
+            self._versioned_meta.remove_all(module_id)
+
+        if module is not None:
+            self._call_on_unload(module_id, module)
+        self._trigger_event("unregister", module_id, module)
 
     def _path_to_module_id(self, path: str) -> str | None:
         """Map a file path to a module ID if known."""
