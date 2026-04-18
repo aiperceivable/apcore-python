@@ -1128,6 +1128,30 @@ class TestCustomDiscoverer:
         assert count == 1
         assert reg.has("default_mod")
 
+    def test_malformed_entries_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Malformed entries from custom discoverer are skipped, valid ones still register."""
+        mod_ok = _ValidModule()
+        discoverer = _MockDiscoverer(
+            [
+                {"module": mod_ok},  # missing module_id
+                {"module_id": "only_id"},  # missing module
+                "not_a_dict",  # wrong type
+                None,  # None entry
+                {"module_id": "good.mod", "module": mod_ok},
+            ]
+        )
+
+        reg = Registry()
+        reg.set_discoverer(discoverer)
+        with caplog.at_level(logging.WARNING):
+            count = reg.discover()
+
+        assert count == 1
+        assert reg.has("good.mod")
+        # All four malformed entries should have logged a warning
+        malformed_warnings = [r for r in caplog.records if "Malformed entry" in r.message]
+        assert len(malformed_warnings) == 4
+
 
 # ===== Custom Validator =====
 

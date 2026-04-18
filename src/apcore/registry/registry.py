@@ -266,8 +266,15 @@ class Registry:
 
         registered_count = 0
         for entry in custom_modules:
-            mod_id: str = entry["module_id"]
-            mod: Any = entry["module"]
+            try:
+                mod_id = entry["module_id"]
+                mod = entry["module"]
+            except (KeyError, TypeError) as e:
+                logger.warning(
+                    "Malformed entry from custom discoverer (expected dict with 'module_id' and 'module' keys): %s",
+                    e,
+                )
+                continue
 
             # Apply custom validator if set
             if self._custom_validator is not None:
