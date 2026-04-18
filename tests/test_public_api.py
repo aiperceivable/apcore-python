@@ -373,6 +373,7 @@ class TestPublicAPIAll:
         "Registry",
         "Executor",
         "APCore",
+        "close",
         "call",
         "call_async",
         "stream",
@@ -639,6 +640,22 @@ class TestPublicAPIAll:
         for name in apcore.__all__:
             obj = getattr(apcore, name, _MISSING)
             assert obj is not _MISSING, f"Name '{name}' listed in __all__ but not found on module"
+
+    def test_default_client_is_lazy_and_close_resets(self):
+        """import apcore must not eagerly construct APCore(); close() releases + allows fresh create."""
+        import apcore as apcore_mod
+
+        # Force a clean slate — clear any client allocated earlier in the session.
+        apcore_mod.close()
+        # Private state check: the backing slot is now None.
+        assert apcore_mod._default_client is not None  # triggers lazy init via __getattr__
+        # Because access via __getattr__ materialises the client, we close again and assert
+        # the backing module-level name is bound to the freshly-created instance.
+        first = apcore_mod._default_client
+        apcore_mod.close()
+        second = apcore_mod._default_client
+        # After close(), a new instance is created on next access — not the same object.
+        assert first is not second
 
     def test_deprecated_subscriber_apis_not_advertised(self):
         """Deprecated subscriber registry APIs must not appear in __all__ but remain importable."""

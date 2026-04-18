@@ -390,6 +390,16 @@ class APCore:
                 "Pass a Config with sys_modules.enabled=true to APCore()."
             )
 
+    def close(self) -> None:
+        """Release resources owned by this APCore instance.
+
+        Currently closes the cached sync event loop inside the Executor.
+        Safe to call multiple times. After ``close()`` the same APCore can
+        continue to be used — the Executor will lazily allocate a fresh
+        sync loop on the next synchronous ``call()``.
+        """
+        self.executor.close()
+
 
 class _CallbackSubscriber:
     """Lightweight EventSubscriber that filters by event_type and delegates to a callback."""

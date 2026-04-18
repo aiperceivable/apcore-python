@@ -285,11 +285,58 @@ from apcore.sys_modules.control import (
 # Default client for simplified global access
 # ---------------------------------------------------------------------------
 
-# Module-level convenience wrappers — Python SDK only.
-# These forward to a default APCore singleton. TypeScript and Rust SDKs
-# do not provide equivalent top-level functions; users in those languages
-# must construct an APCore instance explicitly.
-_default_client = APCore()
+# Module-level convenience wrappers — **Python-SDK-only**.
+#
+# These forward to a lazily-created default :class:`APCore` singleton. The
+# TypeScript and Rust SDKs have no counterpart; users in those languages
+# must construct a client explicitly. This is intentional — the Python
+# convenience is optional syntactic sugar, not part of the cross-language
+# apcore contract documented in the protocol spec.
+#
+# The client is allocated on first use (not at import) so
+# ``import apcore`` stays cheap (no Registry/Executor instantiation, no
+# cached event loop). Callers that want deterministic teardown can call
+# :func:`apcore.close` to release the Executor's sync loop; a subsequent
+# call reconstructs a fresh client.
+
+# Backing cache for the lazy default client. The public name
+# ``apcore._default_client`` is resolved via :func:`__getattr__` (PEP 562)
+# so the attribute is *absent* until someone looks at it — preserving the
+# "no work at import" guarantee.
+_CACHED_DEFAULT_CLIENT: APCore | None = None
+
+
+def _get_default_client() -> APCore:
+    """Return the process-default APCore, creating it lazily on first use."""
+    global _CACHED_DEFAULT_CLIENT
+    if _CACHED_DEFAULT_CLIENT is None:
+        _CACHED_DEFAULT_CLIENT = APCore()
+    return _CACHED_DEFAULT_CLIENT
+
+
+def close() -> None:
+    """Release the default APCore client, if one was created.
+
+    Closes the cached sync event loop inside the Executor. Safe to call
+    multiple times. After ``close()``, a subsequent convenience-function
+    call (``call()``, ``register()``, ...) lazily creates a fresh client.
+    """
+    global _CACHED_DEFAULT_CLIENT
+    if _CACHED_DEFAULT_CLIENT is not None:
+        _CACHED_DEFAULT_CLIENT.close()
+        _CACHED_DEFAULT_CLIENT = None
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562 lazy attribute access for the default-client singleton.
+
+    Access to ``apcore._default_client`` returns the same object the
+    convenience functions call; allocates it on first access. Other names
+    fall through to ``AttributeError``.
+    """
+    if name == "_default_client":
+        return _get_default_client()
+    raise AttributeError(f"module 'apcore' has no attribute {name!r}")
 
 
 def call(
@@ -299,7 +346,9 @@ def call(
     version_hint: str | None = None,
 ) -> dict[str, Any]:
     """Global convenience for _default_client.call()."""
-    return _default_client.call(module_id, inputs, context, version_hint=version_hint)
+    return _get_default_client().call(
+        module_id, inputs, context, version_hint=version_hint
+    )
 
 
 async def call_async(
@@ -309,7 +358,7 @@ async def call_async(
     version_hint: str | None = None,
 ) -> dict[str, Any]:
     """Global convenience for _default_client.call_async()."""
-    return await _default_client.call_async(
+    return await _get_default_client().call_async(
         module_id, inputs, context, version_hint=version_hint
     )
 
@@ -345,7 +394,7 @@ def module(
             examples=examples,
             registry=registry,
         )
-    return _default_client.module(
+    return _get_default_client().module(
         id=id,
         description=description,
         documentation=documentation,
@@ -364,7 +413,7 @@ async def stream(
     version_hint: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Global convenience for _default_client.stream()."""
-    async for chunk in _default_client.stream(
+    async for chunk in _get_default_client().stream(
         module_id, inputs, context, version_hint=version_hint
     ):
         yield chunk
@@ -374,69 +423,69 @@ def validate(
     module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None
 ) -> PreflightResult:
     """Global convenience for _default_client.validate()."""
-    return _default_client.validate(module_id, inputs, context)
+    return _get_default_client().validate(module_id, inputs, context)
 
 
 def register(module_id: str, module_obj: Any) -> None:
     """Global convenience for _default_client.register()."""
-    _default_client.register(module_id, module_obj)
+    _get_default_client().register(module_id, module_obj)
 
 
 def describe(module_id: str) -> str:
     """Global convenience for _default_client.describe()."""
-    return _default_client.describe(module_id)
+    return _get_default_client().describe(module_id)
 
 
 def use(middleware: Any) -> APCore:
     """Global convenience for _default_client.use()."""
-    return _default_client.use(middleware)
+    return _get_default_client().use(middleware)
 
 
 def use_before(callback: Any) -> APCore:
     """Global convenience for _default_client.use_before()."""
-    return _default_client.use_before(callback)
+    return _get_default_client().use_before(callback)
 
 
 def use_after(callback: Any) -> APCore:
     """Global convenience for _default_client.use_after()."""
-    return _default_client.use_after(callback)
+    return _get_default_client().use_after(callback)
 
 
 def remove(middleware: Any) -> bool:
     """Global convenience for _default_client.remove()."""
-    return _default_client.remove(middleware)
+    return _get_default_client().remove(middleware)
 
 
 def discover() -> int:
     """Global convenience for _default_client.discover()."""
-    return _default_client.discover()
+    return _get_default_client().discover()
 
 
 def list_modules(tags: list[str] | None = None, prefix: str | None = None) -> list[str]:
     """Global convenience for _default_client.list_modules()."""
-    return _default_client.list_modules(tags=tags, prefix=prefix)
+    return _get_default_client().list_modules(tags=tags, prefix=prefix)
 
 
 def on(event_type: str, handler: Any) -> EventSubscriber:
     """Global convenience for _default_client.on()."""
-    return _default_client.on(event_type, handler)
+    return _get_default_client().on(event_type, handler)
 
 
 def off(subscriber: EventSubscriber) -> None:
     """Global convenience for _default_client.off()."""
-    _default_client.off(subscriber)
+    _get_default_client().off(subscriber)
 
 
 def disable(
     module_id: str, reason: str = "Disabled via APCore client"
 ) -> dict[str, Any]:
     """Global convenience for _default_client.disable()."""
-    return _default_client.disable(module_id, reason)
+    return _get_default_client().disable(module_id, reason)
 
 
 def enable(module_id: str, reason: str = "Enabled via APCore client") -> dict[str, Any]:
     """Global convenience for _default_client.enable()."""
-    return _default_client.enable(module_id, reason)
+    return _get_default_client().enable(module_id, reason)
 
 
 try:
@@ -461,6 +510,7 @@ __all__ = [
     "Registry",
     "Executor",
     "APCore",
+    "close",
     "call",
     "call_async",
     "stream",
