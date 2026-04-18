@@ -484,6 +484,36 @@ class TestEventCallbacks:
         reg.register("test.module", _ValidModule())
         assert order == [1, 2]
 
+    def test_callback_error_increments_metrics_when_collector_wired(self) -> None:
+        """When a MetricsCollector is passed to Registry, callback errors
+        increment apcore.registry.callback_errors with event/module_id/error_type labels."""
+        from apcore.observability.metrics import MetricsCollector
+
+        metrics = MetricsCollector()
+        reg = Registry(metrics_collector=metrics)
+
+        def bad_cb(mid: str, mod: Any) -> None:
+            raise ValueError("callback boom")
+
+        reg.on("register", bad_cb)
+        reg.register("test.module", _ValidModule())
+
+        snap = metrics.snapshot()
+        # Find the counter key matching our labels (label tuple is sorted).
+        matched = [
+            (name, dict(labels), count)
+            for (name, labels), count in snap["counters"].items()
+            if name == "apcore.registry.callback_errors"
+        ]
+        assert len(matched) == 1
+        _, labels, count = matched[0]
+        assert count == 1
+        assert labels == {
+            "event": "register",
+            "module_id": "test.module",
+            "error_type": "ValueError",
+        }
+
 
 # ===== discover() =====
 

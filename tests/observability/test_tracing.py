@@ -168,6 +168,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
         exporter._StatusCode.ERROR = "ERROR_STATUS"
 
@@ -205,6 +206,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
         exporter._StatusCode.ERROR = error_status
 
@@ -230,6 +232,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
 
         span = Span(
@@ -253,6 +256,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
 
         span = Span(
@@ -279,6 +283,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
 
         span = Span(
@@ -301,6 +306,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
 
         span = Span(
@@ -324,6 +330,7 @@ class TestOTLPExporter:
         exporter = object.__new__(OTLPExporter)
         exporter._tracer = mock_tracer
         exporter._provider = MagicMock()
+        exporter._attribute_allowlist = None
         exporter._StatusCode = MagicMock()
 
         span = Span(
@@ -347,6 +354,67 @@ class TestOTLPExporter:
         exporter.shutdown()
 
         exporter._provider.shutdown.assert_called_once()
+
+    def test_attribute_allowlist_drops_non_allowed_keys(self):
+        """When an allowlist is provided, only listed keys are forwarded to OTel."""
+        mock_otel_span = MagicMock()
+        mock_tracer = MagicMock()
+        mock_tracer.start_span.return_value = mock_otel_span
+
+        exporter = object.__new__(OTLPExporter)
+        exporter._tracer = mock_tracer
+        exporter._provider = MagicMock()
+        exporter._StatusCode = MagicMock()
+        exporter._StatusCode.ERROR = "ERROR_STATUS"
+        exporter._attribute_allowlist = frozenset({"module_id"})
+
+        span = Span(
+            trace_id="abc",
+            span_id="def",
+            name="apcore.module.execute",
+            start_time=1.0,
+            end_time=2.0,
+            status="ok",
+            attributes={"module_id": "greet", "user_email": "leak@example.com"},
+        )
+
+        exporter.export(span)
+
+        attr_calls = [call[0] for call in mock_otel_span.set_attribute.call_args_list]
+        # Apcore-owned keys always exported.
+        assert any(k == "apcore.trace_id" for k, _ in attr_calls)
+        # Allowed key exported.
+        assert any(k == "module_id" and v == "greet" for k, v in attr_calls)
+        # Non-allowed key dropped.
+        assert not any(k == "user_email" for k, _ in attr_calls)
+
+    def test_no_allowlist_exports_all_attributes(self):
+        """When no allowlist is set (None), all attributes pass through."""
+        mock_otel_span = MagicMock()
+        mock_tracer = MagicMock()
+        mock_tracer.start_span.return_value = mock_otel_span
+
+        exporter = object.__new__(OTLPExporter)
+        exporter._tracer = mock_tracer
+        exporter._provider = MagicMock()
+        exporter._StatusCode = MagicMock()
+        exporter._attribute_allowlist = None
+
+        span = Span(
+            trace_id="abc",
+            span_id="def",
+            name="apcore.module.execute",
+            start_time=1.0,
+            end_time=2.0,
+            status="ok",
+            attributes={"foo": "bar", "baz": "qux"},
+        )
+
+        exporter.export(span)
+
+        attr_calls = [call[0] for call in mock_otel_span.set_attribute.call_args_list]
+        assert any(k == "foo" for k, _ in attr_calls)
+        assert any(k == "baz" for k, _ in attr_calls)
 
 
 # --- Section 02: TracingMiddleware Tests ---

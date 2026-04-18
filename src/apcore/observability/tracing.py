@@ -111,12 +111,18 @@ class OTLPExporter:
         endpoint: OTLP collector endpoint URL. Defaults to OTel SDK default
             (``http://localhost:4318/v1/traces`` for HTTP).
         service_name: ``service.name`` resource attribute. Defaults to ``"apcore"``.
+        attribute_allowlist: When provided, only span attributes whose key is
+            in this set are exported. Apcore-owned keys (``apcore.trace_id``,
+            ``apcore.span_id``, ``apcore.parent_span_id``) are always exported.
+            Use this to prevent unvetted upstream attributes from leaking PII
+            into the collector backend.
     """
 
     def __init__(
         self,
         endpoint: str | None = None,
         service_name: str = "apcore",
+        attribute_allowlist: set[str] | None = None,
     ) -> None:
         """Initialize OTLPExporter with an OTel TracerProvider and OTLP exporter.
 
@@ -138,6 +144,9 @@ class OTLPExporter:
             ) from None
 
         self._StatusCode = StatusCode
+        self._attribute_allowlist: frozenset[str] | None = (
+            frozenset(attribute_allowlist) if attribute_allowlist is not None else None
+        )
 
         resource = Resource.create({"service.name": service_name})
         self._provider = TracerProvider(resource=resource)
@@ -169,11 +178,14 @@ class OTLPExporter:
 
         # Copy span attributes (only primitive types supported by OTel)
         for key, value in span.attributes.items():
-            if value is not None:
-                if isinstance(value, (str, int, float, bool)):
-                    otel_span.set_attribute(key, value)
-                else:
-                    otel_span.set_attribute(key, str(value))
+            if value is None:
+                continue
+            if self._attribute_allowlist is not None and key not in self._attribute_allowlist:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                otel_span.set_attribute(key, value)
+            else:
+                otel_span.set_attribute(key, str(value))
 
         # Set status
         if span.status == "error":

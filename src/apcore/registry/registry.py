@@ -187,6 +187,7 @@ class Registry:
         extensions_dir: str | None = None,
         extensions_dirs: list[str | dict] | None = None,
         id_map_path: str | None = None,
+        metrics_collector: Any = None,
     ) -> None:
         """Initialize the Registry.
 
@@ -195,6 +196,11 @@ class Registry:
             extensions_dir: Single extensions directory path.
             extensions_dirs: List of extension root configs (mutually exclusive with extensions_dir).
             id_map_path: Path to ID Map YAML file for overriding canonical IDs.
+            metrics_collector: Optional MetricsCollector. When provided, the
+                registry increments ``apcore.registry.callback_errors`` with
+                labels ``{event, module_id, error_type}`` each time an event
+                callback raises, giving ops a per-event error signal beyond
+                the process-local counter exposed by ``get_callback_errors()``.
 
         Raises:
             InvalidInputError: If both extensions_dir and extensions_dirs are specified.
@@ -247,6 +253,7 @@ class Registry:
         self._id_map: dict[str, dict[str, Any]] = {}
         self._schema_cache: dict[str, dict[str, Any]] = {}
         self._config = config
+        self._metrics_collector = metrics_collector
         self._custom_discoverer: Discoverer | None = None
         self._custom_validator: ModuleValidator | None = None
 
@@ -1110,6 +1117,15 @@ class Registry:
                     module_id,
                     e,
                 )
+                if self._metrics_collector is not None:
+                    self._metrics_collector.increment(
+                        "apcore.registry.callback_errors",
+                        {
+                            "event": event,
+                            "module_id": module_id,
+                            "error_type": type(e).__name__,
+                        },
+                    )
 
     def get_callback_errors(self, event: str | None = None) -> dict[str, int] | int:
         """Return callback-exception counts per event.
