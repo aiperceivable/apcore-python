@@ -278,3 +278,68 @@ class TestIntrospection:
             assert "extra" in names
         finally:
             Executor._registered_strategies.pop("extra", None)
+
+
+# ---------------------------------------------------------------------------
+# Regression: skip_to trace ordering (C5)
+# ---------------------------------------------------------------------------
+
+
+class TestSkipToTraceOrdering:
+    """Verify trace ordering when a step returns action='skip_to'.
+
+    The pipeline engine must record the skipping step itself first, then mark
+    any steps between the skipper and the target as skipped, and finally
+    execute the target. Regression for the "is target_idx step recorded
+    twice" class of bugs in pipeline.py PipelineEngine.run.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skip_to_records_skipped_prelude_then_target(self) -> None:
+        class SkipperStep(BaseStep):
+            async def execute(self, ctx: PipelineContext) -> StepResult:
+                return StepResult(action="skip_to", skip_to="target")
+
+        class SkippedStep(BaseStep):
+            called = False
+
+            async def execute(self, ctx: PipelineContext) -> StepResult:
+                type(self).called = True
+                return StepResult(action="continue")
+
+        class TargetStep(BaseStep):
+            called = False
+
+            async def execute(self, ctx: PipelineContext) -> StepResult:
+                type(self).called = True
+                return StepResult(action="continue")
+
+        strategy = ExecutionStrategy(
+            "skip_trace",
+            [
+                SkipperStep("skipper", "Skipper"),
+                SkippedStep("between", "Between"),
+                TargetStep("target", "Target"),
+            ],
+        )
+
+        ctx = PipelineContext(module_id="x.y", inputs={}, context=None)
+        from apcore.pipeline import PipelineEngine
+
+        engine = PipelineEngine()
+        _, trace = await engine.run(strategy, ctx)
+
+        assert TargetStep.called is True
+        assert SkippedStep.called is False  # never executed
+
+        # Trace contains all three steps, in order: skipper, between (skipped), target
+        names = [s.name for s in trace.steps]
+        assert names == ["skipper", "between", "target"]
+
+        # Confirm the between step is flagged as skipped.
+        between = next(s for s in trace.steps if s.name == "between")
+        assert between.skipped is True
+
+        # The target step should NOT be marked skipped — it actually ran.
+        target = next(s for s in trace.steps if s.name == "target")
+        assert target.skipped is False
