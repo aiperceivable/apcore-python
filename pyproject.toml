@@ -40,9 +40,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "pydantic>=2.7",
-    "pyyaml>=6.0",
-    "jsonschema>=4.21",
+    # Upper bounds pin the major so a downstream major release (pydantic 3,
+    # pyyaml 7, jsonschema 5) does not silently break installs. Raise the
+    # upper bound deliberately after a compatibility check rather than
+    # absorbing breakage from `pip install --upgrade`.
+    "pydantic>=2.7,<3",
+    "pyyaml>=6.0,<7",
+    "jsonschema>=4.21,<5",
 ]
 
 [project.urls]

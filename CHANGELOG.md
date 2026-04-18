@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- **`DependencyNotFoundError`** (error code `DEPENDENCY_NOT_FOUND`) — raised by `resolve_dependencies` when a module's required dependency is not registered. Aligns Python with PROTOCOL_SPEC §5.15.2, which has always mandated this error code. Details include `module_id` and `dependency_id`. Exported from `apcore`.
+- **`DependencyVersionMismatchError`** (error code `DEPENDENCY_VERSION_MISMATCH`) — raised by `resolve_dependencies` when a declared `version` constraint is not satisfied by the registered version of the target module. Details include `module_id`, `dependency_id`, `required`, `actual`. Exported from `apcore`.
+- **`TaskLimitExceededError`** (error code `TASK_LIMIT_EXCEEDED`) — raised by `AsyncTaskManager.submit` when the manager is at capacity. Replaces the previous untyped `RuntimeError` and makes the failure dispatchable via `error.code` across language SDKs. Retryable=True.
+- **`VersionConstraintError`** (error code `VERSION_CONSTRAINT_INVALID`) — raised by `matches_version_hint` / `VersionedStore` callers on malformed constraint strings (empty, operator-without-operand, non-digit-leading operand such as `"v1.0"` or `"latest"`). Previously, malformed constraints silently degraded to `(0,0,0)` comparisons that always passed.
+- **`resolve_dependencies(..., module_versions=...)`** — new optional keyword argument mapping `module_id → version_string`. When provided, declared dependency version constraints are enforced per PROTOCOL_SPEC §5.3. When absent, the `DependencyInfo.version` field is silently ignored (back-compat for callers that do not wire versions through yet). `ModuleRegistry._resolve_load_order` now populates this map from YAML version / class `version` attr / `DEFAULT_MODULE_VERSION` (`"1.0.0"`) fallback, and includes already-registered modules (from `_versioned_modules`) so inter-batch constraints resolve against the live registry's multi-version state — not just the latest-only primary map.
+- **Caret (`^`) and tilde (`~`) constraint support** in `matches_version_hint` / `select_best_version` (npm/Cargo semantics): `^1.2.3 → >=1.2.3,<2.0.0`, `^0.2.3 → >=0.2.3,<0.3.0`, `^0.0.3 → >=0.0.3,<0.0.4`, `~1.2.3 → >=1.2.3,<1.3.0`, `~1.2 → >=1.2.0,<1.3.0`, `~1 → >=1.0.0,<2.0.0`.
+- **`apcore.registry.registry.DEFAULT_MODULE_VERSION`** constant (`"1.0.0"`) — canonical default applied by every registration path (`register`, `_register_in_order`, `ModuleDescriptor.version` fallback) for modules without an explicit `version=` argument or `version` class/instance attribute.
+- **`ExecutorProtocol`** — Protocol describing the minimal async-call surface required by `AsyncTaskManager`. Concrete `Executor` still satisfies it. Decouples the task manager from the concrete executor for testing.
+- **`Executor.close()`** plus sync (`__enter__` / `__exit__`) and async (`__aenter__` / `__aexit__`) context-manager support — releases the cached `_sync_loop` deterministically. Long-lived singleton executors can continue to ignore this; short-lived executors (per-request, per-test) should call `close()` or use `with Executor(...) as executor:`.
+- **`Registry.get_callback_errors(event=None)`** — public accessor returning the per-event callback-exception count recorded by `_trigger_event`. Ops can watch these counters to spot misbehaving subscribers. Event-callback exceptions remain logged + suppressed so the registry's register/unregister contract stays crash-free.
+
+### Fixed
+
+- **`resolve_dependencies` cycle path accuracy** — `_extract_cycle` previously returned a phantom path (all remaining nodes plus the first one re-appended) when the arbitrarily-picked start node had no outgoing edge inside `remaining`. Rewritten to DFS from each remaining node (sorted) and return a true back-edge cycle `[n0, ..., nk, n0]`. When no back-edge exists (e.g., Kahn's sort stalled on a non-cycle blocker), the resolver now raises `ModuleLoadError` naming the blocked modules instead of emitting a `CircularDependencyError` with a phantom `sorted(remaining)` path.
+- **`Registry._register_in_order` populates `_versioned_modules` and `_versioned_meta`** — discover()-path modules were previously written only to the latest-only `_modules` map, leaving `Registry.get(id, version_hint=…)` unable to resolve them (version-hint queries route through the versioned store first). All registration paths now produce equivalent state.
+- **Default version alignment** — `Registry.register()` with no `version=` now falls back to `DEFAULT_MODULE_VERSION` (`"1.0.0"`), matching `_resolve_load_order` and `ModuleDescriptor.version`. Previously `register()` used `"0.0.0"` while `_resolve_load_order` used `"1.0.0"` — the same module routed through the two paths got different effective versions.
+- **Non-string versions warn-and-coerce** — a module with `version: 1` in YAML (integer) or a numeric class attribute is no longer silently dropped from constraint enforcement. The resolver logs a WARN naming the module and coerces via `str(...)`.
+- **Malformed version constraints raise `VersionConstraintError`** — previously `">=not_a_version"`, `"v1.0"`, and `"~"` alone passed `_CONSTRAINT_RE` and degraded to `(0,0,0)` comparisons that always returned True. The constraint regex now requires a digit-leading operand, and `_check_single_constraint` raises explicitly on malformed input.
+- **Scanner confines `follow_symlinks=True` to the extension root** — symlinks whose real path escapes the root (e.g., into `/etc`, `$HOME`, a sibling project) are now refused with a WARN log. The previous code would walk any target once per real-path visit. Combined with a WARN log on the first discover() when `follow_symlinks=True` is configured, this makes the trust boundary visible.
+- **`Executor._run_in_new_thread` bounds `thread.join()` by `_global_timeout`** — a dead-locked coroutine can no longer indefinitely hang the sync caller. On timeout the daemon thread is left running (process exit stays clean) and the caller receives a `ModuleTimeoutError`.
+- **`Executor.stream` post-stream validation failures log at WARNING (not DEBUG)** — unvalidated output that already reached the consumer is worth investigating even if it can't be un-sent. Previously such failures were invisible in default production observability.
+- **`AsyncTaskManager.cancel` narrows its `except`** — catches `asyncio.CancelledError` specifically (the expected cancellation path). Unexpected exceptions from the cancelled task are now logged at WARNING with a stack trace instead of being silently swallowed alongside CancelledError.
+- **`errors.py __all__`** — adds `DependencyNotFoundError`, `DependencyVersionMismatchError`, `TaskLimitExceededError`, `VersionConstraintError`. `from apcore.errors import *` now picks them up.
+- **Inline `__import__('time')` / `__import__('os')`** in `_ModuleChangeHandler` replaced with top-level imports. No behavior change.
+
+### Changed (BREAKING)
+
+- **Missing required dependencies now raise `DependencyNotFoundError` (code `DEPENDENCY_NOT_FOUND`) instead of `ModuleLoadError` (code `MODULE_LOAD_ERROR`).** Brings Python into compliance with PROTOCOL_SPEC §5.15.2 which has always mandated `DEPENDENCY_NOT_FOUND`. Upgrade path: catch `DependencyNotFoundError` specifically, or catch the `ModuleError` base class for any dependency-related failure. The error-code-based dispatch (via `ErrorCodes.DEPENDENCY_NOT_FOUND`) also works and is recommended for cross-language consumers.
+- **`AsyncTaskManager.submit` now raises `TaskLimitExceededError`, not `RuntimeError`.** Callers catching `RuntimeError("Task limit reached …")` must migrate to `except TaskLimitExceededError:` (or catch `ModuleError` for any task-manager failure).
+- **`Registry.register()` default version is now `"1.0.0"` instead of `"0.0.0"`** for modules registered without an explicit `version=` argument and without a class/instance `version` attribute. Callers that relied on `"0.0.0"` as an "unset" marker must pass `version="0.0.0"` explicitly. `ModuleDescriptor.version` has always defaulted to `"1.0.0"` — this aligns the internal state with the externally-visible view.
+- **Malformed version constraint strings now raise `VersionConstraintError`** instead of silently evaluating to False (which, via the degraded-parse-semver path, effectively became True). Callers that relied on silent no-op behavior must wrap in try/except or sanitize upstream.
+- **Dependency upper bounds** — `pydantic`, `pyyaml`, and `jsonschema` are now pinned to `<3`, `<7`, `<5` respectively. Prevents silent breakage from downstream major releases; raise the cap deliberately after a compatibility check.
+
+
 ## [0.19.0] - 2026-04-17
 
 ### Added

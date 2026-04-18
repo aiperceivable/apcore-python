@@ -71,15 +71,22 @@ def _trace_to_checks(trace: PipelineTrace) -> list[PreflightCheckResult]:
         passed = st.result.action != "abort"
         error = None
         if not passed and st.result.explanation:
-            error = {"code": f"STEP_{st.name.upper()}_FAILED", "message": st.result.explanation}
-        checks.append(PreflightCheckResult(check=check_name, passed=passed, error=error))
+            error = {
+                "code": f"STEP_{st.name.upper()}_FAILED",
+                "message": st.result.explanation,
+            }
+        checks.append(
+            PreflightCheckResult(check=check_name, passed=passed, error=error)
+        )
     return checks
 
 
 _MAX_MERGE_DEPTH = 32
 
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any], *, _depth: int = 0) -> None:
+def _deep_merge(
+    base: dict[str, Any], override: dict[str, Any], *, _depth: int = 0
+) -> None:
     """Recursively merge *override* into *base* in-place.
 
     Nested dicts are merged recursively; all other values (including lists)
@@ -163,13 +170,29 @@ class Executor:
 
         if config is not None:
             val = config.get("executor.default_timeout")
-            self._default_timeout: int = val if val is not None else Config.get_default("executor.default_timeout")
+            self._default_timeout: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.default_timeout")
+            )
             val = config.get("executor.global_timeout")
-            self._global_timeout: int = val if val is not None else Config.get_default("executor.global_timeout")
+            self._global_timeout: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.global_timeout")
+            )
             val = config.get("executor.max_call_depth")
-            self._max_call_depth: int = val if val is not None else Config.get_default("executor.max_call_depth")
+            self._max_call_depth: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.max_call_depth")
+            )
             val = config.get("executor.max_module_repeat")
-            self._max_module_repeat: int = val if val is not None else Config.get_default("executor.max_module_repeat")
+            self._max_module_repeat: int = (
+                val
+                if val is not None
+                else Config.get_default("executor.max_module_repeat")
+            )
         else:
             self._default_timeout = Config.get_default("executor.default_timeout")
             self._global_timeout = Config.get_default("executor.global_timeout")
@@ -181,7 +204,10 @@ class Executor:
                 message=f"Negative default_timeout: {self._default_timeout}",
             )
 
-        # Cached event loop for sync call() to avoid asyncio.run() overhead
+        # Cached event loop for sync call() to avoid asyncio.run() overhead.
+        # Callers that create many short-lived Executors should call
+        # close() (or use the `async with` context-manager form) so the loop
+        # is released deterministically rather than waiting for the GC finalizer.
         self._sync_loop: asyncio.AbstractEventLoop | None = None
 
     @classmethod
@@ -288,6 +314,34 @@ class Executor:
         """Remove middleware by identity. Returns True if found and removed."""
         return self._middleware_manager.remove(middleware)
 
+    def close(self) -> None:
+        """Release the cached sync event loop, if any.
+
+        Safe to call multiple times. After ``close()``, a subsequent sync
+        ``call()`` will lazily create a fresh loop — this method is the
+        explicit teardown hook for short-lived Executors; long-lived
+        singletons typically never call it.
+        """
+        loop = self._sync_loop
+        self._sync_loop = None
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.close()
+            except Exception as e:
+                _logger.warning("Executor._sync_loop.close() raised: %s", e)
+
+    def __enter__(self) -> Executor:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Executor:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
     def call(
         self,
         module_id: str,
@@ -380,7 +434,9 @@ class Executor:
             self._validate_module_id(module_id)
             checks.append(PreflightCheckResult(check="module_id", passed=True))
         except InvalidInputError as e:
-            checks.append(PreflightCheckResult(check="module_id", passed=False, error=e.to_dict()))
+            checks.append(
+                PreflightCheckResult(check="module_id", passed=False, error=e.to_dict())
+            )
             return PreflightResult(valid=False, checks=checks)
 
         # Run pipeline in dry_run mode — pure=False steps are skipped
@@ -414,12 +470,18 @@ class Executor:
                 check_name = "acl"
             elif code in ("SCHEMA_VALIDATION_ERROR", "INVALID_INPUT"):
                 check_name = "schema"
-            elif code in ("CALL_DEPTH_EXCEEDED", "CIRCULAR_CALL", "CALL_FREQUENCY_EXCEEDED"):
+            elif code in (
+                "CALL_DEPTH_EXCEEDED",
+                "CIRCULAR_CALL",
+                "CALL_FREQUENCY_EXCEEDED",
+            ):
                 check_name = "call_chain"
             else:
                 check_name = "unknown"
 
-            checks.append(PreflightCheckResult(check=check_name, passed=False, error=error_dict))
+            checks.append(
+                PreflightCheckResult(check=check_name, passed=False, error=error_dict)
+            )
 
         # Convert pipeline trace to PreflightResult checks
         if trace is not None:
@@ -444,10 +506,16 @@ class Executor:
                 preflight_warnings = pipe_ctx.module.preflight(inputs, pipe_ctx.context)
                 if isinstance(preflight_warnings, list) and preflight_warnings:
                     checks.append(
-                        PreflightCheckResult(check="module_preflight", passed=True, warnings=preflight_warnings)
+                        PreflightCheckResult(
+                            check="module_preflight",
+                            passed=True,
+                            warnings=preflight_warnings,
+                        )
                     )
                 else:
-                    checks.append(PreflightCheckResult(check="module_preflight", passed=True))
+                    checks.append(
+                        PreflightCheckResult(check="module_preflight", passed=True)
+                    )
             except Exception as exc:
                 checks.append(
                     PreflightCheckResult(
@@ -458,7 +526,9 @@ class Executor:
                 )
 
         valid = all(c.passed for c in checks)
-        return PreflightResult(valid=valid, checks=checks, requires_approval=requires_approval)
+        return PreflightResult(
+            valid=valid, checks=checks, requires_approval=requires_approval
+        )
 
     @staticmethod
     def _validate_module_id(module_id: str) -> None:
@@ -478,7 +548,9 @@ class Executor:
 
         if step == "module_lookup" and "not found" in explanation.lower():
             # Extract module_id from explanation
-            return ModuleNotFoundError(module_id=explanation.split(": ")[-1] if ": " in explanation else "")
+            return ModuleNotFoundError(
+                module_id=explanation.split(": ")[-1] if ": " in explanation else ""
+            )
         if step == "acl_check" and "denied" in explanation.lower():
             # Parse "Access denied: {caller} -> {target}" from BuiltinACLCheck
             caller_id = ""
@@ -511,8 +583,20 @@ class Executor:
         # Fallback: return as ModuleError
         return ModuleError(code="PIPELINE_ABORT", message=explanation)
 
-    def _run_in_new_thread(self, coro: Any, module_id: str, timeout_s: float | None) -> Any:
-        """Run coroutine in a new thread with its own event loop."""
+    def _run_in_new_thread(
+        self, coro: Any, module_id: str, timeout_s: float | None
+    ) -> Any:
+        """Run coroutine in a new thread with its own event loop.
+
+        Bounds the outer ``thread.join()`` by ``self._global_timeout`` (ms) so a
+        dead-locked coroutine cannot indefinitely hang the sync caller. The
+        daemon thread is left running (process exit remains clean); the caller
+        receives ``ModuleTimeoutError`` naming the module that blocked.
+
+        The per-call ``timeout_s`` still applies inside the thread via
+        ``asyncio.wait_for``; the outer bound is a strictly-looser safety
+        net for the case where the coroutine swallows cancellation.
+        """
         result_holder: dict[str, Any] = {}
         exception_holder: dict[str, Exception] = {}
 
@@ -521,7 +605,9 @@ class Executor:
             asyncio.set_event_loop(loop)
             try:
                 if timeout_s is not None:
-                    result_holder["output"] = loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout_s))
+                    result_holder["output"] = loop.run_until_complete(
+                        asyncio.wait_for(coro, timeout=timeout_s)
+                    )
                 else:
                     result_holder["output"] = loop.run_until_complete(coro)
             except asyncio.TimeoutError:
@@ -535,7 +621,13 @@ class Executor:
 
         thread = threading.Thread(target=thread_target, daemon=True)
         thread.start()
-        thread.join()
+        outer_budget_s = max(self._global_timeout, self._default_timeout) / 1000.0 + 1.0
+        thread.join(timeout=outer_budget_s)
+        if thread.is_alive():
+            raise ModuleTimeoutError(
+                module_id=module_id,
+                timeout_ms=int(outer_budget_s * 1000),
+            )
 
         if "error" in exception_holder:
             raise exception_holder["error"]
@@ -670,18 +762,23 @@ class Executor:
         # Phase 3: Output validation + middleware_after on accumulated result
         pipe_ctx.output = accumulated
         post_steps = [
-            s for s in self._strategy.steps if s.name in ("output_validation", "middleware_after", "return_result")
+            s
+            for s in self._strategy.steps
+            if s.name in ("output_validation", "middleware_after", "return_result")
         ]
         if post_steps:
             post_strategy = ExecutionStrategy("post_stream", post_steps)
             try:
                 await self._pipeline_engine.run(post_strategy, pipe_ctx)
             except Exception:
-                # Non-fatal: chunks have already been yielded to the caller,
+                # Non-fatal for the caller: chunks have already been yielded,
                 # so a failed post-stream validation/middleware run cannot
-                # change the observable output. Log at DEBUG so the failure
-                # is still discoverable when investigating bad streams.
-                _logger.debug(
+                # retroactively change the observable output. Logged at
+                # WARNING (not DEBUG) so the failure is visible in default
+                # production observability — unvalidated output that reached
+                # a consumer is worth investigating even if it can't be
+                # un-sent.
+                _logger.warning(
                     "Post-stream validation/middleware failed for module %s",
                     module_id,
                     exc_info=True,
@@ -817,7 +914,9 @@ class Executor:
             # should use ``call_async`` (which discards the trace) or attach
             # a tracing middleware.
             recovery = await self._recover_from_call_error(exc, pipe_ctx, module_id)
-            return recovery, PipelineTrace(module_id=module_id, strategy_name=effective_strategy.name)
+            return recovery, PipelineTrace(
+                module_id=module_id, strategy_name=effective_strategy.name
+            )
 
     def _effective_strategy(
         self,

@@ -89,7 +89,9 @@ class TestTaskStatusTransitions:
     """Submit task and verify PENDING -> RUNNING -> COMPLETED."""
 
     @pytest.mark.asyncio
-    async def test_submit_completes_successfully(self, manager: AsyncTaskManager) -> None:
+    async def test_submit_completes_successfully(
+        self, manager: AsyncTaskManager
+    ) -> None:
         task_id = await manager.submit("test.simple", {"x": 42})
 
         # Task should exist immediately after submit
@@ -216,12 +218,16 @@ class TestGetResult:
         result = manager.get_result(task_id)
         assert result == {"value": 99}
 
-    def test_get_result_raises_for_unknown_task(self, manager: AsyncTaskManager) -> None:
+    def test_get_result_raises_for_unknown_task(
+        self, manager: AsyncTaskManager
+    ) -> None:
         with pytest.raises(KeyError, match="Task not found"):
             manager.get_result("no-such-task")
 
     @pytest.mark.asyncio
-    async def test_get_result_raises_for_pending_task(self, manager: AsyncTaskManager) -> None:
+    async def test_get_result_raises_for_pending_task(
+        self, manager: AsyncTaskManager
+    ) -> None:
         # Submit a slow task so it stays in PENDING/RUNNING
         task_id = await manager.submit("test.slow", {"delay": 10.0})
 
@@ -273,7 +279,9 @@ class TestCleanup:
         assert manager.get_status(task_id) is None
 
     @pytest.mark.asyncio
-    async def test_cleanup_preserves_recent_tasks(self, manager: AsyncTaskManager) -> None:
+    async def test_cleanup_preserves_recent_tasks(
+        self, manager: AsyncTaskManager
+    ) -> None:
         await manager.submit("test.simple", {"x": 1})
         await asyncio.sleep(0.1)
 
@@ -283,7 +291,9 @@ class TestCleanup:
         assert len(manager.list_tasks()) == 1
 
     @pytest.mark.asyncio
-    async def test_cleanup_preserves_running_tasks(self, manager: AsyncTaskManager) -> None:
+    async def test_cleanup_preserves_running_tasks(
+        self, manager: AsyncTaskManager
+    ) -> None:
         task_id = await manager.submit("test.slow", {"delay": 10.0})
         await asyncio.sleep(0.1)
 
@@ -335,18 +345,22 @@ class TestTaskStatusEnum:
 
 
 class TestMaxTasksLimit:
-    """submit() raises RuntimeError when task limit is reached."""
+    """submit() raises TaskLimitExceededError when task limit is reached."""
 
     @pytest.mark.asyncio
     async def test_submit_exceeds_max_tasks(self, executor: Executor) -> None:
+        from apcore.errors import TaskLimitExceededError
+
         max_tasks = 3
         mgr = AsyncTaskManager(executor, max_concurrent=10, max_tasks=max_tasks)
 
         for _ in range(max_tasks):
             await mgr.submit("test.simple", {"x": 1})
 
-        with pytest.raises(RuntimeError, match="Task limit reached"):
+        with pytest.raises(TaskLimitExceededError) as exc_info:
             await mgr.submit("test.simple", {"x": 1})
+        assert exc_info.value.code == "TASK_LIMIT_EXCEEDED"
+        assert exc_info.value.details["max_tasks"] == max_tasks
 
     @pytest.mark.asyncio
     async def test_submit_at_limit_after_cleanup(self, executor: Executor) -> None:

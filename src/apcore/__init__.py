@@ -87,6 +87,8 @@ from apcore.errors import (
     ConfigNamespaceDuplicateError,
     ConfigNamespaceReservedError,
     ConfigNotFoundError,
+    DependencyNotFoundError,
+    DependencyVersionMismatchError,
     ErrorCodeCollisionError,
     ErrorCodeRegistry,
     ErrorCodes,
@@ -107,6 +109,8 @@ from apcore.errors import (
     SchemaNotFoundError,
     SchemaParseError,
     SchemaValidationError,
+    TaskLimitExceededError,
+    VersionConstraintError,
 )
 
 # ACL
@@ -158,9 +162,13 @@ from apcore.version import negotiate_version as negotiate_version
 from apcore.utils import match_pattern as match_pattern
 from apcore.utils.call_chain import guard_call_chain as guard_call_chain
 from apcore.utils.call_chain import DEFAULT_MAX_CALL_DEPTH as DEFAULT_MAX_CALL_DEPTH
-from apcore.utils.call_chain import DEFAULT_MAX_MODULE_REPEAT as DEFAULT_MAX_MODULE_REPEAT
+from apcore.utils.call_chain import (
+    DEFAULT_MAX_MODULE_REPEAT as DEFAULT_MAX_MODULE_REPEAT,
+)
 from apcore.utils.error_propagation import propagate_error as propagate_error
-from apcore.utils.normalize import normalize_to_canonical_id as normalize_to_canonical_id
+from apcore.utils.normalize import (
+    normalize_to_canonical_id as normalize_to_canonical_id,
+)
 from apcore.utils.pattern import calculate_specificity as calculate_specificity
 
 # Observability
@@ -187,7 +195,13 @@ from apcore.observability.metrics import (
 )
 
 # Events
-from apcore.events import A2ASubscriber, ApCoreEvent, EventEmitter, EventSubscriber, WebhookSubscriber
+from apcore.events import (
+    A2ASubscriber,
+    ApCoreEvent,
+    EventEmitter,
+    EventSubscriber,
+    WebhookSubscriber,
+)
 
 # Pipeline
 from apcore.pipeline import (
@@ -295,7 +309,9 @@ async def call_async(
     version_hint: str | None = None,
 ) -> dict[str, Any]:
     """Global convenience for _default_client.call_async()."""
-    return await _default_client.call_async(module_id, inputs, context, version_hint=version_hint)
+    return await _default_client.call_async(
+        module_id, inputs, context, version_hint=version_hint
+    )
 
 
 def module(
@@ -348,11 +364,15 @@ async def stream(
     version_hint: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Global convenience for _default_client.stream()."""
-    async for chunk in _default_client.stream(module_id, inputs, context, version_hint=version_hint):
+    async for chunk in _default_client.stream(
+        module_id, inputs, context, version_hint=version_hint
+    ):
         yield chunk
 
 
-def validate(module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None) -> PreflightResult:
+def validate(
+    module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None
+) -> PreflightResult:
     """Global convenience for _default_client.validate()."""
     return _default_client.validate(module_id, inputs, context)
 
@@ -407,7 +427,9 @@ def off(subscriber: EventSubscriber) -> None:
     _default_client.off(subscriber)
 
 
-def disable(module_id: str, reason: str = "Disabled via APCore client") -> dict[str, Any]:
+def disable(
+    module_id: str, reason: str = "Disabled via APCore client"
+) -> dict[str, Any]:
     """Global convenience for _default_client.disable()."""
     return _default_client.disable(module_id, reason)
 
@@ -519,6 +541,8 @@ __all__ = [
     "ConfigNamespaceDuplicateError",
     "ConfigNamespaceReservedError",
     "ConfigNotFoundError",
+    "DependencyNotFoundError",
+    "DependencyVersionMismatchError",
     "ErrorFormatterDuplicateError",
     "ErrorCodeCollisionError",
     "ErrorCodeRegistry",
@@ -537,6 +561,8 @@ __all__ = [
     "SchemaNotFoundError",
     "SchemaParseError",
     "SchemaValidationError",
+    "TaskLimitExceededError",
+    "VersionConstraintError",
     # ACL
     "ACL",
     "ACLRule",

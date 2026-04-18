@@ -8,12 +8,31 @@ import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from apcore.context import Context
-from apcore.executor import Executor
+from apcore.errors import TaskLimitExceededError
 
-__all__ = ["TaskStatus", "TaskInfo", "AsyncTaskManager"]
+__all__ = ["TaskStatus", "TaskInfo", "AsyncTaskManager", "ExecutorProtocol"]
+
+
+@runtime_checkable
+class ExecutorProtocol(Protocol):
+    """Minimal async-call surface required by :class:`AsyncTaskManager`.
+
+    Provided as a ``Protocol`` so tests can inject a lightweight fake
+    without constructing a full :class:`apcore.executor.Executor`. The
+    concrete ``Executor`` satisfies this protocol via ``call_async``.
+    """
+
+    async def call_async(
+        self,
+        module_id: str,
+        inputs: dict[str, Any] | None = None,
+        context: Context | None = None,
+        version_hint: str | None = None,
+    ) -> dict[str, Any]: ...
+
 
 _logger = logging.getLogger(__name__)
 
@@ -50,7 +69,7 @@ class AsyncTaskManager:
 
     def __init__(
         self,
-        executor: Executor,
+        executor: ExecutorProtocol,
         max_concurrent: int = 10,
         max_tasks: int = 1000,
     ) -> None:
@@ -80,7 +99,7 @@ class AsyncTaskManager:
             The generated task_id (UUID4 string).
         """
         if len(self._tasks) >= self._max_tasks:
-            raise RuntimeError(f"Task limit reached ({self._max_tasks})")
+            raise TaskLimitExceededError(max_tasks=self._max_tasks)
 
         task_id = str(uuid.uuid4())
         info = TaskInfo(
@@ -112,7 +131,9 @@ class AsyncTaskManager:
         if info is None:
             raise KeyError(f"Task not found: {task_id}")
         if info.status != TaskStatus.COMPLETED:
-            raise RuntimeError(f"Task {task_id} is not completed (status={info.status.value})")
+            raise RuntimeError(
+                f"Task {task_id} is not completed (status={info.status.value})"
+            )
         return info.result
 
     async def cancel(self, task_id: str) -> bool:
@@ -137,8 +158,20 @@ class AsyncTaskManager:
         async_task.cancel()
         try:
             await async_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            # Expected outcome of cooperative cancellation.
             pass
+        except Exception as exc:
+            # Unexpected failure from the task body (e.g., user code raised a
+            # non-CancelledError exception during cleanup). Log at WARNING
+            # with stack context — callers chose to cancel, so we must not
+            # re-raise, but silently swallowing would hide real bugs.
+            _logger.warning(
+                "Task %s raised while being cancelled: %s",
+                task_id,
+                exc,
+                exc_info=True,
+            )
 
         # Status may have been updated by _run; force CANCELLED if still active
         if info.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
@@ -173,7 +206,11 @@ class AsyncTaskManager:
         for task_id, info in self._tasks.items():
             if info.status not in terminal:
                 continue
-            ref_time = info.completed_at if info.completed_at is not None else info.submitted_at
+            ref_time = (
+                info.completed_at
+                if info.completed_at is not None
+                else info.submitted_at
+            )
             if now - ref_time >= max_age_seconds:
                 to_remove.append(task_id)
 

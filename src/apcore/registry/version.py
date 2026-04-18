@@ -6,6 +6,8 @@ import re
 import threading
 from typing import Generic, TypeVar
 
+from apcore.errors import VersionConstraintError
+
 __all__ = [
     "parse_semver",
     "matches_version_hint",
@@ -16,13 +18,18 @@ __all__ = [
 T = TypeVar("T")
 
 _SEMVER_RE = re.compile(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?")
-_CONSTRAINT_RE = re.compile(r"^(>=|<=|>|<|=)?(.+)$")
+# Operand must start with a digit — rejects "v1.0", "not_a_version", a bare
+# operator with no operand, or empty input. Prevents malformed constraints
+# from silently degrading to (0,0,0) comparisons that always pass.
+_CONSTRAINT_RE = re.compile(r"^(>=|<=|>|<|\^|~|=)?(\d[\w.\-+]*)$")
 
 
 def parse_semver(version: str) -> tuple[int, int, int]:
     """Parse a version string into a (major, minor, patch) tuple.
 
     Supports full semver (1.2.3), major.minor (1.2), and major-only (1).
+    Returns (0, 0, 0) for unparseable input — callers that need strictness
+    (e.g., ``_check_single_constraint``) validate first via the regex.
     """
     m = _SEMVER_RE.match(version.strip())
     if m is None:
@@ -33,18 +40,74 @@ def parse_semver(version: str) -> tuple[int, int, int]:
     return (major, minor, patch)
 
 
-def _check_single_constraint(version_tuple: tuple[int, int, int], constraint: str) -> bool:
-    """Check a single constraint like '>=1.0.0', '<2.0.0', or '1.0.0' (exact)."""
+def _caret_upper_bound(target: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Compute the exclusive upper bound for a caret (^) constraint.
+
+    npm/Cargo semantics:
+      ^1.2.3 -> <2.0.0     (bump major, zero out rest)
+      ^0.2.3 -> <0.3.0     (bump minor when major is 0)
+      ^0.0.3 -> <0.0.4     (bump patch when major and minor are 0)
+    """
+    major, minor, patch = target
+    if major > 0:
+        return (major + 1, 0, 0)
+    if minor > 0:
+        return (0, minor + 1, 0)
+    return (0, 0, patch + 1)
+
+
+def _tilde_upper_bound(
+    target: tuple[int, int, int],
+    part_count: int,
+) -> tuple[int, int, int]:
+    """Compute the exclusive upper bound for a tilde (~) constraint.
+
+    npm semantics (based on how many version components were supplied):
+      ~1.2.3 -> <1.3.0     (3 parts: allow patch bumps)
+      ~1.2   -> <1.3.0     (2 parts: allow patch bumps)
+      ~1     -> <2.0.0     (1 part: allow minor + patch bumps)
+    """
+    major, minor, _ = target
+    if part_count >= 2:
+        return (major, minor + 1, 0)
+    return (major + 1, 0, 0)
+
+
+def _check_single_constraint(
+    version_tuple: tuple[int, int, int], constraint: str
+) -> bool:
+    """Check a single constraint against a version tuple.
+
+    Supported operators: `=`, `>=`, `>`, `<=`, `<`, `^`, `~`. When no operator is
+    supplied, the constraint is treated as an exact match (with partial-version
+    shortcuts: `"1"` matches any `1.x.x`, `"1.2"` matches any `1.2.x`).
+
+    Raises:
+        VersionConstraintError: If the constraint is malformed (empty,
+            operator-without-operand, non-digit-leading operand). Callers
+            that want soft-failure can catch and handle.
+    """
     constraint = constraint.strip()
+    if not constraint:
+        raise VersionConstraintError(constraint="", reason="empty constraint")
     m = _CONSTRAINT_RE.match(constraint)
     if m is None:
-        return False
+        raise VersionConstraintError(
+            constraint=constraint,
+            reason="operand must start with a digit (e.g., '1.2.3', not 'v1.2.3' or 'latest')",
+        )
     op = m.group(1) or "="
     target = parse_semver(m.group(2))
-
-    # Partial match: if constraint is just a major number (e.g. "1"),
-    # match any version with the same major
     parts = m.group(2).strip().split(".")
+
+    if op == "^":
+        upper = _caret_upper_bound(target)
+        return target <= version_tuple < upper
+    if op == "~":
+        upper = _tilde_upper_bound(target, len(parts))
+        return target <= version_tuple < upper
+
+    # Partial match for bare versions: "1" matches 1.x.x, "1.2" matches 1.2.x
     if op == "=" and len(parts) == 1:
         return version_tuple[0] == target[0]
     if op == "=" and len(parts) == 2:
@@ -77,7 +140,9 @@ def matches_version_hint(version: str, hint: str) -> bool:
     return all(_check_single_constraint(version_tuple, c) for c in constraints)
 
 
-def select_best_version(versions: list[str], version_hint: str | None = None) -> str | None:
+def select_best_version(
+    versions: list[str], version_hint: str | None = None
+) -> str | None:
     """Select the best matching version from a list.
 
     If version_hint is None, returns the latest (highest) version.

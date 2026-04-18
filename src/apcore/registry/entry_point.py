@@ -39,7 +39,22 @@ def _is_module_class(cls: type, loaded_module_name: str) -> bool:
 
 
 def _import_module_from_file(file_path: Path) -> Any:
-    """Dynamically import a Python file and return the loaded module object."""
+    """Dynamically import a Python file and return the loaded module object.
+
+    .. warning::
+        **Trust boundary.** This function executes arbitrary Python code from
+        ``file_path`` via ``spec.loader.exec_module``. Operators must treat
+        ``extensions_root`` (the directory the scanner walks) as an execution
+        privilege — anything placed there runs with full Python permissions.
+        Recommended hardening:
+
+        - Keep ``follow_symlinks=False`` (the default) unless extension paths
+          are fully under team control.
+        - Restrict write access to the extensions directory to the same
+          principals that can deploy code.
+        - If extensions come from untrusted sources, run the framework in a
+          sandbox (container, separate UID, seccomp).
+    """
     module_name = f"apcore_ext_{file_path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, str(file_path))
     if spec is None or spec.loader is None:
@@ -52,7 +67,9 @@ def _import_module_from_file(file_path: Path) -> Any:
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:
-        raise ModuleLoadError(module_id=str(file_path), reason=f"Failed to import module: {exc}") from exc
+        raise ModuleLoadError(
+            module_id=str(file_path), reason=f"Failed to import module: {exc}"
+        ) from exc
     return mod
 
 
@@ -77,13 +94,17 @@ def resolve_entry_point(file_path: Path, meta: dict[str, Any] | None = None) -> 
 
     # Auto-infer mode
     candidates = [
-        cls for _, cls in inspect.getmembers(loaded, inspect.isclass) if _is_module_class(cls, loaded.__name__)
+        cls
+        for _, cls in inspect.getmembers(loaded, inspect.isclass)
+        if _is_module_class(cls, loaded.__name__)
     ]
 
     if len(candidates) == 1:
         return candidates[0]
     elif len(candidates) == 0:
-        raise ModuleLoadError(module_id=str(file_path), reason="No Module subclass found in file")
+        raise ModuleLoadError(
+            module_id=str(file_path), reason="No Module subclass found in file"
+        )
     else:
         raise ModuleLoadError(
             module_id=str(file_path),

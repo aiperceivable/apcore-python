@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, runtime_checkable
@@ -106,13 +108,24 @@ class ModuleValidator(Protocol):
 
 MAX_MODULE_ID_LENGTH = 192
 
-RESERVED_WORDS = frozenset({"system", "internal", "core", "apcore", "plugin", "schema", "acl"})
+# Default version applied to modules registered (manually or via discover()) without
+# an explicit `version=` argument or `version` class/instance attribute. Aligned
+# across `Registry.register`, `_resolve_load_order`, `_register_in_order`, and
+# `ModuleDescriptor.version` default so all registration paths produce
+# equivalent state. Changing this is a BREAKING change — callers relying on a
+# specific unset marker should supply `version="0.0.0"` explicitly.
+DEFAULT_MODULE_VERSION = "1.0.0"
+
+RESERVED_WORDS = frozenset(
+    {"system", "internal", "core", "apcore", "plugin", "schema", "acl"}
+)
 
 __all__ = [
     "Registry",
     "REGISTRY_EVENTS",
     "MODULE_ID_PATTERN",
     "MAX_MODULE_ID_LENGTH",
+    "DEFAULT_MODULE_VERSION",
     "RESERVED_WORDS",
     "Discoverer",
     "ModuleValidator",
@@ -152,13 +165,17 @@ def _validate_module_id(module_id: str, *, allow_reserved: bool = False) -> None
 
     # 3. length check
     if len(module_id) > MAX_MODULE_ID_LENGTH:
-        raise InvalidInputError(f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}")
+        raise InvalidInputError(
+            f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}"
+        )
 
     # 4. reserved word first-segment check (skipped for register_internal)
     if not allow_reserved:
         first_segment = module_id.split(".")[0]
         if first_segment in RESERVED_WORDS:
-            raise InvalidInputError(f"Module ID contains reserved word: '{first_segment}'")
+            raise InvalidInputError(
+                f"Module ID contains reserved word: '{first_segment}'"
+            )
 
 
 class Registry:
@@ -183,19 +200,26 @@ class Registry:
             InvalidInputError: If both extensions_dir and extensions_dirs are specified.
         """
         if extensions_dir is not None and extensions_dirs is not None:
-            raise InvalidInputError(message="Cannot specify both extensions_dir and extensions_dirs")
+            raise InvalidInputError(
+                message="Cannot specify both extensions_dir and extensions_dirs"
+            )
 
         # Determine extension roots: individual params > config > defaults
         if extensions_dir is not None:
             self._extension_roots: list[dict[str, Any]] = [{"root": extensions_dir}]
         elif extensions_dirs is not None:
-            self._extension_roots = [{"root": item} if isinstance(item, str) else item for item in extensions_dirs]
+            self._extension_roots = [
+                {"root": item} if isinstance(item, str) else item
+                for item in extensions_dirs
+            ]
         elif config is not None:
             ext_root = config.get("extensions.root")
             if ext_root:
                 self._extension_roots = [{"root": ext_root}]
             else:
-                self._extension_roots = [{"root": Config.get_default("extensions.root")}]
+                self._extension_roots = [
+                    {"root": Config.get_default("extensions.root")}
+                ]
         else:
             self._extension_roots = [{"root": Config.get_default("extensions.root")}]
 
@@ -209,6 +233,15 @@ class Registry:
         self._callbacks: dict[str, list[Callable[..., Any]]] = {
             REGISTRY_EVENTS["REGISTER"]: [],
             REGISTRY_EVENTS["UNREGISTER"]: [],
+        }
+        # Per-event counter of callback exceptions — exposed via
+        # `get_callback_errors()` so ops can watch for registry-event-handler
+        # health. Callbacks themselves remain fire-and-forget (errors are
+        # logged + suppressed) to keep the registry's register/unregister
+        # contract crash-free.
+        self._callback_errors: dict[str, int] = {
+            REGISTRY_EVENTS["REGISTER"]: 0,
+            REGISTRY_EVENTS["UNREGISTER"]: 0,
         }
         self._lock = threading.RLock()
         self._id_map: dict[str, dict[str, Any]] = {}
@@ -291,7 +324,9 @@ class Registry:
                 self.register(mod_id, mod)
                 registered_count += 1
             except Exception as e:
-                logger.warning("Failed to register custom-discovered module '%s': %s", mod_id, e)
+                logger.warning(
+                    "Failed to register custom-discovered module '%s': %s", mod_id, e
+                )
 
         if registered_count == 0 and custom_modules:
             logger.warning(
@@ -318,7 +353,9 @@ class Registry:
         valid_classes = self._validate_all(resolved_classes)
         load_order = self._resolve_load_order(valid_classes, raw_metadata)
         valid_classes = self._filter_id_conflicts(load_order, valid_classes)
-        registered_count = self._register_in_order(load_order, valid_classes, raw_metadata)
+        registered_count = self._register_in_order(
+            load_order, valid_classes, raw_metadata
+        )
 
         if registered_count == 0 and discovered:
             logger.warning(
@@ -331,13 +368,29 @@ class Registry:
         return registered_count
 
     def _scan_params(self) -> tuple[int, bool]:
-        """Resolve scan parameters from config, falling back to spec defaults."""
+        """Resolve scan parameters from config, falling back to spec defaults.
+
+        Logs a WARN on the first call with ``follow_symlinks=True`` so
+        operators see the trust-boundary reminder in logs when they opt
+        into broader filesystem traversal. The scanner itself already
+        refuses to follow symlinks escaping the extension root (see
+        ``scan_extensions``); this log is a secondary signal that the
+        configuration enables a potentially sensitive feature.
+        """
         if self._config is None:
             return 8, False
-        return (
-            self._config.get("extensions.max_depth", 8),
-            self._config.get("extensions.follow_symlinks", False),
-        )
+        max_depth = self._config.get("extensions.max_depth", 8)
+        follow_symlinks = self._config.get("extensions.follow_symlinks", False)
+        if follow_symlinks and not getattr(
+            self, "_logged_follow_symlinks_warning", False
+        ):
+            logger.warning(
+                "extensions.follow_symlinks=True — scanner will traverse symlinked "
+                "directories (confined to the extension root). Ensure the root is "
+                "trusted; see apcore.registry.entry_point for the trust-boundary note."
+            )
+            self._logged_follow_symlinks_warning = True
+        return (max_depth, follow_symlinks)
 
     def _scan_roots(self, max_depth: int, follow_symlinks: bool) -> list[Any]:
         """Stage 1 — walk extension root(s) and return DiscoveredModule entries."""
@@ -375,7 +428,9 @@ class Registry:
         """Stage 3 — read each module's optional companion ``*_meta.yaml``."""
         raw_metadata: dict[str, dict[str, Any]] = {}
         for dm in discovered:
-            raw_metadata[dm.canonical_id] = load_metadata(dm.meta_path) if dm.meta_path else {}
+            raw_metadata[dm.canonical_id] = (
+                load_metadata(dm.meta_path) if dm.meta_path else {}
+            )
         return raw_metadata
 
     def _resolve_all_entry_points(
@@ -396,7 +451,9 @@ class Registry:
             try:
                 resolved[dm.canonical_id] = resolve_entry_point(dm.file_path, meta=meta)
             except Exception as e:
-                logger.warning("Failed to resolve entry point for '%s': %s", dm.canonical_id, e)
+                logger.warning(
+                    "Failed to resolve entry point for '%s': %s", dm.canonical_id, e
+                )
         return resolved
 
     def _validate_all(self, resolved_classes: dict[str, type]) -> dict[str, type]:
@@ -408,7 +465,9 @@ class Registry:
             else:
                 errors = validate_module(cls)
             if errors:
-                logger.warning("Module '%s' failed validation: %s", mod_id, "; ".join(errors))
+                logger.warning(
+                    "Module '%s' failed validation: %s", mod_id, "; ".join(errors)
+                )
                 continue
             valid[mod_id] = cls
         return valid
@@ -424,11 +483,84 @@ class Registry:
         """
         modules_with_deps: list[tuple[str, list[DependencyInfo]]] = []
         for mod_id in valid_classes:
-            deps_raw = raw_metadata.get(mod_id, {}).get("dependencies", [])
+            meta = raw_metadata.get(mod_id, {})
+            deps_raw = meta.get("dependencies", [])
             deps = parse_dependencies(deps_raw) if deps_raw else []
             modules_with_deps.append((mod_id, deps))
-        known_ids = {mod_id for mod_id, _ in modules_with_deps}
-        return resolve_dependencies(modules_with_deps, known_ids=known_ids)
+
+        module_versions = self._collect_module_versions(valid_classes, raw_metadata)
+        known_ids = {mod_id for mod_id, _ in modules_with_deps} | set(
+            self._modules.keys()
+        )
+        return resolve_dependencies(
+            modules_with_deps,
+            known_ids=known_ids,
+            module_versions=module_versions,
+        )
+
+    def _collect_module_versions(
+        self,
+        valid_classes: dict[str, type],
+        raw_metadata: dict[str, dict[str, Any]],
+    ) -> dict[str, str]:
+        """Collect batch-local + live-registry version map for constraint enforcement.
+
+        The returned map is the **highest registered version per module_id**,
+        matching the semantics of ``VersionedStore.list_versions`` +
+        ``select_best_version`` — the map that
+        :func:`resolve_dependencies` uses to satisfy inter-batch version
+        constraints. Live-registry entries come from
+        ``_versioned_modules`` (the authoritative multi-version store), not
+        from the latest-only ``_modules`` view, so modules with multiple
+        registered versions are correctly visible to the check.
+
+        Non-string versions in YAML or on class attributes are coerced via
+        ``str()`` with a warning — silent drops are what the previous
+        revision did and hid misconfigurations.
+        """
+        module_versions: dict[str, str] = {}
+        for mod_id, cls in valid_classes.items():
+            meta = raw_metadata.get(mod_id, {})
+            yaml_version = meta.get("version")
+            code_version = getattr(cls, "version", None)
+            resolved_version = yaml_version or code_version or DEFAULT_MODULE_VERSION
+            if not isinstance(resolved_version, str):
+                logger.warning(
+                    "Module '%s' has non-string version %r (%s); coercing to str. "
+                    "Fix by quoting the version in YAML or setting a str class attr.",
+                    mod_id,
+                    resolved_version,
+                    type(resolved_version).__name__,
+                )
+                resolved_version = str(resolved_version)
+            module_versions[mod_id] = resolved_version
+
+        # Include already-registered modules from the versioned store so
+        # inter-batch constraints resolve against the live registry's
+        # highest registered version per module_id.
+        with self._lock:
+            for existing_id in self._versioned_modules.list_ids():
+                if existing_id in module_versions:
+                    continue
+                versions = self._versioned_modules.list_versions(existing_id)
+                if versions:
+                    module_versions[existing_id] = versions[-1]
+                    continue
+                # Fallback: module in _modules but not _versioned_modules
+                # (legacy path — should not happen after _register_in_order
+                # fix, but guard anyway).
+                existing_mod = self._modules.get(existing_id)
+                if existing_mod is not None:
+                    existing_version = getattr(existing_mod, "version", None)
+                    if isinstance(existing_version, str):
+                        module_versions[existing_id] = existing_version
+            for existing_id, existing_mod in self._modules.items():
+                if existing_id in module_versions:
+                    continue
+                existing_version = getattr(existing_mod, "version", None)
+                if isinstance(existing_version, str):
+                    module_versions[existing_id] = existing_version
+        return module_versions
 
     def _filter_id_conflicts(
         self,
@@ -466,6 +598,13 @@ class Registry:
     ) -> int:
         """Stage 8 — instantiate, register, and run on_load() for each module.
 
+        Populates both the primary ``_modules`` map AND the multi-version
+        ``_versioned_modules`` / ``_versioned_meta`` stores so that
+        ``Registry.get(id, version_hint=...)`` resolves discovered modules
+        identically to manually-registered ones. Prior revisions only wrote
+        to ``_modules``, leaving version-hint queries unable to see
+        auto-discovered modules.
+
         Returns the number of modules that successfully completed registration
         (including a successful ``on_load`` call when defined).
         """
@@ -481,26 +620,43 @@ class Registry:
                 logger.error("Failed to instantiate module '%s': %s", mod_id, e)
                 continue
 
+            effective_version = self._effective_version(module, meta)
             # Pass the instance (not the class) so __init__-set attributes
             # are picked up; getattr falls through to class attrs anyway.
             # Aligned with manual register() / register_internal().
             merged_meta = merge_module_metadata(module, meta)
             with self._lock:
+                self._versioned_modules.add(mod_id, effective_version, module)
+                if meta:
+                    self._versioned_meta.add(mod_id, effective_version, meta)
                 self._modules[mod_id] = module
                 self._module_meta[mod_id] = merged_meta
                 self._lowercase_map[mod_id.lower()] = mod_id
 
-            if not self._invoke_on_load(mod_id, module):
+            if not self._invoke_on_load(mod_id, module, effective_version):
                 continue
 
             self._trigger_event("register", mod_id, module)
             registered_count += 1
         return registered_count
 
-    def _invoke_on_load(self, mod_id: str, module: Any) -> bool:
+    @staticmethod
+    def _effective_version(module: Any, meta: dict[str, Any]) -> str:
+        """Resolve the effective version for a module from YAML > instance > default."""
+        yaml_version = meta.get("version") if meta else None
+        code_version = getattr(module, "version", None)
+        resolved = yaml_version or code_version or DEFAULT_MODULE_VERSION
+        if not isinstance(resolved, str):
+            resolved = str(resolved)
+        return resolved
+
+    def _invoke_on_load(self, mod_id: str, module: Any, effective_version: str) -> bool:
         """Call ``module.on_load()`` if defined; roll back registration on failure.
 
         Returns True if the module is still registered, False if it was removed.
+        Rollback symmetrically clears both the latest-only ``_modules`` view
+        and the multi-version ``_versioned_modules`` / ``_versioned_meta``
+        stores populated by ``_register_in_order``.
         """
         if not (hasattr(module, "on_load") and callable(module.on_load)):
             return True
@@ -509,9 +665,12 @@ class Registry:
         except Exception as e:
             logger.error("on_load() failed for module '%s': %s", mod_id, e)
             with self._lock:
-                self._modules.pop(mod_id, None)
-                self._module_meta.pop(mod_id, None)
-                self._lowercase_map.pop(mod_id.lower(), None)
+                self._versioned_modules.remove(mod_id, effective_version)
+                self._versioned_meta.remove(mod_id, effective_version)
+                if not self._versioned_modules.has(mod_id):
+                    self._modules.pop(mod_id, None)
+                    self._module_meta.pop(mod_id, None)
+                    self._lowercase_map.pop(mod_id.lower(), None)
             return False
         return True
 
@@ -546,7 +705,9 @@ class Registry:
 
         _ensure_schema_adapter(module)
 
-        effective_version = version or getattr(module, "version", None) or "0.0.0"
+        effective_version = (
+            version or getattr(module, "version", None) or DEFAULT_MODULE_VERSION
+        )
 
         is_versioned = version is not None
 
@@ -661,7 +822,9 @@ class Registry:
         with self._lock:
             return module_id in self._modules
 
-    def list(self, tags: list[str] | None = None, prefix: str | None = None) -> list[str]:
+    def list(
+        self, tags: list[str] | None = None, prefix: str | None = None
+    ) -> list[str]:
         """Return sorted list of unique registered module IDs, optionally filtered."""
         with self._lock:
             snapshot = dict(self._modules)
@@ -707,7 +870,9 @@ class Registry:
         with self._lock:
             return sorted(self._modules.keys())
 
-    def get_definition(self, module_id: str, version_hint: str | None = None) -> ModuleDescriptor | None:
+    def get_definition(
+        self, module_id: str, version_hint: str | None = None
+    ) -> ModuleDescriptor | None:
         """Get a ModuleDescriptor for a registered module. Returns None if not found.
 
         Args:
@@ -721,15 +886,19 @@ class Registry:
         with self._lock:
             meta = dict(self._module_meta.get(module_id, {}))
             # Resolve versioned metadata
-            version_str = getattr(module, "version", None) or "0.0.0"
+            version_str = getattr(module, "version", None) or DEFAULT_MODULE_VERSION
             versioned_meta = self._versioned_meta.get(module_id, version_str)
             if versioned_meta:
                 meta["metadata"] = {**meta.get("metadata", {}), **versioned_meta}
 
         cls = type(module)
 
-        input_schema_cls = getattr(module, "input_schema", None) or getattr(cls, "input_schema", None)
-        output_schema_cls = getattr(module, "output_schema", None) or getattr(cls, "output_schema", None)
+        input_schema_cls = getattr(module, "input_schema", None) or getattr(
+            cls, "input_schema", None
+        )
+        output_schema_cls = getattr(module, "output_schema", None) or getattr(
+            cls, "output_schema", None
+        )
 
         for schema_cls in (input_schema_cls, output_schema_cls):
             if schema_cls is not None and hasattr(schema_cls, "model_rebuild"):
@@ -741,16 +910,12 @@ class Registry:
         input_json = (
             input_schema_cls
             if isinstance(input_schema_cls, dict)
-            else input_schema_cls.model_json_schema()
-            if input_schema_cls
-            else {}
+            else input_schema_cls.model_json_schema() if input_schema_cls else {}
         )
         output_json = (
             output_schema_cls
             if isinstance(output_schema_cls, dict)
-            else output_schema_cls.model_json_schema()
-            if output_schema_cls
-            else {}
+            else output_schema_cls.model_json_schema() if output_schema_cls else {}
         )
 
         effective_metadata = meta.get("metadata", {})
@@ -778,7 +943,7 @@ class Registry:
             documentation=meta.get("documentation"),
             input_schema=input_json,
             output_schema=output_json,
-            version=meta.get("version") or "1.0.0",
+            version=meta.get("version") or DEFAULT_MODULE_VERSION,
             tags=list(meta.get("tags") or []),
             annotations=meta.get("annotations"),
             examples=list(meta.get("examples") or []),
@@ -786,19 +951,24 @@ class Registry:
             sunset_date=sunset_date,
         )
 
-    def _log_deprecation_warning(self, module_id: str, version: str, deprecation: dict[str, Any]) -> None:
+    def _log_deprecation_warning(
+        self, module_id: str, version: str, deprecation: dict[str, Any]
+    ) -> None:
         """Log a deprecation warning for a module version."""
         deprecated_since = deprecation.get("deprecated_since", "unknown")
         sunset_version = deprecation.get("sunset_version", "unknown")
         migration_guide = deprecation.get("migration_guide", "")
         msg = (
-            f"Module '{module_id}' v{version} is deprecated " f"(since {deprecated_since}, sunset in {sunset_version})."
+            f"Module '{module_id}' v{version} is deprecated "
+            f"(since {deprecated_since}, sunset in {sunset_version})."
         )
         if migration_guide:
             msg += f" Migration: {migration_guide}"
         logger.warning(msg)
 
-    def export_schema(self, module_id: str, strict: bool = False) -> dict[str, Any] | None:
+    def export_schema(
+        self, module_id: str, strict: bool = False
+    ) -> dict[str, Any] | None:
         """Export the schema definition for a registered module as a plain dict.
 
         Returns the module's input and output schemas in the generic export
@@ -903,23 +1073,55 @@ class Registry:
         """
         with self._lock:
             if event not in self._callbacks:
-                raise InvalidInputError(message=f"Invalid event: {event}. Must be 'register' or 'unregister'")
+                raise InvalidInputError(
+                    message=f"Invalid event: {event}. Must be 'register' or 'unregister'"
+                )
             self._callbacks[event].append(callback)
 
     def _trigger_event(self, event: str, module_id: str, module: Any) -> None:
-        """Trigger all callbacks for an event. Errors are logged and swallowed."""
+        """Trigger all callbacks for an event.
+
+        Callbacks are invoked outside the registry lock on a per-event
+        snapshot of the subscriber list. This is a deliberate divergence
+        from a strict "synchronous within the lock" reading of the
+        registry-system spec: running callbacks under the RLock would make
+        a callback that re-enters the registry (e.g., lists modules,
+        triggers another register) susceptible to deadlock on downstream
+        locks and would serialize otherwise-independent work. Python's
+        registry therefore snapshots callbacks, releases the lock, and
+        fires them outside — at the cost of a window where a callback
+        observes pre-commit state. Exceptions are logged and counted via
+        ``get_callback_errors(event)``; they do NOT propagate into the
+        register/unregister caller.
+        """
         with self._lock:
             callbacks = list(self._callbacks.get(event, []))
         for cb in callbacks:
             try:
                 cb(module_id, module)
             except Exception as e:
+                with self._lock:
+                    self._callback_errors[event] = (
+                        self._callback_errors.get(event, 0) + 1
+                    )
                 logger.error(
                     "Callback error for event '%s' on module '%s': %s",
                     event,
                     module_id,
                     e,
                 )
+
+    def get_callback_errors(self, event: str | None = None) -> dict[str, int] | int:
+        """Return callback-exception counts per event.
+
+        Args:
+            event: If given, returns the integer count for that event.
+                If None, returns a snapshot dict of all per-event counts.
+        """
+        with self._lock:
+            if event is None:
+                return dict(self._callback_errors)
+            return self._callback_errors.get(event, 0)
 
     # ----- Safe Hot-Reload (F09 / Algorithm A21) -----
 
@@ -1043,7 +1245,9 @@ class Registry:
             from watchdog.observers import Observer  # type: ignore[import-not-found]
             from watchdog.events import FileSystemEventHandler, FileSystemEvent  # type: ignore[import-not-found]
         except ImportError:
-            raise ImportError("watchdog is required for hot reload. Install it with: pip install watchdog")
+            raise ImportError(
+                "watchdog is required for hot reload. Install it with: pip install watchdog"
+            )
 
         if hasattr(self, "_observer") and self._observer is not None:
             return  # Already watching
@@ -1058,7 +1262,7 @@ class Registry:
             def _should_process(self, path: str) -> bool:
                 if not path.endswith(".py"):
                     return False
-                now = __import__("time").time()
+                now = time.time()
                 last = self._debounce_timer.get(path, 0.0)
                 if now - last < 0.3:
                     return False
@@ -1094,7 +1298,7 @@ class Registry:
 
         for root_config in self._extension_roots:
             root_path = root_config.get("root", "")
-            if root_path and __import__("os").path.isdir(root_path):
+            if root_path and os.path.isdir(root_path):
                 self._observer.schedule(handler, root_path, recursive=True)
 
         self._observer.start()
@@ -1130,7 +1334,9 @@ class Registry:
             suspended_state = self._suspend_and_unregister_for_hot_reload(module_id)
             self._reload_module_from_path(path, module_id, suspended_state)
 
-    def _suspend_and_unregister_for_hot_reload(self, module_id: str | None) -> dict[str, Any] | None:
+    def _suspend_and_unregister_for_hot_reload(
+        self, module_id: str | None
+    ) -> dict[str, Any] | None:
         """Capture suspend state and unregister the existing module, if any."""
         if not module_id or module_id not in self._modules:
             return None
@@ -1138,7 +1344,11 @@ class Registry:
         old_module = self._modules.get(module_id)
         suspended_state: dict[str, Any] | None = None
 
-        if old_module and hasattr(old_module, "on_suspend") and callable(old_module.on_suspend):
+        if (
+            old_module
+            and hasattr(old_module, "on_suspend")
+            and callable(old_module.on_suspend)
+        ):
             try:
                 raw_state: Any = old_module.on_suspend()
                 if raw_state is None:
@@ -1151,13 +1361,21 @@ class Registry:
                         module_id,
                     )
             except Exception as e:
-                logger.error("on_suspend() failed for module '%s' during hot reload: %s", module_id, e)
+                logger.error(
+                    "on_suspend() failed for module '%s' during hot reload: %s",
+                    module_id,
+                    e,
+                )
 
         if old_module and hasattr(old_module, "on_unload"):
             try:
                 old_module.on_unload()
             except Exception as e:
-                logger.warning("on_unload() failed for module '%s' during hot reload: %s", module_id, e)
+                logger.warning(
+                    "on_unload() failed for module '%s' during hot reload: %s",
+                    module_id,
+                    e,
+                )
 
         self._inline_unregister(module_id)
         self._trigger_event("unregister", module_id, old_module)
@@ -1170,8 +1388,6 @@ class Registry:
         suspended_state: dict[str, Any] | None,
     ) -> None:
         """Re-import the file via the canonical entry-point resolver and register it."""
-        import os
-
         try:
             cls = resolve_entry_point(Path(path))
         except Exception as e:
@@ -1181,7 +1397,9 @@ class Registry:
         try:
             instance = cls()
         except Exception as e:
-            logger.warning("Hot reload failed to instantiate class from %s: %s", path, e)
+            logger.warning(
+                "Hot reload failed to instantiate class from %s: %s", path, e
+            )
             return
 
         new_id = existing_module_id or os.path.splitext(os.path.basename(path))[0]
@@ -1195,11 +1413,19 @@ class Registry:
         self._lowercase_map[new_id.lower()] = new_id
         self._trigger_event("register", new_id, instance)
 
-        if suspended_state is not None and hasattr(instance, "on_resume") and callable(instance.on_resume):
+        if (
+            suspended_state is not None
+            and hasattr(instance, "on_resume")
+            and callable(instance.on_resume)
+        ):
             try:
                 instance.on_resume(suspended_state)
             except Exception as e:
-                logger.error("on_resume() failed for module '%s' during hot reload: %s", new_id, e)
+                logger.error(
+                    "on_resume() failed for module '%s' during hot reload: %s",
+                    new_id,
+                    e,
+                )
 
     def _handle_file_deletion(self, path: str) -> None:
         """Handle a file deletion event."""
@@ -1211,14 +1437,16 @@ class Registry:
                     try:
                         module.on_unload()
                     except Exception as e:
-                        logger.warning("on_unload() failed for module '%s' during hot reload: %s", module_id, e)
+                        logger.warning(
+                            "on_unload() failed for module '%s' during hot reload: %s",
+                            module_id,
+                            e,
+                        )
                 self._inline_unregister(module_id)
                 self._trigger_event("unregister", module_id, module)
 
     def _path_to_module_id(self, path: str) -> str | None:
         """Map a file path to a module ID if known."""
-        import os
-
         basename = os.path.splitext(os.path.basename(path))[0]
         # Check if any registered module ID ends with this basename
         for mid in self.module_ids:
@@ -1265,7 +1493,9 @@ class Registry:
                 # Aligned with apcore-typescript / apcore-rust and the canonical
                 # message produced by detect_id_conflicts for the public
                 # `register()` path.
-                raise InvalidInputError(message=f"Module ID '{module_id}' is already registered")
+                raise InvalidInputError(
+                    message=f"Module ID '{module_id}' is already registered"
+                )
             self._modules[module_id] = module
             self._module_meta[module_id] = merged_meta
             self._lowercase_map[module_id.lower()] = module_id

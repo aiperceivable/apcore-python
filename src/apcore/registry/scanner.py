@@ -76,6 +76,21 @@ def scan_extensions(
                             real,
                         )
                         continue
+                    # Confinement: even with follow_symlinks=True we refuse
+                    # to walk into targets whose real path escapes the
+                    # extension root. Unconfined traversal could exec .py
+                    # files from arbitrary parts of the filesystem if the
+                    # root contains a stray symlink (e.g., into `/etc`, a
+                    # user's home, or a sibling project's venv).
+                    try:
+                        real.relative_to(root)
+                    except ValueError:
+                        logger.warning(
+                            "Symlink target outside extension root, skipping: %s -> %s",
+                            entry_path,
+                            real,
+                        )
+                        continue
                     visited_real_paths.add(real)
                 _scan_dir(entry_path, depth + 1)
             elif is_file:
@@ -98,7 +113,10 @@ def scan_extensions(
                     continue
 
                 lower_id = canonical_id.lower()
-                if lower_id in seen_ids_lower and seen_ids_lower[lower_id] != canonical_id:
+                if (
+                    lower_id in seen_ids_lower
+                    and seen_ids_lower[lower_id] != canonical_id
+                ):
                     logger.warning(
                         "Case collision: '%s' and '%s' differ only by case",
                         canonical_id,
@@ -143,7 +161,9 @@ def scan_multi_root(
         resolved.append((root_path, namespace))
 
     for root_path, namespace in resolved:
-        modules = scan_extensions(root_path, max_depth=max_depth, follow_symlinks=follow_symlinks)
+        modules = scan_extensions(
+            root_path, max_depth=max_depth, follow_symlinks=follow_symlinks
+        )
         for m in modules:
             all_results.append(
                 DiscoveredModule(

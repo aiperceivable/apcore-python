@@ -154,10 +154,14 @@ class TestEndToEnd:
 
         class TestMod:
             input_schema = type("I", (BaseModel,), {"__annotations__": {"value": str}})
-            output_schema = type("O", (BaseModel,), {"__annotations__": {"result": str}})
+            output_schema = type(
+                "O", (BaseModel,), {"__annotations__": {"result": str}}
+            )
             description = "test"
 
-            def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+            def execute(
+                self, inputs: dict[str, Any], context: Any = None
+            ) -> dict[str, Any]:
                 return {"result": "ok"}
 
         register_mock = MagicMock()
@@ -223,7 +227,9 @@ class TestEndToEnd:
 
         ext = tmp_path / "extensions"
         ext.mkdir()
-        _write_module_file(ext, "mymod.py", "MyModule", "Code description", tags=["code-tag"])
+        _write_module_file(
+            ext, "mymod.py", "MyModule", "Code description", tags=["code-tag"]
+        )
         _write_meta_yaml(
             ext,
             "mymod",
@@ -260,7 +266,9 @@ class TestEndToEnd:
         assert not reg.has("broken_mod")
         assert not reg.has("empty_mod")
 
-    def test_conftest_fixtures_smoke(self, registry: Any, sample_module_class: type) -> None:
+    def test_conftest_fixtures_smoke(
+        self, registry: Any, sample_module_class: type
+    ) -> None:
         """Smoke test: conftest fixtures work correctly."""
         from apcore.registry.registry import Registry
 
@@ -268,3 +276,77 @@ class TestEndToEnd:
         assert hasattr(sample_module_class, "input_schema")
         assert hasattr(sample_module_class, "output_schema")
         assert hasattr(sample_module_class, "description")
+
+
+class TestDiscoveryVersionedStoreParity:
+    """Regression: discover() must populate _versioned_modules so version_hint resolves."""
+
+    def test_discovered_module_resolvable_by_version_hint(self, tmp_path: Path) -> None:
+        """After discover(), registry.get(id, version_hint=...) must find the discovered module.
+
+        Prior to the fix, _register_in_order wrote only to _modules, not to
+        _versioned_modules, so Registry.get(id, version_hint=...) -> None for
+        any discovered module (version-hint queries routed through the
+        versioned store first).
+        """
+        from apcore.registry.registry import Registry
+
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        _write_module_file(
+            ext, "mod_versioned.py", "ModVersionedModule", "Versioned mod"
+        )
+        _write_meta_yaml(ext, "mod_versioned", {"version": "1.2.3"})
+
+        reg = Registry(extensions_dir=str(ext))
+        registered = reg.discover()
+        assert registered == 1
+
+        # Without hint — latest
+        m = reg.get("mod_versioned")
+        assert m is not None
+
+        # With explicit version hint matching the declared version
+        m_exact = reg.get("mod_versioned", version_hint="1.2.3")
+        assert (
+            m_exact is not None
+        ), "version_hint query failed — _register_in_order did not populate _versioned_modules"
+
+        # With caret hint
+        m_caret = reg.get("mod_versioned", version_hint="^1.0.0")
+        assert m_caret is not None
+
+    def test_discovered_default_version_is_one_zero_zero(self, tmp_path: Path) -> None:
+        """Modules discovered without declared version get DEFAULT_MODULE_VERSION."""
+        from apcore.registry.registry import DEFAULT_MODULE_VERSION, Registry
+
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        _write_module_file(ext, "mod_noversion.py", "ModNoVersionModule", "No version")
+
+        reg = Registry(extensions_dir=str(ext))
+        reg.discover()
+
+        # The versioned store should have registered under DEFAULT_MODULE_VERSION
+        assert reg._versioned_modules.has_version(
+            "mod_noversion", DEFAULT_MODULE_VERSION
+        )
+        assert DEFAULT_MODULE_VERSION == "1.0.0"
+
+    def test_manual_register_default_version_aligned(self) -> None:
+        """register() without version= gets DEFAULT_MODULE_VERSION, matching discover()."""
+        from apcore.registry.registry import DEFAULT_MODULE_VERSION, Registry
+
+        class PlainMod:
+            input_schema = type("I", (BaseModel,), {"__annotations__": {"v": str}})
+            output_schema = type("O", (BaseModel,), {"__annotations__": {"r": str}})
+            description = "plain"
+
+            def execute(
+                self, inputs: dict[str, Any], context: Any = None
+            ) -> dict[str, Any]:
+                return {"r": "ok"}
+
+        reg = Registry()
+        reg.register("mod.plain", PlainMod())
+        assert reg._versioned_modules.has_version("mod.plain", DEFAULT_MODULE_VERSION)

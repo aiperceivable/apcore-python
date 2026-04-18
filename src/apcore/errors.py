@@ -55,6 +55,10 @@ __all__ = [
     "ModuleLoadError",
     "ModuleExecuteError",
     "ReloadFailedError",
+    "DependencyNotFoundError",
+    "DependencyVersionMismatchError",
+    "TaskLimitExceededError",
+    "VersionConstraintError",
     "InternalError",
     "ErrorCodes",
     "ErrorCodeCollisionError",
@@ -501,7 +505,9 @@ class CallDepthExceededError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any) -> None:
+    def __init__(
+        self, depth: int, max_depth: int, call_chain: list[str], **kwargs: Any
+    ) -> None:
         kwargs.setdefault(
             "ai_guidance",
             f"Call depth {depth} exceeds maximum {max_depth}. "
@@ -606,7 +612,9 @@ class FuncMissingTypeHintError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, *, function_name: str, parameter_name: str, **kwargs: Any) -> None:
+    def __init__(
+        self, *, function_name: str, parameter_name: str, **kwargs: Any
+    ) -> None:
         super().__init__(
             code="FUNC_MISSING_TYPE_HINT",
             message=(
@@ -907,6 +915,73 @@ class ModuleLoadError(ModuleError):
         )
 
 
+class DependencyNotFoundError(ModuleError):
+    """Raised when a module's required dependency is not registered.
+
+    Corresponds to error code ``DEPENDENCY_NOT_FOUND`` per PROTOCOL_SPEC §5.15.2.
+    Replaces the previous practice of raising ``ModuleLoadError`` for missing
+    dependencies — callers that caught ``ModuleLoadError`` for this scenario
+    should either catch ``DependencyNotFoundError`` specifically or catch the
+    common ``ModuleError`` base.
+    """
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, module_id: str, dependency_id: str, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Module '{module_id}' declares a required dependency on "
+            f"'{dependency_id}', but no such module is registered. Either "
+            f"register '{dependency_id}' before loading '{module_id}', mark "
+            "the dependency as optional, or remove it.",
+        )
+        super().__init__(
+            code="DEPENDENCY_NOT_FOUND",
+            message=(
+                f"Module '{module_id}' has unsatisfied required dependency "
+                f"'{dependency_id}'"
+            ),
+            details={"module_id": module_id, "dependency_id": dependency_id},
+            **kwargs,
+        )
+
+
+class DependencyVersionMismatchError(ModuleError):
+    """Raised when a declared dependency's version constraint is not satisfied."""
+
+    _default_retryable: bool | None = False
+
+    def __init__(
+        self,
+        module_id: str,
+        dependency_id: str,
+        required: str,
+        actual: str,
+        **kwargs: Any,
+    ) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Module '{module_id}' declares dependency '{dependency_id}' with "
+            f"version constraint '{required}', but the registered version is "
+            f"'{actual}'. Either upgrade the dependency, relax the constraint, "
+            "or register a compatible version.",
+        )
+        super().__init__(
+            code="DEPENDENCY_VERSION_MISMATCH",
+            message=(
+                f"Module '{module_id}' requires dependency '{dependency_id}' "
+                f"version '{required}', but registered version is '{actual}'"
+            ),
+            details={
+                "module_id": module_id,
+                "dependency_id": dependency_id,
+                "required": required,
+                "actual": actual,
+            },
+            **kwargs,
+        )
+
+
 class ReloadFailedError(ModuleError):
     """Raised when module hot-reload fails during re-discover or re-register."""
 
@@ -917,6 +992,54 @@ class ReloadFailedError(ModuleError):
             code="RELOAD_FAILED",
             message=f"Failed to reload module '{module_id}': {reason}",
             details={"module_id": module_id, "reason": reason},
+            **kwargs,
+        )
+
+
+class TaskLimitExceededError(ModuleError):
+    """Raised when ``AsyncTaskManager.submit`` is called at the task-slot limit.
+
+    Callers that caught the prior ``RuntimeError("Task limit reached ...")``
+    should either catch ``TaskLimitExceededError`` specifically or catch the
+    ``ModuleError`` base. The typed form makes the failure dispatchable via
+    ``error.code == ErrorCodes.TASK_LIMIT_EXCEEDED`` across language SDKs.
+    """
+
+    _default_retryable: bool | None = True
+
+    def __init__(self, max_tasks: int, **kwargs: Any) -> None:
+        super().__init__(
+            code="TASK_LIMIT_EXCEEDED",
+            message=f"Task limit reached ({max_tasks})",
+            details={"max_tasks": max_tasks},
+            **kwargs,
+        )
+
+
+class VersionConstraintError(ModuleError):
+    """Raised when a declared version constraint string is malformed.
+
+    Examples: a leading operator without a digit operand (``">="``), a
+    ``"v1.0"`` prefix (unsupported), or a non-semver operand such as
+    ``"not_a_version"`` that would silently degrade to ``(0,0,0)``.
+    Surfaced at parse time by ``matches_version_hint`` / ``VersionedStore``
+    callers to prevent YAML typos from permanently disabling constraint
+    enforcement.
+    """
+
+    _default_retryable: bool | None = False
+
+    def __init__(self, constraint: str, reason: str, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "ai_guidance",
+            f"Constraint '{constraint}' is not a valid semver expression. "
+            f"Use forms like '1.2.3', '>=1.2.0,<2.0.0', '^1.2.3', or '~1.2'. "
+            f"{reason}",
+        )
+        super().__init__(
+            code="VERSION_CONSTRAINT_INVALID",
+            message=f"Invalid version constraint '{constraint}': {reason}",
+            details={"constraint": constraint, "reason": reason},
             **kwargs,
         )
 
@@ -1007,6 +1130,9 @@ class ErrorCodes:
     ERROR_CODE_COLLISION = "ERROR_CODE_COLLISION"
     GENERAL_NOT_IMPLEMENTED = "GENERAL_NOT_IMPLEMENTED"
     DEPENDENCY_NOT_FOUND = "DEPENDENCY_NOT_FOUND"
+    DEPENDENCY_VERSION_MISMATCH = "DEPENDENCY_VERSION_MISMATCH"
+    VERSION_CONSTRAINT_INVALID = "VERSION_CONSTRAINT_INVALID"
+    TASK_LIMIT_EXCEEDED = "TASK_LIMIT_EXCEEDED"
 
     # Note: this class is intentionally NOT instantiated. All callers access the
     # constants as class attributes (`ErrorCodes.MODULE_NOT_FOUND`). A previous
@@ -1045,7 +1171,9 @@ FRAMEWORK_ERROR_CODE_PREFIXES: frozenset[str] = frozenset(
 def _collect_framework_codes() -> frozenset[str]:
     """Collect all error codes defined on ``ErrorCodes``."""
     return frozenset(
-        value for name, value in vars(ErrorCodes).items() if not name.startswith("_") and isinstance(value, str)
+        value
+        for name, value in vars(ErrorCodes).items()
+        if not name.startswith("_") and isinstance(value, str)
     )
 
 
@@ -1137,10 +1265,15 @@ class ErrorCodeCollisionError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, code: str, module_id: str, conflict_source: str, **kwargs: Any) -> None:
+    def __init__(
+        self, code: str, module_id: str, conflict_source: str, **kwargs: Any
+    ) -> None:
         super().__init__(
             code="ERROR_CODE_COLLISION",
-            message=(f"Error code '{code}' from module '{module_id}' " f"collides with {conflict_source}"),
+            message=(
+                f"Error code '{code}' from module '{module_id}' "
+                f"collides with {conflict_source}"
+            ),
             details={
                 "error_code": code,
                 "module_id": module_id,

@@ -191,6 +191,30 @@ class TestScanExtensionsSymlinks:
         ids = {m.canonical_id for m in result}
         assert "a.mod" in ids
 
+    def test_symlink_escaping_root_refused(self, tmp_path: Path) -> None:
+        """Regression: follow_symlinks=True must not traverse symlinks escaping root.
+
+        Construct an extension root with a symlink to a sibling directory.
+        Prior to the fix, scanner would walk the escape target; now it
+        logs and refuses.
+        """
+        root = tmp_path / "ext_root"
+        root.mkdir()
+        (root / "ours.py").write_text("")
+        # Outside the root
+        outside = tmp_path / "sibling"
+        outside.mkdir()
+        (outside / "escape.py").write_text("")
+        # Symlink into outside
+        (root / "escape_link").symlink_to(outside)
+
+        result = scan_extensions(root, follow_symlinks=True)
+        ids = {m.canonical_id for m in result}
+        assert "ours" in ids
+        assert not any(
+            "escape" in i for i in ids
+        ), "scanner walked into symlink escaping extension root"
+
 
 # === scan_multi_root() ===
 

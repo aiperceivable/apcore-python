@@ -193,7 +193,9 @@ class TestRegistryVersionNegotiation:
         defn = reg.get_definition("mod.deprecated")
         assert defn is not None
         assert defn.metadata["x-deprecation"]["deprecated_since"] == "1.0.0"
-        assert defn.metadata["x-deprecation"]["migration_guide"] == "Use mod.new instead."
+        assert (
+            defn.metadata["x-deprecation"]["migration_guide"] == "Use mod.new instead."
+        )
 
     def test_call_with_version_hint_selects_matching(self) -> None:
         reg = Registry(extensions_dir="/tmp/fake_ext")
@@ -234,7 +236,9 @@ class TestRegistryVersionNegotiation:
         module = reg.get("mod.multi", version_hint="3.0.0")
         assert module is None
 
-    def test_deprecated_module_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_deprecated_module_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         reg = Registry(extensions_dir="/tmp/fake_ext")
         mod = _VersionedModule(version="1.0.0")
         deprecation = {
@@ -252,7 +256,9 @@ class TestRegistryVersionNegotiation:
             reg.get_definition("mod.dep", version_hint="1.0.0")
         assert any("deprecated" in r.message.lower() for r in caplog.records)
 
-    def test_deprecated_module_includes_migration_guide(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_deprecated_module_includes_migration_guide(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         reg = Registry(extensions_dir="/tmp/fake_ext")
         mod = _VersionedModule(version="1.0.0")
         deprecation = {
@@ -326,7 +332,10 @@ class TestRegistryVersionNegotiation:
             except Exception as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=get_version, args=(v,)) for v in ["1.0.0", "2.0.0", "3.0.0"] * 10]
+        threads = [
+            threading.Thread(target=get_version, args=(v,))
+            for v in ["1.0.0", "2.0.0", "3.0.0"] * 10
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -386,3 +395,54 @@ class TestExecutorVersionHint:
         executor = Executor(registry=reg)
         result = executor.call("mod.exec")
         assert result["version"] == "2.0.0"
+
+
+# ---------------------------------------------------------------------------
+# Strict constraint validation (regression tests for review-flagged gaps)
+# ---------------------------------------------------------------------------
+
+
+class TestConstraintStrictness:
+    """Constraints must fail loudly on malformed operands, not silently match."""
+
+    def test_empty_constraint_raises(self) -> None:
+        from apcore.errors import VersionConstraintError
+
+        with pytest.raises(VersionConstraintError):
+            matches_version_hint("1.0.0", "")
+
+    def test_v_prefix_rejected(self) -> None:
+        from apcore.errors import VersionConstraintError
+
+        with pytest.raises(VersionConstraintError):
+            matches_version_hint("1.0.0", "v1.0.0")
+
+    def test_non_digit_operand_rejected(self) -> None:
+        from apcore.errors import VersionConstraintError
+
+        with pytest.raises(VersionConstraintError):
+            matches_version_hint("1.0.0", ">=not_a_version")
+
+    def test_operator_without_operand_rejected(self) -> None:
+        from apcore.errors import VersionConstraintError
+
+        with pytest.raises(VersionConstraintError):
+            matches_version_hint("1.0.0", "~")
+
+    def test_comma_list_rejects_on_any_bad_entry(self) -> None:
+        from apcore.errors import VersionConstraintError
+
+        with pytest.raises(VersionConstraintError):
+            matches_version_hint("1.5.0", ">=1.0.0,latest")
+
+    def test_caret_zero_zero_patch_lower_bound(self) -> None:
+        # ^0.0.3 → >=0.0.3,<0.0.4 per npm/cargo semantics
+        assert matches_version_hint("0.0.3", "^0.0.3") is True
+        assert matches_version_hint("0.0.4", "^0.0.3") is False
+        assert matches_version_hint("0.0.2", "^0.0.3") is False
+
+    def test_tilde_one_part(self) -> None:
+        # ~1 → >=1.0.0,<2.0.0
+        assert matches_version_hint("1.0.0", "~1") is True
+        assert matches_version_hint("1.9.9", "~1") is True
+        assert matches_version_hint("2.0.0", "~1") is False
