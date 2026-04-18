@@ -66,10 +66,25 @@ def _redact_fields(data: dict[str, Any], schema_dict: dict[str, Any]) -> None:
 
 
 def _redact_secret_prefix(data: dict[str, Any]) -> None:
-    """In-place redaction of keys starting with _secret_."""
+    """In-place redaction of keys starting with _secret_ at any depth.
+
+    Recurses into dict children and into list items, handling the common
+    ``list[dict]`` shape where secret-prefixed keys can otherwise slip through.
+    """
     for key in data:
         value = data[key]
         if key.startswith("_secret_") and value is not None:
             data[key] = REDACTED_VALUE
         elif isinstance(value, dict):
             _redact_secret_prefix(value)
+        elif isinstance(value, list):
+            _redact_secret_prefix_in_list(value)
+
+
+def _redact_secret_prefix_in_list(items: list[Any]) -> None:
+    """Traverse a list, redacting dict children and recursing into nested lists."""
+    for item in items:
+        if isinstance(item, dict):
+            _redact_secret_prefix(item)
+        elif isinstance(item, list):
+            _redact_secret_prefix_in_list(item)

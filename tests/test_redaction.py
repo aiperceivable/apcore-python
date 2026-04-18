@@ -139,6 +139,27 @@ class TestRedactSensitiveSecretPrefix:
         assert result["_secret_api_key"] == "***REDACTED***"
         assert result["normal_key"] == "value"
 
+    def test_secret_prefix_redacted_inside_list_of_dicts(self) -> None:
+        """_secret_-prefixed keys are redacted inside list[dict] items."""
+        data = {
+            "items": [
+                {"_secret_token": "abc", "name": "first"},
+                {"_secret_token": "def", "name": "second"},
+            ],
+        }
+        schema: dict[str, object] = {}
+        result = redact_sensitive(data, schema)
+        assert result["items"][0]["_secret_token"] == "***REDACTED***"
+        assert result["items"][1]["_secret_token"] == "***REDACTED***"
+        assert result["items"][0]["name"] == "first"
+
+    def test_secret_prefix_redacted_inside_nested_list(self) -> None:
+        """_secret_-prefixed keys survive nested list wrapping."""
+        data = {"outer": [[{"_secret_x": "leak"}]]}
+        schema: dict[str, object] = {}
+        result = redact_sensitive(data, schema)
+        assert result["outer"][0][0]["_secret_x"] == "***REDACTED***"
+
 
 class TestRedactSensitiveDeepCopy:
     """Tests for deep copy behavior."""
