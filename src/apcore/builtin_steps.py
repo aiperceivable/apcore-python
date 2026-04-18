@@ -611,11 +611,6 @@ class BuiltinExecute(BaseStep):
             if timeout_s is None or remaining < timeout_s:
                 timeout_s = remaining
 
-        # Stream mode: set output_stream and skip to return_result (no execution)
-        if getattr(ctx, "stream", False) and hasattr(module, "stream") and module.stream is not None:
-            ctx.output_stream = module.stream(inputs, ctx.context)
-            return StepResult(action="skip_to", skip_to="return_result")
-
         try:
             if inspect.iscoroutinefunction(module.execute):
                 coro = module.execute(inputs, ctx.context)
@@ -634,10 +629,6 @@ class BuiltinExecute(BaseStep):
                 module_id=ctx.module_id,
                 timeout_ms=timeout_ms,
             ) from None
-        except (ExecutionCancelledError, ModuleTimeoutError, InvalidInputError):
-            raise
-        except Exception:
-            raise
 
         return StepResult(action="continue")
 

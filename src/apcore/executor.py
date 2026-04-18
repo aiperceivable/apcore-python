@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections.abc import AsyncIterator
 from typing import Any, Callable
 
@@ -748,9 +749,18 @@ class Executor:
             return
 
         # Phase 2: Iterate stream, accumulate chunks
+        # Per streaming.md §4, respect ctx.context.global_deadline during
+        # iteration: raise ModuleTimeoutError between chunks if the deadline
+        # passes, so long-running streams cannot silently outrun their budget.
         accumulated: dict[str, Any] = {}
+        global_deadline = getattr(pipe_ctx.context, "global_deadline", None)
         try:
             async for chunk in pipe_ctx.output_stream:
+                if global_deadline is not None and time.monotonic() > global_deadline:
+                    raise ModuleTimeoutError(
+                        module_id=module_id,
+                        timeout_ms=self._global_timeout,
+                    )
                 _deep_merge(accumulated, chunk)
                 yield chunk
         except ExecutionCancelledError:

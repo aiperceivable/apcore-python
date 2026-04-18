@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any, AsyncIterator
 
 import pytest
 from pydantic import BaseModel
 
 from apcore.context import Context
-from apcore.errors import ModuleNotFoundError
+from apcore.errors import ModuleNotFoundError, ModuleTimeoutError
 from apcore.executor import Executor
 from apcore.middleware import Middleware
 from apcore.registry import Registry
@@ -210,3 +212,37 @@ class TestExecutorStream:
         assert len(chunks) == 2
         # Deep merge: name + email from chunk 1, age from chunk 2 — all preserved
         assert after_output == {"user": {"name": "Alice", "email": "alice@example.com", "age": 30}}
+
+
+class SlowStreamingModule:
+    """Emits chunks with a sleep between each, enough to cross a short deadline."""
+
+    def __init__(self) -> None:
+        self.input_schema = None
+        self.output_schema = None
+
+    def execute(self, inputs: dict[str, Any], context: Context) -> dict[str, Any]:
+        return {}
+
+    async def stream(self, inputs: dict[str, Any], context: Context) -> AsyncIterator[dict[str, Any]]:
+        for i in range(10):
+            await asyncio.sleep(0.05)
+            yield {"chunk": i}
+
+
+class TestStreamGlobalDeadline:
+    """Executor.stream() must raise ModuleTimeoutError when global_deadline elapses mid-iteration."""
+
+    @pytest.mark.asyncio
+    async def test_stream_raises_on_deadline_elapsed(self) -> None:
+        ex = _make_executor(module=SlowStreamingModule(), module_id="slow")
+        ctx = Context.create()
+        ctx.global_deadline = time.monotonic() + 0.1  # 100ms budget
+
+        collected: list[dict[str, Any]] = []
+        with pytest.raises(ModuleTimeoutError):
+            async for chunk in ex.stream("slow", {}, context=ctx):
+                collected.append(chunk)
+        # At least one chunk produced before deadline hit.
+        assert len(collected) >= 1
+        assert len(collected) < 10  # Did not run to completion.
