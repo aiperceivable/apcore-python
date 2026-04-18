@@ -257,9 +257,16 @@ from apcore.trace_context import TraceContext, TraceParent
 from apcore.sys_modules.registration import (
     SysModulesContext,
     register_sys_modules,
-    register_subscriber_type,
-    unregister_subscriber_type,
-    reset_subscriber_registry,
+)
+
+# Deprecated subscriber-type APIs — kept importable for back-compat, but
+# NOT listed in __all__ so they don't appear in `from apcore import *`
+# or in IDE auto-completion for new code. Use EventEmitter.subscribe()
+# directly.
+from apcore.sys_modules.registration import (  # noqa: F401
+    register_subscriber_type as register_subscriber_type,
+    reset_subscriber_registry as reset_subscriber_registry,
+    unregister_subscriber_type as unregister_subscriber_type,
 )
 from apcore.sys_modules.health import (
     HealthModule,
@@ -346,9 +353,7 @@ def call(
     version_hint: str | None = None,
 ) -> dict[str, Any]:
     """Global convenience for _default_client.call()."""
-    return _get_default_client().call(
-        module_id, inputs, context, version_hint=version_hint
-    )
+    return _get_default_client().call(module_id, inputs, context, version_hint=version_hint)
 
 
 async def call_async(
@@ -358,9 +363,7 @@ async def call_async(
     version_hint: str | None = None,
 ) -> dict[str, Any]:
     """Global convenience for _default_client.call_async()."""
-    return await _get_default_client().call_async(
-        module_id, inputs, context, version_hint=version_hint
-    )
+    return await _get_default_client().call_async(module_id, inputs, context, version_hint=version_hint)
 
 
 def module(
@@ -413,15 +416,11 @@ async def stream(
     version_hint: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Global convenience for _default_client.stream()."""
-    async for chunk in _get_default_client().stream(
-        module_id, inputs, context, version_hint=version_hint
-    ):
+    async for chunk in _get_default_client().stream(module_id, inputs, context, version_hint=version_hint):
         yield chunk
 
 
-def validate(
-    module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None
-) -> PreflightResult:
+def validate(module_id: str, inputs: dict[str, Any] | None = None, context: Context | None = None) -> PreflightResult:
     """Global convenience for _default_client.validate()."""
     return _get_default_client().validate(module_id, inputs, context)
 
@@ -476,9 +475,7 @@ def off(subscriber: EventSubscriber) -> None:
     _get_default_client().off(subscriber)
 
 
-def disable(
-    module_id: str, reason: str = "Disabled via APCore client"
-) -> dict[str, Any]:
+def disable(module_id: str, reason: str = "Disabled via APCore client") -> dict[str, Any]:
     """Global convenience for _default_client.disable()."""
     return _get_default_client().disable(module_id, reason)
 

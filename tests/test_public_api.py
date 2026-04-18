@@ -665,8 +665,6 @@ class TestPublicAPIAll:
             "reset_subscriber_registry",
         )
         for name in deprecated:
-            assert name not in apcore.__all__, (
-                f"Deprecated {name} should not be advertised in __all__"
-            )
+            assert name not in apcore.__all__, f"Deprecated {name} should not be advertised in __all__"
             # Back-compat: still importable via attribute access.
             assert hasattr(apcore, name), f"Deprecated {name} must remain importable"

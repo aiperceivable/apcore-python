@@ -306,7 +306,7 @@ class APCore:
         emitter = self.events
         if emitter is None:
             raise RuntimeError(
-                "Events are not enabled. Set sys_modules.enabled=true and " "sys_modules.events.enabled=true in config."
+                "Events are not enabled. Set sys_modules.enabled=true and sys_modules.events.enabled=true in config."
             )
         subscriber = _CallbackSubscriber(event_type=event_type, handler=handler)
         emitter.subscribe(subscriber)
@@ -324,7 +324,7 @@ class APCore:
         emitter = self.events
         if emitter is None:
             raise RuntimeError(
-                "Events are not enabled. Set sys_modules.enabled=true and " "sys_modules.events.enabled=true in config."
+                "Events are not enabled. Set sys_modules.enabled=true and sys_modules.events.enabled=true in config."
             )
         emitter.unsubscribe(subscriber)
 

@@ -82,9 +82,7 @@ def _trace_to_checks(trace: PipelineTrace) -> list[PreflightCheckResult]:
                 "code": f"STEP_{st.name.upper()}_FAILED",
                 "message": st.result.explanation,
             }
-        checks.append(
-            PreflightCheckResult(check=check_name, passed=passed, error=error)
-        )
+        checks.append(PreflightCheckResult(check=check_name, passed=passed, error=error))
     return checks
 
 
@@ -128,9 +126,7 @@ def _close_if_alive(ref: "weakref.ref[Executor]") -> None:
             _logger.warning("atexit Executor.close() failed", exc_info=True)
 
 
-def _deep_merge(
-    base: dict[str, Any], override: dict[str, Any], *, _depth: int = 0
-) -> None:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any], *, _depth: int = 0) -> None:
     """Recursively merge *override* into *base* in-place.
 
     Nested dicts are merged recursively; all other values (including lists)
@@ -220,29 +216,13 @@ class Executor:
 
         if config is not None:
             val = config.get("executor.default_timeout")
-            self._default_timeout: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.default_timeout")
-            )
+            self._default_timeout: int = val if val is not None else Config.get_default("executor.default_timeout")
             val = config.get("executor.global_timeout")
-            self._global_timeout: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.global_timeout")
-            )
+            self._global_timeout: int = val if val is not None else Config.get_default("executor.global_timeout")
             val = config.get("executor.max_call_depth")
-            self._max_call_depth: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.max_call_depth")
-            )
+            self._max_call_depth: int = val if val is not None else Config.get_default("executor.max_call_depth")
             val = config.get("executor.max_module_repeat")
-            self._max_module_repeat: int = (
-                val
-                if val is not None
-                else Config.get_default("executor.max_module_repeat")
-            )
+            self._max_module_repeat: int = val if val is not None else Config.get_default("executor.max_module_repeat")
         else:
             self._default_timeout = Config.get_default("executor.default_timeout")
             self._global_timeout = Config.get_default("executor.global_timeout")
@@ -489,9 +469,7 @@ class Executor:
             self._validate_module_id(module_id)
             checks.append(PreflightCheckResult(check="module_id", passed=True))
         except InvalidInputError as e:
-            checks.append(
-                PreflightCheckResult(check="module_id", passed=False, error=e.to_dict())
-            )
+            checks.append(PreflightCheckResult(check="module_id", passed=False, error=e.to_dict()))
             return PreflightResult(valid=False, checks=checks)
 
         # Run pipeline in dry_run mode — pure=False steps are skipped
@@ -555,9 +533,7 @@ class Executor:
                         )
                     )
                 else:
-                    checks.append(
-                        PreflightCheckResult(check="module_preflight", passed=True)
-                    )
+                    checks.append(PreflightCheckResult(check="module_preflight", passed=True))
             except Exception as exc:
                 checks.append(
                     PreflightCheckResult(
@@ -568,9 +544,7 @@ class Executor:
                 )
 
         valid = all(c.passed for c in checks)
-        return PreflightResult(
-            valid=valid, checks=checks, requires_approval=requires_approval
-        )
+        return PreflightResult(valid=valid, checks=checks, requires_approval=requires_approval)
 
     @staticmethod
     def _validate_module_id(module_id: str) -> None:
@@ -604,9 +578,7 @@ class Executor:
 
         if step == "module_lookup":
             # Explanation format: "Module 'id' not found" — extract the id.
-            return ModuleNotFoundError(
-                module_id=explanation.split(": ")[-1] if ": " in explanation else ""
-            )
+            return ModuleNotFoundError(module_id=explanation.split(": ")[-1] if ": " in explanation else "")
         if step == "acl_check":
             # Explanation format: "Access denied: {caller} -> {target}"
             caller_id = ""
@@ -630,9 +602,7 @@ class Executor:
         # Fallback: return as ModuleError
         return ModuleError(code="PIPELINE_ABORT", message=explanation)
 
-    def _run_in_new_thread(
-        self, coro: Any, module_id: str, timeout_s: float | None
-    ) -> Any:
+    def _run_in_new_thread(self, coro: Any, module_id: str, timeout_s: float | None) -> Any:
         """Run coroutine in a new thread with its own event loop.
 
         Bounds the outer ``thread.join()`` by ``self._global_timeout`` (ms) so a
@@ -661,9 +631,7 @@ class Executor:
             asyncio.set_event_loop(loop)
             try:
                 if timeout_s is not None:
-                    result_holder["output"] = loop.run_until_complete(
-                        asyncio.wait_for(coro, timeout=timeout_s)
-                    )
+                    result_holder["output"] = loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout_s))
                 else:
                     result_holder["output"] = loop.run_until_complete(coro)
             except asyncio.TimeoutError:
@@ -834,9 +802,7 @@ class Executor:
                 # first failure-aware caller of stream() could only be mid-
                 # stream, so we translate a retry request back into the
                 # original error rather than silently re-running.
-                _logger.warning(
-                    "Retry requested during stream for '%s' — ignored; re-raising", module_id
-                )
+                _logger.warning("Retry requested during stream for '%s' — ignored; re-raising", module_id)
                 raise exc
             yield recovery
             return
@@ -870,9 +836,7 @@ class Executor:
                 # first failure-aware caller of stream() could only be mid-
                 # stream, so we translate a retry request back into the
                 # original error rather than silently re-running.
-                _logger.warning(
-                    "Retry requested during stream for '%s' — ignored; re-raising", module_id
-                )
+                _logger.warning("Retry requested during stream for '%s' — ignored; re-raising", module_id)
                 raise exc
             yield recovery
             return
@@ -880,9 +844,7 @@ class Executor:
         # Phase 3: Output validation + middleware_after on accumulated result
         pipe_ctx.output = accumulated
         post_steps = [
-            s
-            for s in self._strategy.steps
-            if s.name in ("output_validation", "middleware_after", "return_result")
+            s for s in self._strategy.steps if s.name in ("output_validation", "middleware_after", "return_result")
         ]
         if post_steps:
             post_strategy = ExecutionStrategy("post_stream", post_steps)
@@ -1081,9 +1043,7 @@ class Executor:
                     module_id,
                 )
                 raise exc
-            return recovery, PipelineTrace(
-                module_id=module_id, strategy_name=effective_strategy.name
-            )
+            return recovery, PipelineTrace(module_id=module_id, strategy_name=effective_strategy.name)
 
     def _effective_strategy(
         self,

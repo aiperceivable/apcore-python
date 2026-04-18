@@ -161,7 +161,7 @@ class ExecutionStrategy:
             missing = set(requires) - provided
             if missing:
                 _logger.warning(
-                    "Step '%s' requires %s, but no preceding step provides them. " "This may cause runtime errors.",
+                    "Step '%s' requires %s, but no preceding step provides them. This may cause runtime errors.",
                     step.name,
                     missing,
                 )

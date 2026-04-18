@@ -193,9 +193,7 @@ class TestRegistryVersionNegotiation:
         defn = reg.get_definition("mod.deprecated")
         assert defn is not None
         assert defn.metadata["x-deprecation"]["deprecated_since"] == "1.0.0"
-        assert (
-            defn.metadata["x-deprecation"]["migration_guide"] == "Use mod.new instead."
-        )
+        assert defn.metadata["x-deprecation"]["migration_guide"] == "Use mod.new instead."
 
     def test_call_with_version_hint_selects_matching(self) -> None:
         reg = Registry(extensions_dir="/tmp/fake_ext")
@@ -236,9 +234,7 @@ class TestRegistryVersionNegotiation:
         module = reg.get("mod.multi", version_hint="3.0.0")
         assert module is None
 
-    def test_deprecated_module_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_deprecated_module_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         reg = Registry(extensions_dir="/tmp/fake_ext")
         mod = _VersionedModule(version="1.0.0")
         deprecation = {
@@ -256,9 +252,7 @@ class TestRegistryVersionNegotiation:
             reg.get_definition("mod.dep", version_hint="1.0.0")
         assert any("deprecated" in r.message.lower() for r in caplog.records)
 
-    def test_deprecated_module_includes_migration_guide(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_deprecated_module_includes_migration_guide(self, caplog: pytest.LogCaptureFixture) -> None:
         reg = Registry(extensions_dir="/tmp/fake_ext")
         mod = _VersionedModule(version="1.0.0")
         deprecation = {
@@ -332,10 +326,7 @@ class TestRegistryVersionNegotiation:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=get_version, args=(v,))
-            for v in ["1.0.0", "2.0.0", "3.0.0"] * 10
-        ]
+        threads = [threading.Thread(target=get_version, args=(v,)) for v in ["1.0.0", "2.0.0", "3.0.0"] * 10]
         for t in threads:
             t.start()
         for t in threads:

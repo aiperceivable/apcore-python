@@ -211,9 +211,7 @@ class TestScanExtensionsSymlinks:
         result = scan_extensions(root, follow_symlinks=True)
         ids = {m.canonical_id for m in result}
         assert "ours" in ids
-        assert not any(
-            "escape" in i for i in ids
-        ), "scanner walked into symlink escaping extension root"
+        assert not any("escape" in i for i in ids), "scanner walked into symlink escaping extension root"
 
 
 # === scan_multi_root() ===

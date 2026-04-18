@@ -158,9 +158,7 @@ class BindingLoader:
         trusted_package_prefixes: set[str] | None = None,
     ) -> None:
         self._trusted_package_prefixes: frozenset[str] | None = (
-            frozenset(trusted_package_prefixes)
-            if trusted_package_prefixes is not None
-            else None
+            frozenset(trusted_package_prefixes) if trusted_package_prefixes is not None else None
         )
 
     def load_bindings(self, file_path: str, registry: Registry) -> list[FunctionModule]:
@@ -325,8 +323,7 @@ class BindingLoader:
                 raise BindingFileInvalidError(
                     file_path=file_path,
                     reason=(
-                        f"binding '{module_id}': explicit schema mode requires both "
-                        "'input_schema' and 'output_schema'"
+                        f"binding '{module_id}': explicit schema mode requires both 'input_schema' and 'output_schema'"
                     ),
                 )
             return (

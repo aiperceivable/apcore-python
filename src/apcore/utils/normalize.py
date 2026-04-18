@@ -77,7 +77,7 @@ def normalize_to_canonical_id(local_id: str, language: str) -> str:
 
     if language not in _SUPPORTED_LANGUAGES:
         raise ValueError(
-            f"Unsupported language '{language}'. " f"Must be one of: {', '.join(sorted(_SUPPORTED_LANGUAGES))}"
+            f"Unsupported language '{language}'. Must be one of: {', '.join(sorted(_SUPPORTED_LANGUAGES))}"
         )
 
     separator = _SEPARATORS[language]

@@ -256,19 +256,13 @@ class TestVersionConstraints:
         )
         assert result == ["B", "A"]
 
-    def test_optional_version_mismatch_skipped_with_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_optional_version_mismatch_skipped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING):
             result = resolve_dependencies(
                 modules=[
                     (
                         "A",
-                        [
-                            DependencyInfo(
-                                module_id="B", version=">=2.0.0", optional=True
-                            )
-                        ],
+                        [DependencyInfo(module_id="B", version=">=2.0.0", optional=True)],
                     ),
                     ("B", []),
                 ],

@@ -257,17 +257,13 @@ class TestRetryMiddlewareIntegration:
             async def execute(self, inputs: dict, context) -> dict:  # type: ignore[no-untyped-def]
                 attempts.append(1)
                 if len(attempts) < 3:
-                    raise ModuleError(
-                        code="TRANSIENT", message="flaky", retryable=True
-                    )
+                    raise ModuleError(code="TRANSIENT", message="flaky", retryable=True)
                 return {"attempt": len(attempts)}
 
         reg = Registry()
         reg.register("flaky", FlakyModule())
 
-        mw = RetryMiddleware(
-            config=RetryConfig(max_retries=5, jitter=False, base_delay_ms=0)
-        )
+        mw = RetryMiddleware(config=RetryConfig(max_retries=5, jitter=False, base_delay_ms=0))
         ex = Executor(registry=reg, middlewares=[mw])
 
         result = await ex.call_async("flaky", {"x": 1})
@@ -294,16 +290,12 @@ class TestRetryMiddlewareIntegration:
             description = "Always fails with retryable=True."
 
             async def execute(self, inputs: dict, context) -> dict:  # type: ignore[no-untyped-def]
-                raise ModuleError(
-                    code="TRANSIENT", message="gone", retryable=True
-                )
+                raise ModuleError(code="TRANSIENT", message="gone", retryable=True)
 
         reg = Registry()
         reg.register("never", AlwaysFailsModule())
 
-        mw = RetryMiddleware(
-            config=RetryConfig(max_retries=2, jitter=False, base_delay_ms=0)
-        )
+        mw = RetryMiddleware(config=RetryConfig(max_retries=2, jitter=False, base_delay_ms=0))
         ex = Executor(registry=reg, middlewares=[mw])
 
         with pytest.raises(ModuleError):

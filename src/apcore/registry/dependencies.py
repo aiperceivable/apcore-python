@@ -119,9 +119,7 @@ def resolve_dependencies(
             in_degree[module_id] += 1
 
     # Initialize queue with zero-in-degree nodes (sorted for determinism)
-    queue: deque[str] = deque(
-        sorted(mod_id for mod_id in in_degree if in_degree[mod_id] == 0)
-    )
+    queue: deque[str] = deque(sorted(mod_id for mod_id in in_degree if in_degree[mod_id] == 0))
 
     load_order: list[str] = []
     while queue:
@@ -166,9 +164,7 @@ def _find_back_edge_cycle(
     dep_map: dict[str, list[str]] = {}
     for mod_id, deps in modules:
         if mod_id in remaining:
-            dep_map[mod_id] = sorted(
-                {d.module_id for d in deps if d.module_id in remaining}
-            )
+            dep_map[mod_id] = sorted({d.module_id for d in deps if d.module_id in remaining})
 
     for start in sorted(remaining):
         cycle = _dfs_find_cycle(dep_map, start)

@@ -1112,10 +1112,7 @@ class TestHotReload:
         # Now trigger a single _should_process call to exercise pruning.
         ok = handler._should_process(f"/path/new_{time.time()}.py")
         assert ok is True
-        assert (
-            len(handler._debounce_timer)
-            <= _ModuleChangeHandler._DEBOUNCE_PRUNE_KEEP + 1
-        )
+        assert len(handler._debounce_timer) <= _ModuleChangeHandler._DEBOUNCE_PRUNE_KEEP + 1
 
     def test_handle_file_deletion_clears_versioned_stores(self) -> None:
         """_handle_file_deletion removes from both _modules and _versioned_modules."""

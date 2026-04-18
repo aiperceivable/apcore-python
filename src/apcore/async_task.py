@@ -98,11 +98,7 @@ class AsyncTaskManager:
         Returns:
             The generated task_id (UUID4 string).
         """
-        active = sum(
-            1
-            for info in self._tasks.values()
-            if info.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-        )
+        active = sum(1 for info in self._tasks.values() if info.status in (TaskStatus.PENDING, TaskStatus.RUNNING))
         if active >= self._max_tasks:
             raise TaskLimitExceededError(max_tasks=self._max_tasks)
 
@@ -136,9 +132,7 @@ class AsyncTaskManager:
         if info is None:
             raise KeyError(f"Task not found: {task_id}")
         if info.status != TaskStatus.COMPLETED:
-            raise RuntimeError(
-                f"Task {task_id} is not completed (status={info.status.value})"
-            )
+            raise RuntimeError(f"Task {task_id} is not completed (status={info.status.value})")
         return info.result
 
     async def cancel(self, task_id: str) -> bool:
@@ -211,11 +205,7 @@ class AsyncTaskManager:
         for task_id, info in self._tasks.items():
             if info.status not in terminal:
                 continue
-            ref_time = (
-                info.completed_at
-                if info.completed_at is not None
-                else info.submitted_at
-            )
+            ref_time = info.completed_at if info.completed_at is not None else info.submitted_at
             if now - ref_time >= max_age_seconds:
                 to_remove.append(task_id)
 

@@ -73,9 +73,7 @@ def _tilde_upper_bound(
     return (major + 1, 0, 0)
 
 
-def _check_single_constraint(
-    version_tuple: tuple[int, int, int], constraint: str
-) -> bool:
+def _check_single_constraint(version_tuple: tuple[int, int, int], constraint: str) -> bool:
     """Check a single constraint against a version tuple.
 
     Supported operators: `=`, `>=`, `>`, `<=`, `<`, `^`, `~`. When no operator is
@@ -140,9 +138,7 @@ def matches_version_hint(version: str, hint: str) -> bool:
     return all(_check_single_constraint(version_tuple, c) for c in constraints)
 
 
-def select_best_version(
-    versions: list[str], version_hint: str | None = None
-) -> str | None:
+def select_best_version(versions: list[str], version_hint: str | None = None) -> str | None:
     """Select the best matching version from a list.
 
     If version_hint is None, returns the latest (highest) version.

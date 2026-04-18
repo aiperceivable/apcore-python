@@ -132,7 +132,7 @@ _pattern_data = _load("pattern_matching")
 def test_pattern_matching(case: dict[str, Any]) -> None:
     result = match_pattern(case["pattern"], case["value"])
     assert result == case["expected"], (
-        f"match_pattern({case['pattern']!r}, {case['value']!r}) " f"returned {result}, expected {case['expected']}"
+        f"match_pattern({case['pattern']!r}, {case['value']!r}) returned {result}, expected {case['expected']}"
     )
 
 
@@ -151,7 +151,7 @@ _specificity_data = _load("specificity")
 def test_specificity(case: dict[str, Any]) -> None:
     score = calculate_specificity(case["pattern"])
     assert score == case["expected_score"], (
-        f"calculate_specificity({case['pattern']!r}) " f"returned {score}, expected {case['expected_score']}"
+        f"calculate_specificity({case['pattern']!r}) returned {score}, expected {case['expected_score']}"
     )
 
 
@@ -403,7 +403,7 @@ def test_config_env(case: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> No
             result = str(result).lower()
         if expected is not None:
             expected = str(expected).lower()
-        assert result == expected, f"config.get({case['expected_path']!r}) = {result!r}, " f"expected {expected!r}"
+        assert result == expected, f"config.get({case['expected_path']!r}) = {result!r}, expected {expected!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +574,7 @@ def test_schema_validation(
 
     result = validator.validate(input_data, model)
     assert result.valid == expected_valid, (
-        f"schema_validate({case['id']}) valid={result.valid}, " f"expected={expected_valid}, errors={result.errors}"
+        f"schema_validate({case['id']}) valid={result.valid}, expected={expected_valid}, errors={result.errors}"
     )
 
     # Verify error path when expected
@@ -656,7 +656,7 @@ def test_defaults_schema_completeness() -> None:
 
     for dot_path, expected in defaults:
         actual = config.get(dot_path)
-        assert actual == expected, f"Config default for '{dot_path}': got {actual!r}, " f"schema says {expected!r}"
+        assert actual == expected, f"Config default for '{dot_path}': got {actual!r}, schema says {expected!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -695,14 +695,14 @@ def test_sys_module_output_schemas_match_spec() -> None:
         spec_required = set(spec_schema.get("required", []))
         module_required = set(module_schema.get("required", []))
         assert spec_required == module_required, (
-            f"{schema_name}: required mismatch — " f"spec={spec_required}, module={module_required}"
+            f"{schema_name}: required mismatch — spec={spec_required}, module={module_required}"
         )
 
         # Verify property keys match
         spec_props = set(spec_schema.get("properties", {}).keys())
         module_props = set(module_schema.get("properties", {}).keys())
         assert spec_props == module_props, (
-            f"{schema_name}: properties mismatch — " f"spec={spec_props}, module={module_props}"
+            f"{schema_name}: properties mismatch — spec={spec_props}, module={module_props}"
         )
 
 
@@ -753,6 +753,6 @@ def test_context_create_trace_parent(case: dict[str, Any], caplog: pytest.LogCap
         assert ctx.trace_id == expected["trace_id"]
 
     warn_seen = any("Invalid trace_id format" in record.getMessage() for record in caplog.records)
-    assert (
-        warn_seen == expected["warn_logged"]
-    ), f"warn_logged mismatch: expected {expected['warn_logged']}, got {warn_seen}"
+    assert warn_seen == expected["warn_logged"], (
+        f"warn_logged mismatch: expected {expected['warn_logged']}, got {warn_seen}"
+    )

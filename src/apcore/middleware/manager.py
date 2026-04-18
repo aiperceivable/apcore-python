@@ -33,6 +33,7 @@ class RetrySignal:
 
     inputs: dict[str, Any]
 
+
 _logger = logging.getLogger(__name__)
 
 

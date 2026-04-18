@@ -113,7 +113,7 @@ class ExtensionManager:
             TypeError: If extension does not satisfy the extension point's type.
         """
         if point_name not in self._points:
-            raise KeyError(f"Unknown extension point: '{point_name}'. " f"Available: {sorted(self._points.keys())}")
+            raise KeyError(f"Unknown extension point: '{point_name}'. Available: {sorted(self._points.keys())}")
 
         point = self._points[point_name]
         if not isinstance(extension, point.extension_type):
@@ -233,7 +233,7 @@ class ExtensionManager:
                     tracing_mw.set_exporter(_CompositeExporter(exporters))
             else:
                 logger.warning(
-                    "span_exporter extensions registered but no TracingMiddleware " "found in executor middleware chain"
+                    "span_exporter extensions registered but no TracingMiddleware found in executor middleware chain"
                 )
 
     def _find_tracing_middleware(self, executor: Executor) -> TracingMiddleware | None:

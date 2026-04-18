@@ -154,14 +154,10 @@ class TestEndToEnd:
 
         class TestMod:
             input_schema = type("I", (BaseModel,), {"__annotations__": {"value": str}})
-            output_schema = type(
-                "O", (BaseModel,), {"__annotations__": {"result": str}}
-            )
+            output_schema = type("O", (BaseModel,), {"__annotations__": {"result": str}})
             description = "test"
 
-            def execute(
-                self, inputs: dict[str, Any], context: Any = None
-            ) -> dict[str, Any]:
+            def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
                 return {"result": "ok"}
 
         register_mock = MagicMock()
@@ -227,9 +223,7 @@ class TestEndToEnd:
 
         ext = tmp_path / "extensions"
         ext.mkdir()
-        _write_module_file(
-            ext, "mymod.py", "MyModule", "Code description", tags=["code-tag"]
-        )
+        _write_module_file(ext, "mymod.py", "MyModule", "Code description", tags=["code-tag"])
         _write_meta_yaml(
             ext,
             "mymod",
@@ -266,9 +260,7 @@ class TestEndToEnd:
         assert not reg.has("broken_mod")
         assert not reg.has("empty_mod")
 
-    def test_conftest_fixtures_smoke(
-        self, registry: Any, sample_module_class: type
-    ) -> None:
+    def test_conftest_fixtures_smoke(self, registry: Any, sample_module_class: type) -> None:
         """Smoke test: conftest fixtures work correctly."""
         from apcore.registry.registry import Registry
 
@@ -293,9 +285,7 @@ class TestDiscoveryVersionedStoreParity:
 
         ext = tmp_path / "extensions"
         ext.mkdir()
-        _write_module_file(
-            ext, "mod_versioned.py", "ModVersionedModule", "Versioned mod"
-        )
+        _write_module_file(ext, "mod_versioned.py", "ModVersionedModule", "Versioned mod")
         _write_meta_yaml(ext, "mod_versioned", {"version": "1.2.3"})
 
         reg = Registry(extensions_dir=str(ext))
@@ -308,9 +298,7 @@ class TestDiscoveryVersionedStoreParity:
 
         # With explicit version hint matching the declared version
         m_exact = reg.get("mod_versioned", version_hint="1.2.3")
-        assert (
-            m_exact is not None
-        ), "version_hint query failed — _register_in_order did not populate _versioned_modules"
+        assert m_exact is not None, "version_hint query failed — _register_in_order did not populate _versioned_modules"
 
         # With caret hint
         m_caret = reg.get("mod_versioned", version_hint="^1.0.0")
@@ -328,9 +316,7 @@ class TestDiscoveryVersionedStoreParity:
         reg.discover()
 
         # The versioned store should have registered under DEFAULT_MODULE_VERSION
-        assert reg._versioned_modules.has_version(
-            "mod_noversion", DEFAULT_MODULE_VERSION
-        )
+        assert reg._versioned_modules.has_version("mod_noversion", DEFAULT_MODULE_VERSION)
         assert DEFAULT_MODULE_VERSION == "1.0.0"
 
     def test_manual_register_default_version_aligned(self) -> None:
@@ -342,9 +328,7 @@ class TestDiscoveryVersionedStoreParity:
             output_schema = type("O", (BaseModel,), {"__annotations__": {"r": str}})
             description = "plain"
 
-            def execute(
-                self, inputs: dict[str, Any], context: Any = None
-            ) -> dict[str, Any]:
+            def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
                 return {"r": "ok"}
 
         reg = Registry()

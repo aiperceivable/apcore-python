@@ -103,8 +103,7 @@ def _resolve_step(step_def: dict[str, Any]) -> BaseStep:
     # (3) Neither
     if type_name:
         raise ValueError(
-            f"Step type '{type_name}' not registered. "
-            f"Register with: register_step_type('{type_name}', YourStepClass)"
+            f"Step type '{type_name}' not registered. Register with: register_step_type('{type_name}', YourStepClass)"
         )
     raise ValueError(f"Step '{step_name}' has neither 'type' nor 'handler'")
 

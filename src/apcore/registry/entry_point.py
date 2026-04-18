@@ -97,9 +97,7 @@ def _import_module_from_file(
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:
-        raise ModuleLoadError(
-            module_id=str(file_path), reason=f"Failed to import module: {exc}"
-        ) from exc
+        raise ModuleLoadError(module_id=str(file_path), reason=f"Failed to import module: {exc}") from exc
     return mod
 
 
@@ -132,17 +130,13 @@ def resolve_entry_point(
 
     # Auto-infer mode
     candidates = [
-        cls
-        for _, cls in inspect.getmembers(loaded, inspect.isclass)
-        if _is_module_class(cls, loaded.__name__)
+        cls for _, cls in inspect.getmembers(loaded, inspect.isclass) if _is_module_class(cls, loaded.__name__)
     ]
 
     if len(candidates) == 1:
         return candidates[0]
     elif len(candidates) == 0:
-        raise ModuleLoadError(
-            module_id=str(file_path), reason="No Module subclass found in file"
-        )
+        raise ModuleLoadError(module_id=str(file_path), reason="No Module subclass found in file")
     else:
         raise ModuleLoadError(
             module_id=str(file_path),

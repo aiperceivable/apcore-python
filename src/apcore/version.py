@@ -154,7 +154,7 @@ def negotiate_version(declared_version: str, sdk_version: str) -> str:
         gap = sdk.minor - declared.minor
         if gap > _DEPRECATION_THRESHOLD:
             _logger.warning(
-                "Declared version %s is %d minor versions behind SDK %s — " "consider upgrading your configuration",
+                "Declared version %s is %d minor versions behind SDK %s — consider upgrading your configuration",
                 declared_version,
                 gap,
                 sdk_version,

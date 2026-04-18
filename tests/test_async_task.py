@@ -89,9 +89,7 @@ class TestTaskStatusTransitions:
     """Submit task and verify PENDING -> RUNNING -> COMPLETED."""
 
     @pytest.mark.asyncio
-    async def test_submit_completes_successfully(
-        self, manager: AsyncTaskManager
-    ) -> None:
+    async def test_submit_completes_successfully(self, manager: AsyncTaskManager) -> None:
         task_id = await manager.submit("test.simple", {"x": 42})
 
         # Task should exist immediately after submit
@@ -218,16 +216,12 @@ class TestGetResult:
         result = manager.get_result(task_id)
         assert result == {"value": 99}
 
-    def test_get_result_raises_for_unknown_task(
-        self, manager: AsyncTaskManager
-    ) -> None:
+    def test_get_result_raises_for_unknown_task(self, manager: AsyncTaskManager) -> None:
         with pytest.raises(KeyError, match="Task not found"):
             manager.get_result("no-such-task")
 
     @pytest.mark.asyncio
-    async def test_get_result_raises_for_pending_task(
-        self, manager: AsyncTaskManager
-    ) -> None:
+    async def test_get_result_raises_for_pending_task(self, manager: AsyncTaskManager) -> None:
         # Submit a slow task so it stays in PENDING/RUNNING
         task_id = await manager.submit("test.slow", {"delay": 10.0})
 
@@ -279,9 +273,7 @@ class TestCleanup:
         assert manager.get_status(task_id) is None
 
     @pytest.mark.asyncio
-    async def test_cleanup_preserves_recent_tasks(
-        self, manager: AsyncTaskManager
-    ) -> None:
+    async def test_cleanup_preserves_recent_tasks(self, manager: AsyncTaskManager) -> None:
         await manager.submit("test.simple", {"x": 1})
         await asyncio.sleep(0.1)
 
@@ -291,9 +283,7 @@ class TestCleanup:
         assert len(manager.list_tasks()) == 1
 
     @pytest.mark.asyncio
-    async def test_cleanup_preserves_running_tasks(
-        self, manager: AsyncTaskManager
-    ) -> None:
+    async def test_cleanup_preserves_running_tasks(self, manager: AsyncTaskManager) -> None:
         task_id = await manager.submit("test.slow", {"delay": 10.0})
         await asyncio.sleep(0.1)
 

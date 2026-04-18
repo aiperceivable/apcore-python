@@ -85,7 +85,7 @@ class TraceContext:
         match = _TRACEPARENT_RE.match(traceparent.strip().lower())
         if match is None:
             raise ValueError(
-                f"Malformed traceparent: {traceparent[:100]!r}. " "Expected format: 00-<32 hex>-<16 hex>-<2 hex>"
+                f"Malformed traceparent: {traceparent[:100]!r}. Expected format: 00-<32 hex>-<16 hex>-<2 hex>"
             )
         version = match.group(1)
         trace_id = match.group(2)
