@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.19.0] - 2026-04-19
 
 ### Added
 
@@ -42,9 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Registry.register()` default version is now `"1.0.0"` instead of `"0.0.0"`** for modules registered without an explicit `version=` argument and without a class/instance `version` attribute. Callers that relied on `"0.0.0"` as an "unset" marker must pass `version="0.0.0"` explicitly. `ModuleDescriptor.version` has always defaulted to `"1.0.0"` — this aligns the internal state with the externally-visible view.
 - **Malformed version constraint strings now raise `VersionConstraintError`** instead of silently evaluating to False (which, via the degraded-parse-semver path, effectively became True). Callers that relied on silent no-op behavior must wrap in try/except or sanitize upstream.
 - **Dependency upper bounds** — `pydantic`, `pyyaml`, and `jsonschema` are now pinned to `<3`, `<7`, `<5` respectively. Prevents silent breakage from downstream major releases; raise the cap deliberately after a compatibility check.
-
-
-## [0.19.0] - 2026-04-17
 
 ### Added
 
