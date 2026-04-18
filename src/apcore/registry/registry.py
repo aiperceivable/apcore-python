@@ -255,6 +255,7 @@ class Registry:
         extensions_dirs: list[str | dict] | None = None,
         id_map_path: str | None = None,
         metrics_collector: Any = None,
+        pre_approval_hook: Callable[[Path], None] | None = None,
     ) -> None:
         """Initialize the Registry.
 
@@ -268,6 +269,12 @@ class Registry:
                 labels ``{event, module_id, error_type}`` each time an event
                 callback raises, giving ops a per-event error signal beyond
                 the process-local counter exposed by ``get_callback_errors()``.
+            pre_approval_hook: Optional callable invoked with the file path
+                of every extension Python file BEFORE it is imported. The
+                hook may raise to reject the file (wrapped as
+                ``ModuleLoadError``). Use for signature verification,
+                hash-based allowlists, or audit logging of extension loads.
+                Applies to both discovery and hot-reload paths.
 
         Raises:
             InvalidInputError: If both extensions_dir and extensions_dirs are specified.
@@ -321,6 +328,7 @@ class Registry:
         self._schema_cache: dict[str, dict[str, Any]] = {}
         self._config = config
         self._metrics_collector = metrics_collector
+        self._pre_approval_hook = pre_approval_hook
         self._custom_discoverer: Discoverer | None = None
         self._custom_validator: ModuleValidator | None = None
 
@@ -523,7 +531,11 @@ class Registry:
                     stem = dm.file_path.stem
                     meta.setdefault("entry_point", f"{stem}:{map_entry['class']}")
             try:
-                resolved[dm.canonical_id] = resolve_entry_point(dm.file_path, meta=meta)
+                resolved[dm.canonical_id] = resolve_entry_point(
+                    dm.file_path,
+                    meta=meta,
+                    pre_approval_hook=self._pre_approval_hook,
+                )
             except Exception as e:
                 logger.warning(
                     "Failed to resolve entry point for '%s': %s", dm.canonical_id, e
@@ -1376,7 +1388,7 @@ class Registry:
         """
         # Phase 1 (outside lock): compile + instantiate + validate new module.
         try:
-            cls = resolve_entry_point(Path(path))
+            cls = resolve_entry_point(Path(path), pre_approval_hook=self._pre_approval_hook)
         except Exception as e:
             logger.warning("Hot reload failed to resolve entry point for %s: %s", path, e)
             return

@@ -161,6 +161,33 @@ class TestTargetResolution:
         with pytest.raises(BindingNotCallableError):
             loader.resolve_target("os.path:sep")
 
+    def test_trusted_prefixes_reject_disallowed(self):
+        """trusted_package_prefixes raises BindingInvalidTargetError for modules outside the allowlist."""
+        from apcore.bindings import BindingLoader
+
+        restricted = BindingLoader(trusted_package_prefixes={"binding_helpers"})
+        with pytest.raises(BindingInvalidTargetError):
+            restricted.resolve_target("os.path:join")
+
+    def test_trusted_prefixes_allow_matching(self):
+        """trusted_package_prefixes permits modules on the allowlist."""
+        from apcore.bindings import BindingLoader
+
+        restricted = BindingLoader(trusted_package_prefixes={"binding_helpers"})
+        result = restricted.resolve_target("binding_helpers:SimpleService.greet")
+        assert callable(result)
+
+    def test_trusted_prefixes_match_prefix_only(self):
+        """A prefix 'binding_helpers' matches 'binding_helpers' AND 'binding_helpers.sub'."""
+        from apcore.bindings import BindingLoader
+
+        restricted = BindingLoader(trusted_package_prefixes={"binding_helpers"})
+        # Exact match: should work.
+        assert callable(restricted.resolve_target("binding_helpers:SimpleService.greet"))
+        # Unrelated module starting with a different prefix: blocked.
+        with pytest.raises(BindingInvalidTargetError):
+            restricted.resolve_target("os:getcwd")
+
 
 # ---------------------------------------------------------------------------
 # Schema Mode Tests

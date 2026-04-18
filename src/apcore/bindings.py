@@ -142,7 +142,26 @@ class BindingLoader:
     """Loads YAML binding files and creates FunctionModule instances.
 
     See DECLARATIVE_CONFIG_SPEC.md §3.
+
+    Args:
+        trusted_package_prefixes: Optional allowlist of module-path prefixes.
+            When set, ``resolve_target`` refuses to ``import_module()`` any
+            target whose ``module_path`` does not start with one of these
+            prefixes. Use this to restrict binding-driven code execution to
+            a vetted set of packages (e.g. ``{"my_app.", "plugins."}``).
+            Default ``None`` preserves the historical "import anything"
+            behaviour — appropriate for trusted, first-party YAML bindings.
     """
+
+    def __init__(
+        self,
+        trusted_package_prefixes: set[str] | None = None,
+    ) -> None:
+        self._trusted_package_prefixes: frozenset[str] | None = (
+            frozenset(trusted_package_prefixes)
+            if trusted_package_prefixes is not None
+            else None
+        )
 
     def load_bindings(self, file_path: str, registry: Registry) -> list[FunctionModule]:
         """Load binding file and register all modules."""
@@ -228,11 +247,26 @@ class BindingLoader:
         return results
 
     def resolve_target(self, target_string: str) -> Callable:
-        """Resolve 'module.path:callable' to actual callable."""
+        """Resolve 'module.path:callable' to actual callable.
+
+        When ``trusted_package_prefixes`` is set on the loader, raises
+        ``BindingInvalidTargetError`` before importing if the module path
+        is not on the allowlist — preventing arbitrary code execution from
+        an untrusted YAML binding file.
+        """
         if ":" not in target_string:
             raise BindingInvalidTargetError(target=target_string)
 
         module_path, callable_name = target_string.split(":", 1)
+
+        if self._trusted_package_prefixes is not None and not any(
+            module_path == prefix.rstrip(".")
+            or module_path.startswith(prefix if prefix.endswith(".") else prefix + ".")
+            for prefix in self._trusted_package_prefixes
+        ):
+            raise BindingInvalidTargetError(
+                target=target_string,
+            )
 
         try:
             mod = importlib.import_module(module_path)

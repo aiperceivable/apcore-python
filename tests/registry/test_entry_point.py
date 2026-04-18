@@ -180,6 +180,33 @@ class TestResolveEntryPointErrors:
             resolve_entry_point(f)
 
 
+# === pre-approval hook ===
+
+
+class TestPreApprovalHook:
+    def test_hook_approves_by_returning(self, tmp_path: Path) -> None:
+        f = tmp_path / "mymod.py"
+        f.write_text(VALID_MODULE)
+        called: list[Path] = []
+
+        def approve(p: Path) -> None:
+            called.append(p)
+
+        cls = resolve_entry_point(f, pre_approval_hook=approve)
+        assert cls.__name__ == "MyTestModule"
+        assert called == [f]
+
+    def test_hook_rejection_wraps_as_module_load_error(self, tmp_path: Path) -> None:
+        f = tmp_path / "mymod.py"
+        f.write_text(VALID_MODULE)
+
+        def reject(p: Path) -> None:
+            raise RuntimeError("not signed")
+
+        with pytest.raises(ModuleLoadError, match="Pre-approval hook rejected"):
+            resolve_entry_point(f, pre_approval_hook=reject)
+
+
 # === snake_to_pascal() ===
 
 

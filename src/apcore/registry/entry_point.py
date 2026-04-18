@@ -5,13 +5,29 @@ from __future__ import annotations
 import importlib.util
 import inspect
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel
 
 from apcore.errors import ModuleLoadError
 
-__all__ = ["resolve_entry_point"]
+__all__ = ["resolve_entry_point", "PreApprovalHook"]
+
+
+PreApprovalHook = Callable[[Path], None]
+"""Signature for a caller-supplied hook invoked before ``exec_module``.
+
+The hook receives the absolute path of a Python file that the loader is
+about to execute. It may:
+
+- ``return`` to approve the load; or
+- ``raise`` any exception to reject the load (the exception is wrapped in
+  ``ModuleLoadError`` with the original as ``__cause__``).
+
+Typical uses: signature verification, path allowlists, content hashing,
+audit logging. The hook runs synchronously inside discovery, so keep it
+fast; expensive checks should be cached.
+"""
 
 
 def snake_to_pascal(name: str) -> str:
@@ -38,7 +54,10 @@ def _is_module_class(cls: type, loaded_module_name: str) -> bool:
     return True
 
 
-def _import_module_from_file(file_path: Path) -> Any:
+def _import_module_from_file(
+    file_path: Path,
+    pre_approval_hook: PreApprovalHook | None = None,
+) -> Any:
     """Dynamically import a Python file and return the loaded module object.
 
     .. warning::
@@ -54,7 +73,18 @@ def _import_module_from_file(file_path: Path) -> Any:
           principals that can deploy code.
         - If extensions come from untrusted sources, run the framework in a
           sandbox (container, separate UID, seccomp).
+        - Pass a ``pre_approval_hook`` that verifies signatures / hashes /
+          allowlists before each file is imported.
     """
+    if pre_approval_hook is not None:
+        try:
+            pre_approval_hook(file_path)
+        except Exception as exc:
+            raise ModuleLoadError(
+                module_id=str(file_path),
+                reason=f"Pre-approval hook rejected {file_path}: {exc}",
+            ) from exc
+
     module_name = f"apcore_ext_{file_path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, str(file_path))
     if spec is None or spec.loader is None:
@@ -73,13 +103,21 @@ def _import_module_from_file(file_path: Path) -> Any:
     return mod
 
 
-def resolve_entry_point(file_path: Path, meta: dict[str, Any] | None = None) -> type:
+def resolve_entry_point(
+    file_path: Path,
+    meta: dict[str, Any] | None = None,
+    pre_approval_hook: PreApprovalHook | None = None,
+) -> type:
     """Resolve the module class from a discovered Python file.
 
     If meta contains an 'entry_point' key in format 'filename:ClassName',
     loads that specific class. Otherwise auto-infers the single module class.
+
+    When ``pre_approval_hook`` is supplied, it is invoked with ``file_path``
+    before ``spec.loader.exec_module`` runs; raising from the hook rejects
+    the load (wrapped as ``ModuleLoadError``).
     """
-    loaded = _import_module_from_file(file_path)
+    loaded = _import_module_from_file(file_path, pre_approval_hook=pre_approval_hook)
 
     # Meta override mode
     if meta and "entry_point" in meta:
