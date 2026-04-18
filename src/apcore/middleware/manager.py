@@ -5,13 +5,33 @@ from __future__ import annotations
 import inspect
 import logging
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 from apcore.errors import ModuleError
 from apcore.middleware.base import Context, Middleware
 
 
-__all__ = ["MiddlewareManager", "MiddlewareChainError"]
+__all__ = ["MiddlewareManager", "MiddlewareChainError", "RetrySignal"]
+
+
+@dataclass(frozen=True)
+class RetrySignal:
+    """Return value from ``Middleware.on_error`` requesting a retry.
+
+    This is distinct from returning a plain ``dict`` — a dict is interpreted
+    by :class:`MiddlewareManager` as the *final recovery output* of the call
+    (short-circuits remaining handlers, becomes the module's return value).
+    A :class:`RetrySignal` instead asks the executor to re-run the module
+    with ``inputs``; no recovery dict is produced.
+
+    Middlewares that need to retry (e.g. :class:`RetryMiddleware`) must
+    return ``RetrySignal(inputs=...)`` rather than the raw inputs dict so
+    the two intents — "here's the recovery output" vs "please try again" —
+    stay distinguishable in the middleware protocol.
+    """
+
+    inputs: dict[str, Any]
 
 _logger = logging.getLogger(__name__)
 
@@ -132,11 +152,13 @@ class MiddlewareManager:
         error: Exception,
         context: Context,
         executed_middlewares: list[Middleware],
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any] | RetrySignal | None:
         """Execute on_error() on executed middlewares in reverse order.
 
-        Returns a recovery dict from the first handler that provides one,
-        or None if no handler recovers.
+        Returns the first non-None handler result: either a recovery ``dict``
+        (becomes the call's output) or a :class:`RetrySignal` (caller should
+        re-run the module with the signal's inputs). ``None`` means no
+        handler chose to act.
         """
         for mw in reversed(executed_middlewares):
             try:
@@ -144,7 +166,9 @@ class MiddlewareManager:
             except Exception:
                 _logger.error("Exception in on_error handler %r", mw, exc_info=True)
                 continue
-            if result is not None:
+            if isinstance(result, RetrySignal):
+                return result
+            if isinstance(result, dict):
                 return result
 
         return None
@@ -202,14 +226,20 @@ class MiddlewareManager:
         error: Exception,
         context: Context,
         executed_middlewares: list[Middleware],
-    ) -> dict[str, Any] | None:
-        """Async-aware on_error chain."""
+    ) -> dict[str, Any] | RetrySignal | None:
+        """Async-aware on_error chain.
+
+        Matches the sync contract: returns a recovery ``dict``, a
+        :class:`RetrySignal`, or ``None``.
+        """
         for mw in reversed(executed_middlewares):
             try:
                 if inspect.iscoroutinefunction(mw.on_error):
                     recovery = await mw.on_error(module_id, inputs, error, context)
                 else:
                     recovery = mw.on_error(module_id, inputs, error, context)
+                if isinstance(recovery, RetrySignal):
+                    return recovery
                 if isinstance(recovery, dict):
                     return recovery
             except Exception:

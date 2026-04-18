@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from apcore.context_keys import RETRY_COUNT_BASE
 from apcore.middleware.base import Context, Middleware
+from apcore.middleware.manager import RetrySignal
 
 __all__ = ["RetryConfig", "RetryMiddleware"]
 
@@ -31,9 +32,12 @@ class RetryMiddleware(Middleware):
     """Middleware that retries failed module executions based on error retryability.
 
     When ``on_error`` is called with a retryable error (``error.retryable is True``),
-    this middleware sleeps for a calculated delay and returns the original *inputs*
-    dict to signal the middleware pipeline to retry execution. After *max_retries*
-    attempts or for non-retryable errors, it returns ``None`` so the error propagates.
+    this middleware sleeps for a calculated delay and returns a
+    :class:`~apcore.middleware.manager.RetrySignal` carrying the original
+    inputs. The executor recognises the signal and re-runs the module;
+    remaining middlewares' ``on_error`` handlers are not invoked for this
+    attempt. After *max_retries* attempts or for non-retryable errors, it
+    returns ``None`` so the error propagates.
 
     Retry state is tracked per-module in ``context.data`` using the key
     ``_apcore.mw.retry.count.{module_id}`` to remain thread-safe across concurrent calls.
@@ -55,7 +59,7 @@ class RetryMiddleware(Middleware):
         inputs: dict[str, Any],
         error: Exception,
         context: Context,
-    ) -> dict[str, Any] | None:
+    ) -> RetrySignal | None:
         """Retry retryable errors up to max_retries with configurable backoff."""
         retryable = getattr(error, "retryable", None)
         if retryable is not True:
@@ -84,7 +88,24 @@ class RetryMiddleware(Middleware):
         )
 
         time.sleep(delay_ms / 1000.0)
-        return dict(inputs)
+        return RetrySignal(inputs=dict(inputs))
+
+    def after(
+        self,
+        module_id: str,
+        inputs: dict[str, Any],
+        output: dict[str, Any],
+        context: Context,
+    ) -> dict[str, Any] | None:
+        """Clear the per-module retry counter on successful completion.
+
+        Without this, context.data accumulates
+        ``_apcore.mw.retry.count.{module_id}`` keys that are never reclaimed,
+        causing unbounded growth across long call chains that happened to
+        recover before the limit was hit.
+        """
+        RETRY_COUNT_BASE.scoped(module_id).delete(context)
+        return None
 
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate delay in milliseconds for the given attempt number."""

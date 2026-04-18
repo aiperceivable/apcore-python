@@ -35,7 +35,7 @@ from apcore.errors import (
 )
 from apcore.utils.error_propagation import propagate_error
 from apcore.middleware import AfterMiddleware, BeforeMiddleware, Middleware
-from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager
+from apcore.middleware.manager import MiddlewareChainError, MiddlewareManager, RetrySignal
 from apcore.module import ModuleAnnotations, PreflightCheckResult, PreflightResult
 from apcore.pipeline import (
     AbortReason,
@@ -724,29 +724,53 @@ class Executor:
             context=context,
             version_hint=version_hint,
         )
-        try:
-            output, _trace = await self._pipeline_engine.run(self._strategy, pipe_ctx)
-        except PipelineAbortError as e:
-            raise self._translate_abort(e) from e
-        except ExecutionCancelledError:
-            raise
-        except Exception as exc:
-            return await self._recover_from_call_error(exc, pipe_ctx, module_id)
-        return output
+        # Loop iterates only when a RetrySignal is returned from on_error
+        # handlers; every other path returns or raises on the first attempt.
+        while True:
+            try:
+                output, _trace = await self._pipeline_engine.run(self._strategy, pipe_ctx)
+            except PipelineAbortError as e:
+                raise self._translate_abort(e) from e
+            except ExecutionCancelledError:
+                raise
+            except Exception as exc:
+                result = await self._recover_from_call_error(exc, pipe_ctx, module_id)
+                if isinstance(result, RetrySignal):
+                    self._reset_pipe_ctx_for_retry(pipe_ctx, result.inputs)
+                    continue
+                return result
+            return output
+
+    @staticmethod
+    def _reset_pipe_ctx_for_retry(pipe_ctx: PipelineContext, new_inputs: dict[str, Any]) -> None:
+        """Prepare PipelineContext for another pipeline run triggered by RetrySignal.
+
+        Preserves the top-level :attr:`PipelineContext.context` (so retry
+        counters in ``context.data`` carry across attempts) while clearing
+        per-run fields that the next attempt will re-populate.
+        """
+        pipe_ctx.inputs = new_inputs
+        pipe_ctx.validated_inputs = None
+        pipe_ctx.module = None
+        pipe_ctx.output = None
+        pipe_ctx.validated_output = None
+        pipe_ctx.executed_middlewares = []
 
     async def _recover_from_call_error(
         self,
         exc: Exception,
         pipe_ctx: PipelineContext,
         module_id: str,
-    ) -> dict[str, Any]:
+    ) -> "dict[str, Any] | RetrySignal":
         """Run A11 error propagation + middleware on_error recovery.
 
-        Returns the recovery dict from the first middleware that provides one.
-        If no middleware recovers, raises the wrapped error (or wraps a
-        ``MiddlewareChainError`` into ``ModuleExecuteError`` first). Never
-        returns ``None`` — callers can rely on the fact that a return value is
-        always a valid recovery dict.
+        Returns:
+            - ``dict`` — a recovery output from the first handler that provided one.
+            - :class:`RetrySignal` — a handler asked for a retry; the caller
+              must re-run the pipeline.
+            - Never returns ``None``: if no handler recovered, the wrapped
+              error is raised (or a ``MiddlewareChainError`` is converted to
+              ``ModuleExecuteError``).
         """
         ctx_obj = pipe_ctx.context
         wrapped = propagate_error(exc, module_id, ctx_obj) if ctx_obj else exc
@@ -804,7 +828,17 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            yield await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            recovery = await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            if isinstance(recovery, RetrySignal):
+                # Retry is not meaningful once a stream has been entered: the
+                # first failure-aware caller of stream() could only be mid-
+                # stream, so we translate a retry request back into the
+                # original error rather than silently re-running.
+                _logger.warning(
+                    "Retry requested during stream for '%s' — ignored; re-raising", module_id
+                )
+                raise exc
+            yield recovery
             return
 
         # If module has no stream(), pipeline already executed and set ctx.output
@@ -830,7 +864,17 @@ class Executor:
         except ExecutionCancelledError:
             raise
         except Exception as exc:
-            yield await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            recovery = await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            if isinstance(recovery, RetrySignal):
+                # Retry is not meaningful once a stream has been entered: the
+                # first failure-aware caller of stream() could only be mid-
+                # stream, so we translate a retry request back into the
+                # original error rather than silently re-running.
+                _logger.warning(
+                    "Retry requested during stream for '%s' — ignored; re-raising", module_id
+                )
+                raise exc
+            yield recovery
             return
 
         # Phase 3: Output validation + middleware_after on accumulated result
@@ -1026,6 +1070,17 @@ class Executor:
             # should use ``call_async`` (which discards the trace) or attach
             # a tracing middleware.
             recovery = await self._recover_from_call_error(exc, pipe_ctx, module_id)
+            if isinstance(recovery, RetrySignal):
+                # call_with_trace is a one-shot introspection API: retries
+                # would require re-running the engine but we also need a
+                # trace, so we re-raise the original exception rather than
+                # silently looping. Callers that need retry semantics should
+                # use call() / call_async() and add a tracing middleware.
+                _logger.warning(
+                    "Retry requested during call_with_trace for '%s' — ignored; re-raising",
+                    module_id,
+                )
+                raise exc
             return recovery, PipelineTrace(
                 module_id=module_id, strategy_name=effective_strategy.name
             )

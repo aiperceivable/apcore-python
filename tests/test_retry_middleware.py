@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from apcore.context import Context
 from apcore.errors import ModuleError, ModuleTimeoutError
+from apcore.middleware.manager import RetrySignal
 from apcore.middleware.retry import RetryConfig, RetryMiddleware
 
 
@@ -31,8 +34,8 @@ class TestRetryMiddlewareDefaults:
 
 
 class TestRetryMiddlewareRetryable:
-    def test_retryable_error_returns_inputs(self) -> None:
-        """A retryable error triggers retry by returning the inputs dict."""
+    def test_retryable_error_returns_retry_signal(self) -> None:
+        """A retryable error triggers retry by returning a RetrySignal."""
         mw = RetryMiddleware(config=RetryConfig(jitter=False, base_delay_ms=0))
         ctx = _make_context()
         inputs = {"x": 1}
@@ -40,11 +43,12 @@ class TestRetryMiddlewareRetryable:
 
         result = mw.on_error("mod.a", inputs, error, ctx)
 
-        assert result == {"x": 1}
+        assert isinstance(result, RetrySignal)
+        assert result.inputs == {"x": 1}
         assert ctx.data["_apcore.mw.retry.count.mod.a"] == 1
 
-    def test_retry_returns_copy_of_inputs(self) -> None:
-        """The returned dict is a copy, not the same object."""
+    def test_retry_signal_carries_copy_of_inputs(self) -> None:
+        """The RetrySignal.inputs is a copy, not the same object as inputs."""
         mw = RetryMiddleware(config=RetryConfig(jitter=False, base_delay_ms=0))
         ctx = _make_context()
         inputs = {"x": 1}
@@ -52,8 +56,9 @@ class TestRetryMiddlewareRetryable:
 
         result = mw.on_error("mod.a", inputs, error, ctx)
 
-        assert result is not inputs
-        assert result == inputs
+        assert isinstance(result, RetrySignal)
+        assert result.inputs is not inputs
+        assert result.inputs == inputs
 
 
 class TestRetryMiddlewareNonRetryable:
@@ -218,3 +223,88 @@ class TestRetryMiddlewareContextTracking:
         mw.on_error("mod.a", {"x": 1}, error, ctx)
 
         mock_sleep.assert_called_once_with(0.2)  # 200ms -> 0.2s
+
+
+class TestRetryMiddlewareIntegration:
+    """End-to-end test through MiddlewareManager + Executor (W11).
+
+    The unit-level tests above call mw.on_error() directly; this test
+    verifies the wiring — MiddlewareManager recognises RetrySignal and the
+    Executor actually re-runs the module.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_re_runs_module_and_returns_success(self) -> None:
+        """A module that fails retryable twice then succeeds is re-run via the pipeline."""
+        from apcore.errors import ModuleError
+        from apcore.executor import Executor
+        from apcore.registry import Registry
+        from pydantic import BaseModel
+
+        attempts: list[int] = []
+
+        class _InSchema(BaseModel):
+            x: int
+
+        class _OutSchema(BaseModel):
+            attempt: int
+
+        class FlakyModule:
+            input_schema = _InSchema
+            output_schema = _OutSchema
+            description = "Fails the first two times, succeeds on the third."
+
+            async def execute(self, inputs: dict, context) -> dict:  # type: ignore[no-untyped-def]
+                attempts.append(1)
+                if len(attempts) < 3:
+                    raise ModuleError(
+                        code="TRANSIENT", message="flaky", retryable=True
+                    )
+                return {"attempt": len(attempts)}
+
+        reg = Registry()
+        reg.register("flaky", FlakyModule())
+
+        mw = RetryMiddleware(
+            config=RetryConfig(max_retries=5, jitter=False, base_delay_ms=0)
+        )
+        ex = Executor(registry=reg, middlewares=[mw])
+
+        result = await ex.call_async("flaky", {"x": 1})
+        assert result == {"attempt": 3}
+        assert len(attempts) == 3
+
+    @pytest.mark.asyncio
+    async def test_retry_gives_up_after_max_and_propagates_error(self) -> None:
+        """After max_retries with persistent failure, the original error propagates."""
+        from apcore.errors import ModuleError
+        from apcore.executor import Executor
+        from apcore.registry import Registry
+        from pydantic import BaseModel
+
+        class _InSchema(BaseModel):
+            x: int
+
+        class _OutSchema(BaseModel):
+            ok: bool
+
+        class AlwaysFailsModule:
+            input_schema = _InSchema
+            output_schema = _OutSchema
+            description = "Always fails with retryable=True."
+
+            async def execute(self, inputs: dict, context) -> dict:  # type: ignore[no-untyped-def]
+                raise ModuleError(
+                    code="TRANSIENT", message="gone", retryable=True
+                )
+
+        reg = Registry()
+        reg.register("never", AlwaysFailsModule())
+
+        mw = RetryMiddleware(
+            config=RetryConfig(max_retries=2, jitter=False, base_delay_ms=0)
+        )
+        ex = Executor(registry=reg, middlewares=[mw])
+
+        with pytest.raises(ModuleError):
+            await ex.call_async("never", {"x": 1})
