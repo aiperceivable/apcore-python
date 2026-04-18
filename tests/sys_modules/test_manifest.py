@@ -279,9 +279,9 @@ class TestManifestFullModuleFields:
             "metadata",
         }
         for entry in result["modules"]:
-            assert expected_fields.issubset(set(entry.keys())), (
-                f"Missing fields in {entry['module_id']}: {expected_fields - set(entry.keys())}"
-            )
+            assert expected_fields.issubset(
+                set(entry.keys())
+            ), f"Missing fields in {entry['module_id']}: {expected_fields - set(entry.keys())}"
 
 
 class TestManifestFullIncludeSchemas:
