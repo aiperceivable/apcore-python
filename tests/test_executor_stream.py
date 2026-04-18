@@ -214,6 +214,56 @@ class TestExecutorStream:
         assert after_output == {"user": {"name": "Alice", "email": "alice@example.com", "age": 30}}
 
 
+class SchemaFailStreamingModule:
+    """Module whose accumulated stream output fails output_schema validation."""
+
+    def __init__(self) -> None:
+        self.input_schema = None
+
+        class _OutSchema(BaseModel):
+            value: int  # stream yields str, forcing validation failure
+
+        self.output_schema = _OutSchema
+
+    def execute(self, inputs: dict[str, Any], context: Context) -> dict[str, Any]:
+        return {}
+
+    async def stream(self, inputs: dict[str, Any], context: Context) -> AsyncIterator[dict[str, Any]]:
+        yield {"value": "not-an-int-a"}
+        yield {"value": "not-an-int-b"}
+
+
+class TestStreamPostValidationFailure:
+    """Post-stream validation failures surface through the emitter + log."""
+
+    @pytest.mark.asyncio
+    async def test_post_stream_failure_emits_event(self) -> None:
+        from unittest.mock import MagicMock
+
+        from apcore.events.emitter import ApCoreEvent
+
+        emitter = MagicMock()
+        ex = _make_executor(
+            module=SchemaFailStreamingModule(),
+            module_id="failstream",
+        )
+        ex._event_emitter = emitter  # inject for the test
+
+        chunks: list[dict[str, Any]] = []
+        async for chunk in ex.stream("failstream", {}):
+            chunks.append(chunk)
+
+        assert len(chunks) == 2  # All chunks still yielded
+
+        # Emitter received a failure event.
+        assert emitter.emit.call_count == 1
+        event: ApCoreEvent = emitter.emit.call_args[0][0]
+        assert event.event_type == "apcore.stream.post_validation_failed"
+        assert event.module_id == "failstream"
+        assert event.severity == "error"
+        assert "error_type" in event.data
+
+
 class SlowStreamingModule:
     """Emits chunks with a sleep between each, enough to cross a short deadline."""
 

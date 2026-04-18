@@ -124,6 +124,7 @@ class Executor:
         acl: ACL | None = None,
         config: Config | None = None,
         approval_handler: ApprovalHandler | None = None,
+        event_emitter: Any = None,
     ) -> None:
         """Initialize the Executor.
 
@@ -137,12 +138,17 @@ class Executor:
             acl: Optional ACL for access control enforcement.
             config: Optional configuration for timeout/depth settings.
             approval_handler: Optional approval handler for Step 5 gate.
+            event_emitter: Optional EventEmitter. When provided, the executor
+                emits apcore.stream.post_validation_failed events so
+                post-stream failures (which cannot un-send already-yielded
+                chunks) are still visible to subscribers.
         """
         self._registry = registry
         self._middleware_manager = MiddlewareManager()
         self._acl = acl
         self._config = config
         self._approval_handler = approval_handler
+        self._event_emitter = event_emitter
 
         if middlewares:
             for mw in middlewares:
@@ -780,19 +786,57 @@ class Executor:
             post_strategy = ExecutionStrategy("post_stream", post_steps)
             try:
                 await self._pipeline_engine.run(post_strategy, pipe_ctx)
-            except Exception:
+            except Exception as post_exc:
                 # Non-fatal for the caller: chunks have already been yielded,
                 # so a failed post-stream validation/middleware run cannot
-                # retroactively change the observable output. Logged at
-                # WARNING (not DEBUG) so the failure is visible in default
-                # production observability — unvalidated output that reached
-                # a consumer is worth investigating even if it can't be
-                # un-sent.
+                # retroactively change the observable output. Still emit an
+                # observability event + WARNING log so the failure is visible
+                # — unvalidated output that reached a consumer is worth
+                # investigating even if it can't be un-sent.
                 _logger.warning(
                     "Post-stream validation/middleware failed for module %s",
                     module_id,
                     exc_info=True,
                 )
+                self._emit_post_stream_failure(module_id, pipe_ctx.context, post_exc)
+
+    def _emit_post_stream_failure(
+        self,
+        module_id: str,
+        context: Context | None,
+        exc: BaseException,
+    ) -> None:
+        """Emit an ApCoreEvent for post-stream validation/middleware failure.
+
+        Also annotates the active tracing span (if any) with status='error'
+        and an exception attribute so trace exporters surface the failure.
+        """
+        if self._event_emitter is not None:
+            from datetime import datetime, timezone
+
+            from apcore.events.emitter import ApCoreEvent
+
+            event = ApCoreEvent(
+                event_type="apcore.stream.post_validation_failed",
+                module_id=module_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                severity="error",
+                data={
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "trace_id": context.trace_id if context is not None else None,
+                },
+            )
+            self._event_emitter.emit(event)
+
+        if context is not None:
+            spans_stack = context.data.get("_apcore.mw.tracing.spans")
+            if isinstance(spans_stack, list) and spans_stack:
+                active_span = spans_stack[-1]
+                setattr(active_span, "status", "error")
+                attrs = getattr(active_span, "attributes", None)
+                if isinstance(attrs, dict):
+                    attrs["exception"] = f"{type(exc).__name__}: {exc}"
 
     # _execute_async removed in v0.17 (replaced by BuiltinExecute pipeline step)
 
