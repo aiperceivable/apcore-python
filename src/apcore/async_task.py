@@ -98,7 +98,12 @@ class AsyncTaskManager:
         Returns:
             The generated task_id (UUID4 string).
         """
-        if len(self._tasks) >= self._max_tasks:
+        active = sum(
+            1
+            for info in self._tasks.values()
+            if info.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+        )
+        if active >= self._max_tasks:
             raise TaskLimitExceededError(max_tasks=self._max_tasks)
 
         task_id = str(uuid.uuid4())

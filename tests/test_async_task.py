@@ -378,6 +378,32 @@ class TestMaxTasksLimit:
         task_id = await mgr.submit("test.simple", {"x": 3})
         assert task_id is not None
 
+    @pytest.mark.asyncio
+    async def test_max_tasks_counts_only_active_tasks(self, executor: Executor) -> None:
+        """max_tasks is a concurrency cap, not a lifetime cap.
+
+        Once tasks reach a terminal state, they must not count against the
+        limit even without an explicit cleanup().
+        """
+        max_tasks = 2
+        mgr = AsyncTaskManager(executor, max_concurrent=10, max_tasks=max_tasks)
+
+        # Fill the limit with tasks and let them complete.
+        for _ in range(max_tasks):
+            await mgr.submit("test.simple", {"x": 1})
+        await asyncio.sleep(0.1)
+
+        # Terminal tasks stay in _tasks for get_status()/get_result(), but
+        # they must not block new submissions.
+        assert all(
+            info.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+            for info in mgr._tasks.values()
+        )
+
+        # Submitting again should succeed without calling cleanup().
+        new_id = await mgr.submit("test.simple", {"x": 99})
+        assert new_id in mgr._tasks
+
 
 class TestShutdown:
     """shutdown() cancels all pending/running tasks."""
