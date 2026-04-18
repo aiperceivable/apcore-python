@@ -8,9 +8,11 @@ Supports sync, async, and streaming execution modes.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
 import threading
 import time
+import weakref
 from collections.abc import AsyncIterator
 from typing import Any, Callable
 
@@ -114,6 +116,16 @@ def _preflight_check_for(exc: BaseException) -> str:
 
 
 _MAX_MERGE_DEPTH = 32
+
+
+def _close_if_alive(ref: "weakref.ref[Executor]") -> None:
+    """atexit callback: close() the Executor if its weakref is still live."""
+    obj = ref()
+    if obj is not None:
+        try:
+            obj.close()
+        except Exception:  # pragma: no cover — atexit best-effort
+            _logger.warning("atexit Executor.close() failed", exc_info=True)
 
 
 def _deep_merge(
@@ -247,6 +259,11 @@ class Executor:
         # close() (or use the `async with` context-manager form) so the loop
         # is released deterministically rather than waiting for the GC finalizer.
         self._sync_loop: asyncio.AbstractEventLoop | None = None
+
+        # Best-effort cleanup at interpreter shutdown for callers that never
+        # call close(). Uses a weakref so the atexit callback does not itself
+        # keep the Executor alive past normal refcount-driven GC.
+        atexit.register(_close_if_alive, weakref.ref(self))
 
     @classmethod
     def from_registry(
@@ -619,9 +636,16 @@ class Executor:
         """Run coroutine in a new thread with its own event loop.
 
         Bounds the outer ``thread.join()`` by ``self._global_timeout`` (ms) so a
-        dead-locked coroutine cannot indefinitely hang the sync caller. The
-        daemon thread is left running (process exit remains clean); the caller
-        receives ``ModuleTimeoutError`` naming the module that blocked.
+        dead-locked coroutine cannot indefinitely hang the sync caller.
+
+        If the outer join times out, this method attempts to stop the inner
+        event loop via ``asyncio.run_coroutine_threadsafe(loop.stop(), loop)``
+        so the daemon thread unwinds instead of silently continuing to mutate
+        shared state (metrics, registry) after the sync caller has already
+        raised ``ModuleTimeoutError``. Stopping is best-effort: if the
+        coroutine never awaits, the loop cannot be stopped from outside; in
+        that case the daemon thread is still left alive to keep process exit
+        clean, but a warning is logged so the condition is visible.
 
         The per-call ``timeout_s`` still applies inside the thread via
         ``asyncio.wait_for``; the outer bound is a strictly-looser safety
@@ -629,9 +653,11 @@ class Executor:
         """
         result_holder: dict[str, Any] = {}
         exception_holder: dict[str, Exception] = {}
+        loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
 
         def thread_target() -> None:
             loop = asyncio.new_event_loop()
+            loop_holder["loop"] = loop
             asyncio.set_event_loop(loop)
             try:
                 if timeout_s is not None:
@@ -654,6 +680,15 @@ class Executor:
         outer_budget_s = max(self._global_timeout, self._default_timeout) / 1000.0 + 1.0
         thread.join(timeout=outer_budget_s)
         if thread.is_alive():
+            inner_loop = loop_holder.get("loop")
+            if inner_loop is not None and inner_loop.is_running():
+                try:
+                    inner_loop.call_soon_threadsafe(inner_loop.stop)
+                except Exception:  # pragma: no cover — loop may already be closing
+                    _logger.warning(
+                        "Unable to signal stop() on orphaned sync-in-loop thread for module %s",
+                        module_id,
+                    )
             raise ModuleTimeoutError(
                 module_id=module_id,
                 timeout_ms=int(outer_budget_s * 1000),
