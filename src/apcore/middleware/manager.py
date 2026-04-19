@@ -71,6 +71,12 @@ class MiddlewareManager:
         (stable insertion). Priority range is 0-1000 per the protocol spec.
         """
         with self._lock:
+            priority = getattr(middleware, 'priority', 0)
+            if priority > 1000:
+                raise ValueError(
+                    f"Middleware '{getattr(middleware, 'name', type(middleware).__name__)}' has priority {priority} "
+                    f"which exceeds the maximum allowed value of 1000"
+                )
             # Find the first position where the existing middleware has a
             # lower priority. This keeps higher-priority items first and
             # preserves registration order among equal priorities.
