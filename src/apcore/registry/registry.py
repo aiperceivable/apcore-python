@@ -1122,6 +1122,32 @@ class Registry:
                 raise InvalidInputError(message=f"Invalid event: {event}. Must be 'register' or 'unregister'")
             self._callbacks[event].append(callback)
 
+    def off(self, event: str, callback: Callable[..., Any]) -> bool:
+        """Unregister an event callback.
+
+        Mirrors ``apcore-typescript.Registry.off`` and
+        ``apcore-rust.Registry::off``.
+
+        Args:
+            event: Event name ('register' or 'unregister').
+            callback: The exact callable previously passed to ``on()``.
+
+        Returns:
+            True if the callback was found and removed, False if not found.
+
+        Raises:
+            InvalidInputError: If event name is invalid.
+        """
+        with self._lock:
+            if event not in self._callbacks:
+                raise InvalidInputError(message=f"Invalid event: {event}. Must be 'register' or 'unregister'")
+            callbacks = self._callbacks[event]
+            try:
+                callbacks.remove(callback)
+                return True
+            except ValueError:
+                return False
+
     def _trigger_event(self, event: str, module_id: str, module: Any) -> None:
         """Trigger all callbacks for an event.
 
@@ -1514,6 +1540,18 @@ class Registry:
             self._modules[module_id] = module
             self._module_meta[module_id] = merged_meta
             self._lowercase_map[module_id.lower()] = module_id
+
+        # Call on_load if defined — mirrors the register() path. Roll back if it fails.
+        if hasattr(module, "on_load") and callable(module.on_load):
+            try:
+                module.on_load()
+            except Exception:
+                with self._lock:
+                    self._modules.pop(module_id, None)
+                    self._module_meta.pop(module_id, None)
+                    self._lowercase_map.pop(module_id.lower(), None)
+                raise
+
         self._trigger_event("register", module_id, module)
 
     # ----- Cache -----
