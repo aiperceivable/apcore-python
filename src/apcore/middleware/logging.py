@@ -28,6 +28,13 @@ class LoggingMiddleware(Middleware):
         log_outputs: bool = True,
         log_errors: bool = True,
     ) -> None:
+        import warnings
+        warnings.warn(
+            "LoggingMiddleware is deprecated and will be removed in version 1.0.0. "
+            "Use ObsLoggingMiddleware from apcore.observability.context_logger instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(priority=700)
         self._logger = logger or logging.getLogger("apcore.middleware.logging")
         self._log_inputs = log_inputs
