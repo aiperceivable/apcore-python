@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from apcore.config import Config, _CONSTRAINTS
+from apcore.utils.redaction import REDACTED_VALUE
 from apcore.errors import (
     ConfigError,
     InvalidInputError,
@@ -150,8 +151,8 @@ class UpdateConfigModule:
         return {
             "success": True,
             "key": key,
-            "old_value": "***" if redacted else old_value,
-            "new_value": "***" if redacted else value,
+            "old_value": REDACTED_VALUE if redacted else old_value,
+            "new_value": REDACTED_VALUE if redacted else value,
         }
 
     # ------------------------------------------------------------------
@@ -207,8 +208,8 @@ class UpdateConfigModule:
                 severity="info",
                 data={
                     "key": key,
-                    "old_value": "***" if redacted else old_value,
-                    "new_value": "***" if redacted else new_value,
+                    "old_value": REDACTED_VALUE if redacted else old_value,
+                    "new_value": REDACTED_VALUE if redacted else new_value,
                 },
             )
         )
