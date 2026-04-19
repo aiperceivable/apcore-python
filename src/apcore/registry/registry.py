@@ -827,6 +827,7 @@ class Registry:
                     if not self._versioned_modules.has(module_id):
                         self._modules.pop(module_id, None)
                         self._module_meta.pop(module_id, None)
+                        self._lowercase_map.pop(module_id.lower(), None)
                 raise
 
         self._trigger_event("register", module_id, module)
