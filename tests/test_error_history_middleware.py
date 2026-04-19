@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from apcore.errors import ModuleError, ModuleNotFoundError
 from apcore.middleware.base import Middleware
-from apcore.middleware.error_history import ErrorHistoryMiddleware
+from apcore.middleware.error_history_middleware import ErrorHistoryMiddleware
 from apcore.observability.error_history import ErrorHistory
 
 

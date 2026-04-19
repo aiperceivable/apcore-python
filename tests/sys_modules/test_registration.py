@@ -11,7 +11,7 @@ import pytest
 from apcore.config import Config
 from apcore.events.emitter import EventEmitter
 from apcore.executor import Executor
-from apcore.middleware.error_history import ErrorHistoryMiddleware
+from apcore.middleware.error_history_middleware import ErrorHistoryMiddleware
 from apcore.middleware.platform_notify import PlatformNotifyMiddleware
 from apcore.observability.error_history import ErrorHistory
 from apcore.observability.metrics import MetricsCollector

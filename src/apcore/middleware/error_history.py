@@ -1,32 +1,11 @@
-"""Middleware that records ModuleError details into ErrorHistory."""
+"""Backward-compatibility shim. Import ErrorHistoryMiddleware from error_history_middleware instead."""
 
-from __future__ import annotations
+import warnings
 
-from typing import Any, TypeAlias
+warnings.warn(
+    "apcore.middleware.error_history is deprecated; use apcore.middleware.error_history_middleware",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-from apcore.errors import ModuleError
-from apcore.middleware.base import Middleware
-from apcore.observability.error_history import ErrorHistory
-
-Context: TypeAlias = Any
-
-
-class ErrorHistoryMiddleware(Middleware):
-    """Records ModuleError instances into ErrorHistory on every on_error() call.
-
-    Generic exceptions are ignored. This middleware never recovers from errors.
-    """
-
-    def __init__(self, error_history: ErrorHistory) -> None:
-        self._error_history = error_history
-
-    def on_error(
-        self,
-        module_id: str,
-        inputs: dict[str, Any],
-        error: Exception,
-        context: Context,
-    ) -> dict[str, Any] | None:
-        if isinstance(error, ModuleError):
-            self._error_history.record(module_id, error)
-        return None
+from apcore.middleware.error_history_middleware import ErrorHistoryMiddleware  # noqa: F401, E402

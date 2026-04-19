@@ -11,7 +11,7 @@ from apcore.config import Config
 from apcore.events.emitter import ApCoreEvent, EventEmitter, EventSubscriber
 from apcore.events.subscribers import A2ASubscriber, WebhookSubscriber
 from apcore.executor import Executor
-from apcore.middleware.error_history import ErrorHistoryMiddleware
+from apcore.middleware.error_history_middleware import ErrorHistoryMiddleware
 from apcore.middleware.platform_notify import PlatformNotifyMiddleware
 from apcore.observability.error_history import ErrorHistory
 from apcore.observability.metrics import MetricsCollector
@@ -98,7 +98,7 @@ def register_subscriber_type(
                  an EventSubscriber instance.
     """
     warnings.warn(
-        "register_subscriber_type is deprecated and will be removed in the next major release.",
+        "register_subscriber_type is deprecated and will be removed in version 1.0.0.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -117,7 +117,7 @@ def unregister_subscriber_type(type_name: str) -> None:
         KeyError: If the type_name is not registered.
     """
     warnings.warn(
-        "unregister_subscriber_type is deprecated and will be removed in the next major release.",
+        "unregister_subscriber_type is deprecated and will be removed in version 1.0.0.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -131,7 +131,7 @@ def reset_subscriber_registry() -> None:
     register custom subscriber types.
     """
     warnings.warn(
-        "reset_subscriber_registry is deprecated and will be removed in the next major release.",
+        "reset_subscriber_registry is deprecated and will be removed in version 1.0.0.",
         DeprecationWarning,
         stacklevel=2,
     )
