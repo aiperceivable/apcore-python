@@ -22,7 +22,9 @@ from apcore.acl_handlers import (
     _IdentityTypesHandler,
     _MaxCallDepthHandler,
     _NotHandler,
+    _NotHandlerAsync,
     _OrHandler,
+    _OrHandlerAsync,
     _RolesHandler,
 )
 from apcore.context import Context
@@ -90,10 +92,27 @@ class ACL:
         "max_call_depth": _MaxCallDepthHandler(),
     }
 
+    # Async condition handlers: used by _evaluate_conditions_async for compound
+    # operators ($or, $not) that need to await sub-condition evaluations.
+    # Falls back to _condition_handlers for keys not present here.
+    _async_condition_handlers: ClassVar[dict[str, ACLConditionHandler]] = {}
+
     @classmethod
     def register_condition(cls, key: str, handler: ACLConditionHandler) -> None:
         """Register a condition handler. Replaces existing handler for same key."""
         cls._condition_handlers[key] = handler
+
+    @classmethod
+    def register_async_condition(cls, key: str, handler: ACLConditionHandler) -> None:
+        """Register an async-aware condition handler used by async_check().
+
+        Async handlers are used instead of the sync handler when the async
+        evaluation path is active. This allows compound operators like $or/$not
+        to properly await sub-condition handlers.
+
+        Mirrors ``apcore-typescript.ACL.registerAsyncCondition``.
+        """
+        cls._async_condition_handlers[key] = handler
 
     @classmethod
     def _evaluate_conditions(
@@ -130,9 +149,11 @@ class ACL:
         conditions: dict[str, Any],
         context: Context,
     ) -> bool:
-        """Async variant. Awaits async handlers, calls sync handlers directly."""
+        """Async variant. Uses async handler if registered, falls back to sync."""
         for key, value in conditions.items():
-            handler = cls._condition_handlers.get(key)
+            # Prefer async-specific handler (e.g., _OrHandlerAsync) so compound
+            # operators recurse through the async path and properly await.
+            handler = cls._async_condition_handlers.get(key) or cls._condition_handlers.get(key)
             if handler is None:
                 _logger.warning("Unknown ACL condition %r — treated as unsatisfied", key)
                 return False
@@ -587,3 +608,8 @@ class ACL:
 # ---------------------------------------------------------------------------
 ACL.register_condition("$or", _OrHandler(ACL._evaluate_conditions))
 ACL.register_condition("$not", _NotHandler(ACL._evaluate_conditions))
+
+# Async-aware variants: used by async_check() so $or/$not properly await
+# async sub-condition handlers (mirrors TypeScript registerAsyncCondition).
+ACL.register_async_condition("$or", _OrHandlerAsync(ACL._evaluate_conditions_async))
+ACL.register_async_condition("$not", _NotHandlerAsync(ACL._evaluate_conditions_async))

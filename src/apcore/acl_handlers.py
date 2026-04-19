@@ -2,12 +2,12 @@
 
 Defines the ACLConditionHandler protocol (sync and async variants),
 three basic handlers (identity_types, roles, max_call_depth), and
-two compound operators ($or, $not).
+two compound operators ($or, $not) with both sync and async variants.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, Union, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, Union, runtime_checkable
 
 from apcore.context import Context
 
@@ -36,6 +36,7 @@ ACLConditionHandler = Union[SyncACLConditionHandler, AsyncACLConditionHandler]
 
 # Type alias for the recursive evaluation function used by compound handlers.
 _EvalFn = Callable[[dict[str, Any], Context], bool]
+_AsyncEvalFn = Callable[[dict[str, Any], Context], Awaitable[bool]]
 
 
 # ---------------------------------------------------------------------------
@@ -113,3 +114,45 @@ class _NotHandler:
         if not isinstance(value, dict):
             return False
         return not self._evaluate(value, context)
+
+
+# ---------------------------------------------------------------------------
+# Async compound handlers (for use with async_check / _evaluate_conditions_async)
+# ---------------------------------------------------------------------------
+
+
+class _OrHandlerAsync:
+    """Async $or: list of condition dicts. Returns True if ANY sub-set passes.
+
+    Mirrors TypeScript's OrHandlerAsync — uses the async evaluation path so
+    async sub-condition handlers are properly awaited.
+    """
+
+    def __init__(self, evaluate_fn: _AsyncEvalFn) -> None:
+        self._evaluate = evaluate_fn
+
+    async def evaluate(self, value: Any, context: Context) -> bool:
+        if not isinstance(value, list):
+            return False
+        for sub in value:
+            if not isinstance(sub, dict):
+                continue
+            if await self._evaluate(sub, context):
+                return True
+        return False
+
+
+class _NotHandlerAsync:
+    """Async $not: single condition dict. Returns True if the sub-set FAILS.
+
+    Mirrors TypeScript's NotHandlerAsync — uses the async evaluation path so
+    async sub-condition handlers are properly awaited.
+    """
+
+    def __init__(self, evaluate_fn: _AsyncEvalFn) -> None:
+        self._evaluate = evaluate_fn
+
+    async def evaluate(self, value: Any, context: Context) -> bool:
+        if not isinstance(value, dict):
+            return False
+        return not await self._evaluate(value, context)
