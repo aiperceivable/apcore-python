@@ -3,4 +3,5 @@
 
 def test_module_importable():
     from apcore import module
+
     assert module is not None

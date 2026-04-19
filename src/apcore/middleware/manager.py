@@ -71,7 +71,7 @@ class MiddlewareManager:
         (stable insertion). Priority range is 0-1000 per the protocol spec.
         """
         with self._lock:
-            priority = getattr(middleware, 'priority', 0)
+            priority = getattr(middleware, "priority", 0)
             if priority > 1000:
                 raise ValueError(
                     f"Middleware '{getattr(middleware, 'name', type(middleware).__name__)}' has priority {priority} "
