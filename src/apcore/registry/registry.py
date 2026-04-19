@@ -764,6 +764,11 @@ class Registry:
 
         _ensure_schema_adapter(module)
 
+        if self._custom_validator is not None:
+            errors = self._custom_validator.validate(module)
+            if errors:
+                raise InvalidInputError(message=f"Custom validator rejected module '{module_id}': {'; '.join(errors)}")
+
         effective_version = version or getattr(module, "version", None) or DEFAULT_MODULE_VERSION
 
         is_versioned = version is not None
@@ -840,6 +845,11 @@ class Registry:
             self._lowercase_map.pop(module_id.lower(), None)
             self._versioned_modules.remove_all(module_id)
             self._versioned_meta.remove_all(module_id)
+            # Clear hot-reload tracking state to avoid stale entries if
+            # unregister() is called directly (not via safe_unregister()).
+            self._draining.discard(module_id)
+            self._drain_events.pop(module_id, None)
+            self._ref_counts.pop(module_id, None)
 
         # Call on_unload if available
         if hasattr(module, "on_unload") and callable(module.on_unload):

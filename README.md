@@ -104,11 +104,7 @@ A schema-enforced module standard for the AI-Perceivable era.
 
 ## Cross-Language Parity Notes
 
-`AsyncTaskManager` and `ExtensionManager` ship with the Python and TypeScript
-SDKs but are not yet available in the Rust SDK (the Rust stubs were removed
-in 0.18.0 pending a real implementation). Code that relies on background
-task submission or the extension point registry will need to stay in
-Python or TypeScript for now.
+`AsyncTaskManager` and `ExtensionManager` are available in all three SDKs (Python, TypeScript, and Rust as of v0.19.0).
 
 ## Configuration
 
