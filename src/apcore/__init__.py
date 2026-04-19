@@ -374,6 +374,7 @@ def module(
     tags: list[str] | None = None,
     version: str = "1.0.0",
     metadata: dict[str, Any] | None = None,
+    display: dict[str, Any] | None = None,
     examples: list[Any] | None = None,
     registry: Any = None,
 ) -> Any:
@@ -394,6 +395,7 @@ def module(
             tags=tags,
             version=version,
             metadata=metadata,
+            display=display,
             examples=examples,
             registry=registry,
         )
@@ -405,6 +407,7 @@ def module(
         tags=tags,
         version=version,
         metadata=metadata,
+        display=display,
         examples=examples,
     )
 

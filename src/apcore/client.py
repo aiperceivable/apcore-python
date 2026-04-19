@@ -92,6 +92,7 @@ class APCore:
         tags: list[str] | None = None,
         version: str = "1.0.0",
         metadata: dict[str, Any] | None = None,
+        display: dict[str, Any] | None = None,
         examples: list[Any] | None = None,
     ) -> Callable:
         """Decorator to register a function as a module in this client's registry.
@@ -111,6 +112,7 @@ class APCore:
                 tags=tags,
                 version=version,
                 metadata=metadata,
+                display=display,
                 examples=examples,
                 registry=self.registry,
             )
