@@ -15,7 +15,7 @@ build/
 venv/
 env/
 .env
-
+docs/issues/
 # Forge planning artifacts (internal only)
 .forge/
 
