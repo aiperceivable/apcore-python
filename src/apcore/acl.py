@@ -1406,6 +1406,28 @@ class ACL:
         if not isinstance(data, dict):
             raise ACLRuleError(f"ACL config must be a mapping, got {type(data).__name__}")
 
+        # PROTOCOL_SPEC §9.2.4.1 (apcore#118): an `audit:` block in an ACL file
+        # has never been read. Deleting it from `acl-config.schema.json` would
+        # produce no signal at all — no implementation validates an ACL file
+        # against that schema, and this loader parses into an open mapping and
+        # takes the fields it wants, so any unknown root key is dropped in
+        # silence. The diagnostic therefore has to live here.
+        #
+        # Scoped to `audit` deliberately: this is a deprecation notice, NOT
+        # unknown-key closure for ACL files. Every other unrecognised root key
+        # keeps being ignored exactly as before, and the block itself is still
+        # ignored — nothing about this file's behaviour changes.
+        if "audit" in data:
+            _logger.warning(
+                "apcore#118 (PROTOCOL_SPEC §9.2.4.1): %s declares an 'audit:' block, which "
+                "no apcore SDK has ever read — auditing is wired programmatically through "
+                "ACL(audit_logger=...). The same three settings are also declared as "
+                "'acl.audit.*' in apcore.yaml and are equally inert. One of the two "
+                "declarations is removed no earlier than v2.0 (§13.2 / §13.4); nothing has "
+                "changed in this release.",
+                yaml_path,
+            )
+
         # PROTOCOL_SPEC §6.2.1: `default_effect` is judged FIRST, before any
         # rule, at every door. It is not a rule and has no index, so the rule
         # ordering below never reaches it — and this used to be left entirely to

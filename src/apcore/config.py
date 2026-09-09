@@ -1038,6 +1038,50 @@ def _emit_per_load(message: str, category: type[Warning], *, stacklevel: int) ->
     )
 
 
+#: PROTOCOL_SPEC §9.2.4 — the ten declared configuration keys that reach no
+#: consumer in any implementation (apcore#118). Order is the order they are
+#: reported in, so two SDKs name them the same way.
+_DEPRECATED_INERT_KEYS: tuple[str, ...] = (
+    "observability.tracing.enabled",
+    "observability.tracing.sampling_rate",
+    "observability.tracing.exporter",
+    "observability.metrics.enabled",
+    "observability.metrics.exporter",
+    "logging.level",
+    "logging.format",
+    "acl.audit.enabled",
+    "acl.audit.include_denied",
+    "acl.audit.log_level",
+)
+
+
+def _warn_deprecated_inert_keys(config: Config) -> None:
+    """PROTOCOL_SPEC §9.2.4 — warn for declared keys that reach no consumer.
+
+    Driven by the **declared** document, never the merged view (requirement 2).
+    Every one of these keys has a default, so a merged-view check would fire for
+    every configuration ever loaded — the blanket warning §9.2.2 rejects, which
+    trains operators to ignore the one that matters.
+
+    Behaviour is unchanged (requirement 3): the keys still parse, still validate,
+    still answer ``get()``, and are still accepted under ``_config.strict``. This
+    adds the one thing they have never had — a way for an operator to find out
+    that setting them does nothing.
+    """
+    declared = [key for key in _DEPRECATED_INERT_KEYS if _get_nested(config.declared, key) is not None]
+    if not declared:
+        return
+    _emit_per_load(
+        f"apcore#118 (PROTOCOL_SPEC §9.2.4): this configuration declares "
+        f"{len(declared)} key(s) that reach no consumer in any apcore SDK and have no "
+        f"effect: {', '.join(declared)}. They keep parsing and validating for the whole "
+        "1.x line and are removed no earlier than v2.0 (§13.2 / §13.4). Nothing has "
+        "changed in this release — the keys did nothing before this warning existed.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 def _warn_if_project_root_diverges(config: Config) -> None:
     """PROTOCOL_SPEC §9.2.2 requirement 2 — the *narrow* deprecation warning.
 
@@ -1362,6 +1406,7 @@ class Config:
         config._config_file_tier = tier
         config._project_root = _project_root_for(config._yaml_path, tier)
         _warn_if_project_root_diverges(config)
+        _warn_deprecated_inert_keys(config)
         return config
 
     @classmethod
