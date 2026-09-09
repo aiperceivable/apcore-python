@@ -48,7 +48,7 @@ from typing import Any
 
 import pytest
 
-from apcore.config import Config
+from apcore.config import _DEFAULT_OBS_REDACTION_SENSITIVE_KEYS, Config
 from apcore.observability import ContextLogger, RedactionConfig
 from apcore.utils.redaction import redact_sensitive
 
@@ -99,12 +99,19 @@ def _build_config(case: dict[str, Any]) -> RedactionConfig:
     if spec.get("use_defaults") or keys is None:
         # `use_defaults: true` / `sensitive_keys: null` means "the canonical
         # default list", not "no key matching".
-        config = RedactionConfig.default()
-    else:
-        config = RedactionConfig(sensitive_keys=list(keys))
-    config.regex_patterns = list(spec.get("regex_patterns") or [])
-    config.replacement = spec["replacement"]
-    return config
+        keys = _DEFAULT_OBS_REDACTION_SENSITIVE_KEYS
+    # `regex_patterns` is a CONSTRUCTOR argument, not an attribute to assign
+    # afterwards: RedactionConfig compiles it once in `__post_init__`
+    # (PROTOCOL_SPEC 10.6.1 requirement 5), so a later assignment leaves the
+    # compiled list behind and the value rule silently matches nothing. This
+    # driver did assign it, and every regex case here went green anyway while
+    # the old code recompiled per record — which is the same shape as the
+    # defect the fixture exists to catch, in the harness.
+    return RedactionConfig(
+        sensitive_keys=list(keys),
+        regex_patterns=list(spec.get("regex_patterns") or []),
+        replacement=spec["replacement"],
+    )
 
 
 def _expected_fields(case: dict[str, Any]) -> dict[str, Any]:
@@ -383,6 +390,9 @@ def test_fixture_case_ids_are_covered() -> None:
         "sensitive_keys_bracket_is_a_literal_never_a_character_class",
         "sensitive_keys_glob_entry_is_anchored_to_the_whole_name",
         "regex_patterns_are_an_unanchored_search",
+        # PROTOCOL_SPEC 10.6.1 requirement 2 — string values only (v1.40.0).
+        "regex_patterns_do_not_test_non_string_values",
+        "regex_patterns_still_reach_a_string_inside_a_container",
     }
     ids = {c["id"] for c in CASES}
     assert ids == driven, (

@@ -8,10 +8,16 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import Any
 
 from apcore.utils.pattern import match_glob
 from apcore.utils.redaction import PROTECTED_LOG_FIELDS as _PROTECTED_LOG_FIELDS
+from apcore.utils.redaction import (
+    ValuePattern,
+    _value_matches,
+    compile_value_regexes,
+)
 
 from apcore.context_keys import LOGGING_STARTS
 from apcore.middleware.base import Middleware
@@ -64,10 +70,28 @@ class RedactionConfig:
             redacted whenever its name contains it, at any nesting depth.
             ``[``, ``]``, ``{``, ``}`` and ``\\`` are literals, never a
             character class.
-        regex_patterns: Compiled regex patterns matched against string field
-            **values** (Issue #43 §5).  Matched values are replaced with
-            ``replacement``.  Patterns are compiled with ``re.IGNORECASE``.
+        regex_patterns: Regex patterns matched against **string** field
+            **values** (Issue #43 §5, PROTOCOL_SPEC §10.6.1).  Matched values
+            are replaced with ``replacement``.  Compiled once here, with
+            ``re.IGNORECASE``.  A non-string value is never tested and never
+            stringified in order to test it (§10.6.1 requirement 2).
         replacement: Substitution string for redacted values; default ``"***REDACTED***"``.
+
+    Two derived fields are computed at construction and are not constructor
+    arguments:
+
+        compiled_regex_patterns: ``regex_patterns`` compiled once, per
+            §10.6.1 requirement 5 — "compilation SHOULD happen once, when the
+            configuration is read, so the diagnostic fires at load rather than
+            per log record".  Use this on any hot path.
+        invalid_regex_patterns: ``(pattern, engine message)`` for every entry
+            that did not compile, for ``validate_config()`` to report
+            (§10.6.1 requirement 4).
+
+    Mutating ``regex_patterns`` after construction does **not** recompile.
+    That is the point of compiling here: the list is read once, where the
+    configuration is, and the requirement-4 diagnostic is raised once for that
+    configuration.  Build a new instance to change the patterns.
     """
 
     field_patterns: list[str] = field(default_factory=list)
@@ -75,6 +99,21 @@ class RedactionConfig:
     sensitive_keys: list[str] = field(default_factory=list)
     regex_patterns: list[str] = field(default_factory=list)
     replacement: str = "***REDACTED***"
+
+    compiled_regex_patterns: list[re.Pattern[str]] = field(init=False, repr=False, compare=False)
+    invalid_regex_patterns: list[tuple[str, str]] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Compile ``regex_patterns`` once, reporting the ones that will not.
+
+        PROTOCOL_SPEC §10.6.1 requirement 5. The de-duplication that keeps the
+        requirement-4 diagnostic to one line per bad pattern is scoped to this
+        construction and nothing wider: the module-level ``set`` this replaced
+        was never cleared, so the *second* configuration to carry the same
+        broken pattern was told nothing — the reload case and the multi-tenant
+        case, which are the two where an operator most needs telling.
+        """
+        self.compiled_regex_patterns, self.invalid_regex_patterns = compile_value_regexes(self.regex_patterns)
 
     @classmethod
     def from_config(cls, config: Any) -> RedactionConfig:
@@ -175,25 +214,32 @@ def _key_matches_sensitive(key: str, sensitive_keys: list[str]) -> bool:
     return False
 
 
-def _value_matches_regex(value: Any, regex_patterns: list[str]) -> bool:
-    """Return True if *value* (stringified) matches one of ``regex_patterns``.
+def _value_matches_regex(value: Any, regex_patterns: Sequence[ValuePattern]) -> bool:
+    """Return True if *value* is a string matching one of ``regex_patterns``.
 
-    All patterns are compiled with :data:`re.IGNORECASE` so SREs writing
-    e.g. ``"^bearer\\s+.+$"`` match both ``Bearer ...`` and ``bearer ...``.
+    Delegates to the canonical matcher in :mod:`apcore.utils.redaction` rather
+    than repeating it. The two used to be separate, and the two halves of one
+    rule then held on one surface each:
+
+    * This one stringified — ``str(value)`` — so with ``regex_patterns:
+      [r"\\d+"]`` the field ``amount: 42`` came back ``***REDACTED***`` at log
+      emission and ``42`` from ``redact_sensitive``, one SDK giving two answers
+      for one value on a rule §10.6 requires to hold on **both** surfaces.
+      §10.6.1 requirement 2 now forbids the conversion outright: it is not
+      merely unnecessary but unspecifiable, since the three host languages
+      render one non-string value three different ways.
+    * That one reported an uncompilable pattern (§10.6.1 requirement 4); this
+      one swallowed ``re.error`` and continued, which is the silence the
+      requirement exists to forbid — an operator-authored rule that redacts
+      nothing, indistinguishable from one that works, on a surface where the
+      difference is credentials in plaintext.
+
+    Compiled patterns pass straight through, so the hot path costs nothing:
+    :class:`RedactionConfig` compiles once at construction (requirement 5).
     """
     if not regex_patterns:
         return False
-    value_str = value if isinstance(value, str) else str(value)
-    for pat in regex_patterns:
-        if not pat:
-            continue
-        try:
-            if re.search(pat, value_str, flags=re.IGNORECASE) is not None:
-                return True
-        except re.error:
-            # Bad operator-supplied regex — skip rather than crash logging.
-            continue
-    return False
+    return _value_matches(value, compile_value_regexes(regex_patterns)[0])
 
 
 def _apply_redaction_config(data: dict[str, Any], config: RedactionConfig) -> dict[str, Any]:
@@ -219,7 +265,7 @@ def _apply_redaction_config(data: dict[str, Any], config: RedactionConfig) -> di
         value_str = str(value) if not isinstance(value, str) else value
         value_match = any(re.search(pattern, value_str) for pattern in config.value_patterns)
         sensitive_key_match = _key_matches_sensitive(key, config.sensitive_keys)
-        regex_value_match = _value_matches_regex(value, config.regex_patterns)
+        regex_value_match = _value_matches(value, config.compiled_regex_patterns)
         if field_match or value_match or sensitive_key_match or regex_value_match:
             result[key] = config.replacement
         else:
@@ -268,7 +314,7 @@ def _redact_secrets_recursive(
             protected = isinstance(k, str) and k in PROTECTED_LOG_FIELDS
             if not protected and isinstance(k, str) and _key_matches_sensitive(k, config.sensitive_keys):
                 out[k] = config.replacement
-            elif not protected and isinstance(v, str) and _value_matches_regex(v, config.regex_patterns):
+            elif not protected and isinstance(v, str) and _value_matches(v, config.compiled_regex_patterns):
                 out[k] = config.replacement
             elif protected and not isinstance(v, (dict, list)):
                 # Only the protected field's OWN scalar value is immune; a
@@ -282,7 +328,7 @@ def _redact_secrets_recursive(
         # Array elements have no key of their own, so none of them is protected
         # — including elements directly under a protected key.
         return [_redact_secrets_recursive(item, depth + 1, config) for item in value]
-    if isinstance(value, str) and _value_matches_regex(value, config.regex_patterns):
+    if isinstance(value, str) and _value_matches(value, config.compiled_regex_patterns):
         return config.replacement
     return value
 

@@ -5,11 +5,17 @@ from __future__ import annotations
 import copy
 import logging
 import re
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Union
 
 from apcore.utils.pattern import match_glob
 
 logger = logging.getLogger(__name__)
+
+#: One ``regex_patterns`` entry, before or after compilation. A configuration
+#: supplies strings; a caller that already compiled them (§10.6.1 requirement 5)
+#: supplies patterns, and both reach the same matcher.
+ValuePattern = Union[str, "re.Pattern[str]"]
 
 REDACTED_VALUE: str = "***REDACTED***"
 
@@ -49,7 +55,7 @@ def redact_sensitive(
     schema_dict: dict[str, Any],
     *,
     sensitive_keys: list[str] | None = None,
-    regex_patterns: list[str] | None = None,
+    regex_patterns: Sequence[ValuePattern] | None = None,
     replacement: str | None = None,
 ) -> dict[str, Any]:
     """Redact fields marked with x-sensitive in the schema.
@@ -72,7 +78,11 @@ def redact_sensitive(
             on individual properties.
         sensitive_keys: Optional override for the field-name match list.
         regex_patterns: Optional list of regex patterns matched against
-            string values (case-insensitive).
+            **string** values (case-insensitive, unanchored search). Already
+            compiled patterns are accepted and pass through uncompiled, so a
+            caller holding a ``RedactionConfig`` avoids recompiling per call
+            (PROTOCOL_SPEC 10.6.1 requirement 5). Non-string values are never
+            tested and never stringified (requirement 2).
         replacement: Optional replacement token; defaults to
             :data:`REDACTED_VALUE`.
 
@@ -80,12 +90,15 @@ def redact_sensitive(
         A new dict with sensitive values replaced. Original data is not modified.
     """
     keys = sensitive_keys if sensitive_keys is not None else _default_sensitive_keys()
-    patterns = list(regex_patterns) if regex_patterns is not None else []
+    # Compiled ONCE here rather than at every node of the walk below
+    # (PROTOCOL_SPEC 10.6.1 requirement 5), which is also what keeps the
+    # requirement-4 diagnostic to one line per call instead of one per field.
+    value_regexes = compile_value_regexes(regex_patterns)[0] if regex_patterns else []
     token = replacement if replacement is not None else REDACTED_VALUE
 
     redacted = copy.deepcopy(data)
     _redact_fields(redacted, schema_dict, token=token)
-    _redact_by_keys_and_regex(redacted, keys, patterns, token)
+    _redact_by_keys_and_regex(redacted, keys, value_regexes, token)
     return redacted
 
 
@@ -175,60 +188,84 @@ def _key_matches(key: str, sensitive_keys: list[str]) -> bool:
     return False
 
 
-def _value_matches(value: Any, regex_patterns: list[str]) -> bool:
-    """Case-insensitive regex match against the string form of *value*."""
-    if not regex_patterns:
+def _value_matches(value: Any, value_regexes: Sequence[re.Pattern[str]]) -> bool:
+    """Case-insensitive regex search over *value*, when *value* is a string.
+
+    PROTOCOL_SPEC §10.6.1 requirement 2: the value rule applies to **string
+    values only**, and a non-string value **MUST NOT** be converted to a string
+    in order to test it.  The conversion is not merely unnecessary, it is
+    unspecifiable — ``{"a": 1}`` renders as ``{'a': 1}`` in Python, ``[object
+    Object]`` in TypeScript and ``{"a":1}`` in Rust, so a rule defined over the
+    rendering is three rules.  Containers are descended into by the callers
+    instead, so a string *inside* one is still reached at its own position.
+
+    Takes patterns already compiled by :func:`compile_value_regexes`, because
+    this runs at every node of the walk and requirement 5 puts compilation at
+    the configuration read.
+    """
+    if not isinstance(value, str) or not value_regexes:
         return False
-    if not isinstance(value, str):
-        return False
-    for pat in regex_patterns:
-        if not pat:
-            continue
-        compiled = _compile_value_regex(pat)
-        if compiled is None:
-            continue
-        if compiled.search(value) is not None:
+    for pat in value_regexes:
+        if pat.search(value) is not None:
             return True
     return False
 
 
-#: Patterns already reported by :func:`_compile_value_regex`, so a rule that
-#: cannot compile is named once rather than on every log record.
-_REPORTED_BAD_REGEXES: set[str] = set()
+def compile_value_regexes(
+    patterns: Sequence[ValuePattern],
+) -> tuple[list[re.Pattern[str]], list[tuple[str, str]]]:
+    """Compile ``obs.redaction.regex_patterns`` once, reporting what will not.
 
+    PROTOCOL_SPEC §10.6.1 requirement 4: a pattern the engine cannot compile
+    **MUST NOT** be discarded in silence.  It was — a bare ``except re.error:
+    continue`` that re-failed on every log line and said nothing, leaving an
+    operator-authored redaction rule that redacts nothing and looks, from the
+    outside, exactly like one that works.  On this surface the difference is
+    credentials in plaintext (#117 §2).
 
-def _compile_value_regex(pattern: str) -> re.Pattern[str] | None:
-    """Compile one ``obs.redaction.regex_patterns`` entry, or report it.
+    Requirement 5 is why this is a batch function rather than a per-pattern
+    one, and why it holds no module-level state.  Compilation belongs at the
+    point the *configuration* is read, so the diagnostic fires at load rather
+    than per log record — and the de-duplication that keeps it to one line
+    **MUST NOT outlive that configuration**.  The set this replaced was a
+    process-global, never cleared, so the *second* deployment to load the same
+    broken pattern was told nothing: precisely the reload case and the
+    multi-tenant case, the two where an operator most needs telling.
 
-    PROTOCOL_SPEC §9.2.3 requirement 6d and §10.6.1: a pattern the engine
-    cannot compile **MUST NOT** be discarded in silence.  It was, here — a
-    bare ``except re.error: continue`` that re-failed on every log line and
-    said nothing, leaving an operator-authored redaction rule that redacts
-    nothing and looks, from the outside, exactly like one that works.  On this
-    surface the difference is credentials in plaintext (#117 §2).
+    Already-compiled patterns pass through, so a caller holding a
+    :class:`~apcore.observability.context_logger.RedactionConfig` hands its
+    compiled list straight in and nothing is recompiled per record.
 
-    Returns the compiled pattern, or ``None`` after logging once.
+    Returns ``(compiled, invalid)`` where ``invalid`` pairs each rejected
+    pattern with the engine's message, for ``validate_config()`` to report.
     """
-    try:
-        return re.compile(pattern, flags=re.IGNORECASE)
-    except re.error as exc:
-        if pattern not in _REPORTED_BAD_REGEXES:
-            _REPORTED_BAD_REGEXES.add(pattern)
+    compiled: list[re.Pattern[str]] = []
+    invalid: list[tuple[str, str]] = []
+    for pat in patterns:
+        if isinstance(pat, re.Pattern):
+            compiled.append(pat)
+            continue
+        if not pat:
+            continue
+        try:
+            compiled.append(re.compile(pat, flags=re.IGNORECASE))
+        except re.error as exc:
+            invalid.append((pat, str(exc)))
             logger.warning(
                 "obs.redaction.regex_patterns entry %r does not compile and will "
                 "redact nothing: %s. Patterns should stay inside the portable "
                 "subset (no lookaround, no backreferences, no inline (?i) flags) "
                 "— see PROTOCOL_SPEC 9.2.3 requirement 6.",
-                pattern,
+                pat,
                 exc,
             )
-        return None
+    return compiled, invalid
 
 
 def _redact_by_keys_and_regex(
     data: dict[str, Any],
     sensitive_keys: list[str],
-    regex_patterns: list[str],
+    value_regexes: Sequence[re.Pattern[str]],
     token: str,
 ) -> None:
     """In-place redaction by name (substring/glob) or value (regex), at any depth.
@@ -254,19 +291,19 @@ def _redact_by_keys_and_regex(
         if not protected and _key_matches(key, sensitive_keys):
             data[key] = token
             continue
-        if not protected and _value_matches(value, regex_patterns):
+        if not protected and _value_matches(value, value_regexes):
             data[key] = token
             continue
         if isinstance(value, dict):
-            _redact_by_keys_and_regex(value, sensitive_keys, regex_patterns, token)
+            _redact_by_keys_and_regex(value, sensitive_keys, value_regexes, token)
         elif isinstance(value, list):
-            _redact_in_list(value, sensitive_keys, regex_patterns, token)
+            _redact_in_list(value, sensitive_keys, value_regexes, token)
 
 
 def _redact_in_list(
     items: list[Any],
     sensitive_keys: list[str],
-    regex_patterns: list[str],
+    value_regexes: Sequence[re.Pattern[str]],
     token: str,
 ) -> None:
     """Traverse a list, redacting dict children and recursing into nested lists."""
@@ -274,8 +311,8 @@ def _redact_in_list(
         if item is None:
             continue
         if isinstance(item, dict):
-            _redact_by_keys_and_regex(item, sensitive_keys, regex_patterns, token)
+            _redact_by_keys_and_regex(item, sensitive_keys, value_regexes, token)
         elif isinstance(item, list):
-            _redact_in_list(item, sensitive_keys, regex_patterns, token)
-        elif _value_matches(item, regex_patterns):
+            _redact_in_list(item, sensitive_keys, value_regexes, token)
+        elif _value_matches(item, value_regexes):
             items[index] = token
