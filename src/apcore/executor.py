@@ -179,15 +179,46 @@ def _json_type_name(value: Any) -> str:
     return type(value).__name__
 
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any], *, _depth: int = 0) -> None:
+def _resolve_merge_depth(config: Any) -> int:
+    """Resolve ``stream.max_merge_depth`` (PROTOCOL_SPEC §5, canonical default 32).
+
+    A non-positive or non-integer value falls back to the canonical default
+    rather than disabling the cap: the cap exists to prevent stack exhaustion
+    from adversarial chunk shapes, so a misconfiguration must not remove it.
+    """
+    if config is None:
+        return _MAX_MERGE_DEPTH
+    try:
+        value = config.get("stream.max_merge_depth", _MAX_MERGE_DEPTH)
+    except Exception:  # noqa: BLE001 — a Config that cannot answer is not fatal here
+        return _MAX_MERGE_DEPTH
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return _MAX_MERGE_DEPTH
+    return value
+
+
+def _deep_merge(
+    base: dict[str, Any],
+    override: dict[str, Any],
+    *,
+    _depth: int = 0,
+    max_depth: int | None = None,
+) -> None:
     """Recursively merge *override* into *base* in-place.
 
     Nested dicts are merged recursively; all other values (including lists)
-    are replaced by the override value. Recursion is capped at
-    ``_MAX_MERGE_DEPTH`` to guard against malicious or extremely nested
-    streaming chunks.
+    are replaced by the override value. Recursion is capped to guard against
+    malicious or extremely nested streaming chunks.
+
+    ``max_depth`` is the cap, defaulting to :data:`_MAX_MERGE_DEPTH` (32).
+    PROTOCOL_SPEC §5 calls 32 the *canonical default*, which implies an
+    override — and until now there was none: ``stream.max_merge_depth`` was a
+    declared, schema-documented key that no code path read (apcore#118), so
+    the constant WAS the contract. :meth:`Executor.stream` now resolves the key
+    and passes it here.
     """
-    if _depth >= _MAX_MERGE_DEPTH:
+    cap = _MAX_MERGE_DEPTH if max_depth is None else max_depth
+    if _depth >= cap:
         # At the depth cap, replace rather than recurse: the right value wins
         # at this level without further merging (mirrors apcore-rust).
         for key, value in override.items():
@@ -195,7 +226,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any], *, _depth: int =
         return
     for key, value in override.items():
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            _deep_merge(base[key], value, _depth=_depth + 1)
+            _deep_merge(base[key], value, _depth=_depth + 1, max_depth=cap)
         else:
             base[key] = value
 
@@ -1032,6 +1063,10 @@ class Executor:
                 return recovery
         raise wrapped from original
 
+    def _merge_depth_cap(self) -> int:
+        """The streaming deep-merge depth cap for this executor (PROTOCOL_SPEC §5)."""
+        return _resolve_merge_depth(self._config)
+
     async def stream(
         self,
         module_id: str,
@@ -1148,7 +1183,7 @@ class Executor:
                             "actual_type": actual_type,
                         },
                     )
-                _deep_merge(accumulated, chunk)
+                _deep_merge(accumulated, chunk, max_depth=self._merge_depth_cap())
                 yield chunk
         except ExecutionCancelledError:
             raise
