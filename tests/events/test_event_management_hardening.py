@@ -299,6 +299,35 @@ class TestBuiltinFilterDiscardsNonmatching:
 
 
 # ---------------------------------------------------------------------------
+# The event-pattern DIALECT — PROTOCOL_SPEC 9.16.3, Algorithm A25 (#117)
+# ---------------------------------------------------------------------------
+
+
+class TestFilterPatternDialect:
+    """`event_pattern` / `include_events` / `exclude_events` are matched with A25.
+
+    The direction matters and is why these cases are written on
+    ``exclude_events`` wherever possible: **exclude_events fails open.** A
+    pattern that does not match means the event is DELIVERED, so a matcher
+    understanding fewer metacharacters than the operator wrote does not narrow
+    the filter, it opens it. ``include_events`` fails the safe way round under
+    the identical divergence, which is exactly why nobody noticed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_exclude_question_mark_is_a_wildcard(self) -> None:
+        await _assert_filter_case("filter_exclude_question_mark_is_a_wildcard")
+
+    @pytest.mark.asyncio
+    async def test_exclude_character_class_does_not_expand(self) -> None:
+        await _assert_filter_case("filter_exclude_character_class_does_not_expand")
+
+    @pytest.mark.asyncio
+    async def test_include_question_mark_is_a_wildcard(self) -> None:
+        await _assert_filter_case("filter_include_question_mark_is_a_wildcard")
+
+
+# ---------------------------------------------------------------------------
 # Case 6: circuit_open_after_threshold
 # ---------------------------------------------------------------------------
 
@@ -833,6 +862,9 @@ class TestFixtureCoverage:
         "builtin_file_type": "TestBuiltinFileType",
         "builtin_filter_passes_matching": "TestBuiltinFilterPassesMatching",
         "builtin_filter_discards_nonmatching": "TestBuiltinFilterDiscardsNonmatching",
+        "filter_exclude_question_mark_is_a_wildcard": "TestFilterPatternDialect",
+        "filter_exclude_character_class_does_not_expand": "TestFilterPatternDialect",
+        "filter_include_question_mark_is_a_wildcard": "TestFilterPatternDialect",
         "circuit_open_after_threshold": "TestCircuitOpenAfterThreshold",
         "circuit_discards_in_open_state": "TestCircuitDiscardsInOpenState",
         "circuit_half_open_after_window": "TestCircuitHalfOpenAfterWindow",

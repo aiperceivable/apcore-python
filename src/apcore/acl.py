@@ -1003,6 +1003,27 @@ class ACL:
             return None
 
         operands = patterns[1:] if patterns[0] == "$or" else patterns
+
+        # PROTOCOL_SPEC §6.2.2 (v1.37.0): A08 has `*` as its ONLY metacharacter,
+        # and §2.7 forbids `?` in a module ID, so a pattern carrying one matches
+        # nothing and can never match anything. The author meant a wildcard —
+        # `?` IS one in every other pattern surface the spec defines (A25,
+        # §9.2.3) — and got a rule that is silently inert: a `deny` guarding
+        # nothing, or an `allow` that never fires and sends its author looking
+        # elsewhere. Reported, never rejected, and the meaning is unchanged:
+        # promoting `?` in A08 would widen `allow` rules that are inert in every
+        # deployed policy today, which is the one direction an authorization
+        # matcher must not move without an operator's consent.
+        with_question = [operand for operand in operands if "?" in operand]
+        if with_question and len(with_question) == len(operands):
+            return (
+                f"every pattern here contains '?', which is a LITERAL in ACL matching (Algorithm A08 — "
+                f"'*' is the only metacharacter) and which §2.7 forbids in a module ID, so {with_question!r} "
+                "matches nothing and can never match anything. '?' is a wildcard in every other pattern "
+                "surface (A25, §9.2.3), which is where the expectation comes from. The rule loads and "
+                "changes no decision — it simply never fires."
+            )
+
         if field == _TARGETS_PATH and all(operand == "@external" for operand in operands):
             return (
                 "'@external' is the caller-side sentinel §6.5 substitutes for a null caller_id. No module "
@@ -1010,6 +1031,41 @@ class ACL:
                 "legal in 'callers', which is what it is for."
             )
         return None
+
+    @classmethod
+    def _warn_dead_question_patterns(cls, rules: list[ACLRule], *, base_index: int = 0) -> None:
+        """Warn — never fail — for an ACL pattern carrying ``?`` (§6.2.2).
+
+        PROTOCOL_SPEC §6.2.2 clause 1: loading MUST NOT fail on such a pattern,
+        but MUST warn, naming the rule index, the field and the pattern as
+        written. Clause 3: the meaning is unchanged — ``?`` stays a literal and
+        the rule keeps matching nothing. This adds a diagnostic and changes no
+        decision, deliberately, because promoting ``?`` to a wildcard in A08
+        would widen ``allow`` rules that are inert in every deployed policy
+        today.
+
+        :meth:`validate_rules` reports the same condition at deploy time; this
+        is the load-time half, on the §6.1.2 precedent.
+        """
+        for offset, rule in enumerate(rules):
+            for pattern_field, patterns in ((_CALLERS_PATH, rule.callers), (_TARGETS_PATH, rule.targets)):
+                if not isinstance(patterns, list):
+                    continue
+                for pattern in patterns:
+                    if isinstance(pattern, str) and "?" in pattern:
+                        _logger.warning(
+                            "ACL rule %d (effect=%s) %s pattern %r contains '?', which is a LITERAL in "
+                            "ACL matching (Algorithm A08 — '*' is the only metacharacter) and which "
+                            "PROTOCOL_SPEC §2.7 forbids in a module ID. The pattern therefore matches "
+                            "nothing and can never match anything: a 'deny' rule guards nothing, an "
+                            "'allow' rule never fires. '?' IS a wildcard in every other pattern surface "
+                            "(Algorithm A25, §9.2.3), which is where the expectation comes from. Nothing "
+                            "about this rule's meaning has changed — see §6.2.2.",
+                            base_index + offset,
+                            rule.effect,
+                            pattern_field,
+                            pattern,
+                        )
 
     @classmethod
     def _precheck_conditions(cls, conditions: Any, *, async_path: bool, path_prefix: str = "") -> list[_Fault]:
@@ -1283,6 +1339,8 @@ class ACL:
         # covered, direct construction included — ACL.load() and reload() both
         # funnel through here.
         type(self)._warn_unregistered_condition_keys(self._rules)
+        # PROTOCOL_SPEC §6.2.2 clause 1 — same entry point, same never-fail contract.
+        type(self)._warn_dead_question_patterns(self._rules)
 
     @property
     def default_effect(self) -> str:
@@ -2224,6 +2282,7 @@ class ACL:
         # MUST be covered, not just file loading. The rule lands at index 0, so
         # that is the index the warning names. Warn-never-fail, as on load.
         type(self)._warn_unregistered_condition_keys([rule])
+        type(self)._warn_dead_question_patterns([rule])
 
     def remove_rule(
         self,

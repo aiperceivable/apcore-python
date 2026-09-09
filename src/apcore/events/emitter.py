@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import inspect
 import logging
 import threading
@@ -14,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 from apcore.events.retry import EventRetryConfig
+from apcore.utils.pattern import match_glob
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,10 @@ def _matches_event(subscriber: Any, event_type: str, *, is_dlq: bool) -> bool:
     pattern = _get_event_pattern(subscriber)
     if is_dlq and pattern == "*":
         return False
-    return fnmatch.fnmatch(event_type, pattern)
+    # PROTOCOL_SPEC 9.16.3: event patterns are matched with Algorithm A25,
+    # not fnmatch — `[…]` is a literal here, and the three SDKs supported
+    # three different metacharacter sets while nothing said which was right.
+    return match_glob(pattern, event_type)
 
 
 # ---------------------------------------------------------------------------

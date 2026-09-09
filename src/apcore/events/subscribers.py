@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import os
@@ -16,6 +15,7 @@ except ImportError:
 
 from apcore.events.emitter import ApCoreEvent, EventSubscriber
 from apcore.events.retry import EventRetryConfig
+from apcore.utils.pattern import match_glob
 
 __all__ = [
     "WebhookSubscriber",
@@ -208,10 +208,15 @@ class FilterSubscriber:
             await self._delegate.on_event(event)
 
     def _matches(self, event_type: str) -> bool:
+        # PROTOCOL_SPEC 9.16.3 — Algorithm A25, case-sensitive. `include_events`
+        # is decisive when present; `exclude_events` applies only in its absence.
+        # exclude_events FAILS OPEN: a pattern that does not match means the
+        # event is delivered, so a matcher understanding fewer metacharacters
+        # than the operator wrote opens the filter rather than narrowing it.
         if self._include_events is not None:
-            return any(fnmatch.fnmatch(event_type, pattern) for pattern in self._include_events)
+            return any(match_glob(pattern, event_type) for pattern in self._include_events)
         if self._exclude_events is not None:
-            return not any(fnmatch.fnmatch(event_type, pattern) for pattern in self._exclude_events)
+            return not any(match_glob(pattern, event_type) for pattern in self._exclude_events)
         return True
 
 

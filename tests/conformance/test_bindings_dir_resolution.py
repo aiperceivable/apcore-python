@@ -361,6 +361,50 @@ def test_default_pattern_when_key_absent(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 # ---------------------------------------------------------------------------
+# The pattern DIALECT — PROTOCOL_SPEC 9.2.3, Algorithm A25 (#116)
+#
+# Every pattern the corpus carried before v1.37.0 was `*.binding.yaml` or
+# `*.bind.yaml`: leading star plus literal suffix, the one family on which a
+# real glob, a leading-star strip and a first-star removal all coincide. So
+# `config_file_pattern_is_honoured` could prove the pattern is READ and could
+# not prove it MEANS the same thing in three languages. Each case below is
+# drawn from outside that family and separates at least one SDK as shipped.
+# ---------------------------------------------------------------------------
+
+
+def test_pattern_star_in_the_middle_is_honoured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``data*.yaml`` — the ordinary glob a suffix match cannot express."""
+    _assert_loaded(*_drive("pattern_star_in_the_middle_is_honoured", tmp_path, monkeypatch))
+
+
+def test_pattern_first_star_must_not_be_removed_from_the_middle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``a*b.yaml`` must not match ``zab.yaml``.
+
+    The failure this pins is the one that LOADS A FILE NOBODY ASKED FOR:
+    ``replace('*', '')`` deletes the star wherever it sits, so the pattern
+    collapses to ``ab.yaml`` and a suffix comparison accepts a name that an
+    anchored pattern cannot reach.
+    """
+    _assert_loaded(*_drive("pattern_first_star_must_not_be_removed_from_the_middle", tmp_path, monkeypatch))
+
+
+def test_pattern_question_mark_is_a_wildcard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``?`` matches exactly one character (A25), and the two-character sibling is skipped."""
+    _assert_loaded(*_drive("pattern_question_mark_is_a_wildcard", tmp_path, monkeypatch))
+
+
+def test_pattern_bracket_is_a_literal_not_a_character_class(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``[ab].bind.yaml`` names a literal filename; A25 has no character classes.
+
+    This is the case ``Path.glob`` fails: it expands the class and loads the
+    decoy. It must also not RAISE — every string is a valid A25 pattern.
+    """
+    _assert_loaded(*_drive("pattern_bracket_is_a_literal_not_a_character_class", tmp_path, monkeypatch))
+
+
+# ---------------------------------------------------------------------------
 # Clause 5 — a missing resolved directory raises
 # ---------------------------------------------------------------------------
 
@@ -458,6 +502,10 @@ COVERED: dict[str, str] = {
     "env_var_must_not_be_read_directly_at_the_loader": "test_env_var_must_not_be_read_directly_at_the_loader",
     "explicit_argument_wins_over_config": "test_explicit_argument_wins_over_config",
     "config_file_pattern_is_honoured": "test_config_file_pattern_is_honoured",
+    "pattern_star_in_the_middle_is_honoured": "test_pattern_star_in_the_middle_is_honoured",
+    "pattern_first_star_must_not_be_removed_from_the_middle": "test_pattern_first_star_must_not_be_removed_from_the_middle",
+    "pattern_question_mark_is_a_wildcard": "test_pattern_question_mark_is_a_wildcard",
+    "pattern_bracket_is_a_literal_not_a_character_class": "test_pattern_bracket_is_a_literal_not_a_character_class",
     "default_pattern_when_key_absent": "test_default_pattern_when_key_absent",
     "missing_configured_dir_raises": "test_missing_configured_dir_raises",
     "no_auto_scan_at_init": "test_no_auto_scan_at_init",
@@ -465,7 +513,7 @@ COVERED: dict[str, str] = {
 
 #: The canonical fixture's case count, asserted so that an upstream addition or
 #: removal is a named failure rather than a quietly smaller run.
-EXPECTED_CASE_COUNT = 9
+EXPECTED_CASE_COUNT = 13
 
 
 def test_every_canonical_case_is_driven() -> None:

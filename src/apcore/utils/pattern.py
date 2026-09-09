@@ -1,8 +1,19 @@
-"""Wildcard pattern matching for module IDs."""
+"""Wildcard pattern matching.
+
+``match_pattern`` (Algorithm A08) matches **module IDs** — ACL rule patterns and
+pipeline ``match_modules``.  ``match_glob`` (Algorithm A25) matches every other
+pattern-valued value in the specification: binding filenames, redaction field
+names, event types and ``system.control.reload_module``'s ``path_filter``.
+
+The two are deliberately separate and PROTOCOL_SPEC §9.2.3 says why: A08 has
+``*`` alone, and promoting ``?`` there would widen ACL ``allow`` rules that are
+inert today (§2.7 forbids ``?`` in a module ID), which is the one direction an
+authorization matcher must not move silently.
+"""
 
 from __future__ import annotations
 
-__all__ = ["match_pattern", "calculate_specificity"]
+__all__ = ["match_pattern", "match_glob", "calculate_specificity"]
 
 
 def match_pattern(pattern: str, module_id: str) -> bool:
@@ -44,6 +55,81 @@ def match_pattern(pattern: str, module_id: str) -> bool:
             return False
 
     return True
+
+
+def match_glob(pattern: str, value: str) -> bool:
+    """Match *value* against a glob-dialect *pattern* (Algorithm A25).
+
+    PROTOCOL_SPEC §9.2.3.  This is the matcher for every glob-dialect
+    pattern-valued value in the specification: ``bindings.pattern``,
+    ``obs.redaction.sensitive_keys`` glob entries, event ``event_pattern`` /
+    ``include_events`` / ``exclude_events``, and ``path_filter``.
+
+    Exactly two metacharacters:
+
+    - ``*`` — zero or more characters, crossing ``.`` and ``/``
+    - ``?`` — exactly one character
+
+    **Every other character is a literal**, ``[``, ``]``, ``{``, ``}``, ``\\``,
+    ``!``, ``^`` and ``-`` included.  There is no escape character, and the
+    match is anchored to the whole value.
+
+    **Do not replace this with :mod:`fnmatch`.**  ``fnmatch`` supports
+    character classes (``[ab]``) and their negation (``[!a]``); the ``glob``
+    crate and a translated ``RegExp`` each read those differently again, and
+    that is precisely the divergence this function exists to remove (#116,
+    #117).  Every string is a valid pattern here — there is no parse phase and
+    this function never raises.
+
+    Args:
+        pattern: The pattern.  Any string is accepted.
+        value: The name to test — a filename, field name, event type or
+            module ID, depending on the surface.
+
+    Returns:
+        True when the pattern matches the entire value.
+    """
+    segments = pattern.split("*")
+    if len(segments) == 1:
+        return _match_exact(segments[0], value)
+
+    if not _match_prefix(segments[0], value):
+        return False
+    pos = len(segments[0])
+
+    for segment in segments[1:-1]:
+        if not segment:
+            continue
+        end = len(value) - len(segment)
+        idx = -1
+        i = pos
+        while i <= end:
+            if _match_exact(segment, value[i : i + len(segment)]):
+                idx = i
+                break
+            i += 1
+        if idx == -1:
+            return False
+        pos = idx + len(segment)
+
+    last = segments[-1]
+    if not last:
+        return True
+    if len(value) - pos < len(last):
+        return False
+    return _match_exact(last, value[len(value) - len(last) :])
+
+
+def _match_prefix(segment: str, text: str) -> bool:
+    """True when *text* starts with *segment*, treating ``?`` as any character."""
+    if len(text) < len(segment):
+        return False
+    return all(sc == "?" or sc == tc for sc, tc in zip(segment, text))
+
+
+def _match_exact(segment: str, text: str) -> bool:
+    """True when *segment* covers *text* exactly, treating ``?`` as any character."""
+    return len(segment) == len(text) and _match_prefix(segment, text)
 
 
 def calculate_specificity(pattern: str) -> int:

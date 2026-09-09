@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 import os
 import tempfile
@@ -15,6 +14,7 @@ from typing import Any
 import yaml
 
 from apcore.config import Config, _CONSTRAINTS
+from apcore.utils.pattern import match_glob
 from apcore.utils.redaction import REDACTED_VALUE
 from apcore.errors import (
     ConfigError,
@@ -488,12 +488,17 @@ class ReloadModule:
     # ------------------------------------------------------------------
 
     def _execute_bulk(self, path_filter: Any, reason: str, context: Any) -> dict[str, Any]:
-        """Reload all modules matching the glob pattern in topological order."""
+        """Reload all modules matching the pattern in topological order.
+
+        PROTOCOL_SPEC 6.7 clause 4: `path_filter` is a glob-dialect pattern
+        matched with Algorithm A25 (9.2.3) against each registered module ID.
+        Not fnmatch: `[em]` is a literal here, not a character class.
+        """
         if not isinstance(path_filter, str) or not path_filter:
             raise InvalidInputError(message="'path_filter' must be a non-empty string glob pattern")
 
         all_ids = self._registry.module_ids
-        matched = sorted(mid for mid in all_ids if fnmatch.fnmatch(mid, path_filter))
+        matched = sorted(mid for mid in all_ids if match_glob(path_filter, mid))
 
         topo_order = self._topo_sort_modules(matched)
         start = time.monotonic()

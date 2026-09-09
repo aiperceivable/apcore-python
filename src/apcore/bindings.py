@@ -32,6 +32,7 @@ from apcore.errors import (
 )
 from apcore.registry import Registry
 from apcore.schema.openai_strict import assert_openai_strict_compatible
+from apcore.utils.pattern import match_glob
 
 __all__ = ["BindingLoader"]
 
@@ -299,8 +300,18 @@ class BindingLoader:
                 reason="Resolved binding directory does not exist",
             )
 
+        # PROTOCOL_SPEC 5.12.6 clause 1 / 9.2.3: the pattern is matched with
+        # Algorithm A25 against each entry's FILENAME. `Path.glob` was the
+        # obvious local answer and the wrong one — it expands character
+        # classes, which A25 does not have, and it is path-aware, so `*` does
+        # not cross a separator. apcore-rust and apcore-typescript reached for
+        # two different suffix matches for the same reason. Three answers for
+        # one declared type (#116).
         results: list[FunctionModule] = []
-        for f in sorted(p.glob(resolved_pattern)):
+        candidates = sorted(
+            entry for entry in p.iterdir() if entry.is_file() and match_glob(resolved_pattern, entry.name)
+        )
+        for f in candidates:
             results.extend(self.load_bindings(str(f), registry))
         return results
 

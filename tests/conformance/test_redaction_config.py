@@ -378,6 +378,11 @@ def test_fixture_case_ids_are_covered() -> None:
         "canonical_config_key_is_read",
         "legacy_config_key_is_honoured_with_a_deprecation_warning",
         "canonical_config_key_wins_over_legacy",
+        # PROTOCOL_SPEC 9.2.3 / 10.6.1 — the pattern dialect (#117).
+        "sensitive_keys_glob_case_fold_applies_to_the_pattern_too",
+        "sensitive_keys_bracket_is_a_literal_never_a_character_class",
+        "sensitive_keys_glob_entry_is_anchored_to_the_whole_name",
+        "regex_patterns_are_an_unanchored_search",
     }
     ids = {c["id"] for c in CASES}
     assert ids == driven, (

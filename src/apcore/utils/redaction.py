@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import copy
-import fnmatch
+import logging
 import re
 from typing import Any
+
+from apcore.utils.pattern import match_glob
+
+logger = logging.getLogger(__name__)
 
 REDACTED_VALUE: str = "***REDACTED***"
 
@@ -57,7 +61,7 @@ def redact_sensitive(
     Issue #43 §5: in addition to schema-level ``x-sensitive`` annotations
     and the legacy ``_secret_*`` prefix, fields whose names match any
     pattern in ``sensitive_keys`` (case-insensitive substring or
-    :mod:`fnmatch` glob) are redacted, and string values matching one of
+    a glob-dialect pattern, Algorithm A25) are redacted, and string values matching one of
     ``regex_patterns`` (compiled with :data:`re.IGNORECASE`) are
     redacted.  When ``sensitive_keys`` is ``None`` the spec-default list
     (which still includes ``_secret_*``) is used.
@@ -155,8 +159,11 @@ def _key_matches(key: str, sensitive_keys: list[str]) -> bool:
         if not pat:
             continue
         lower_pat = pat.lower()
-        if any(ch in lower_pat for ch in ("*", "?", "[")):
-            if fnmatch.fnmatchcase(lower_key, lower_pat):
+        # PROTOCOL_SPEC 10.6.1: `[` is NOT a glob trigger — brackets are
+        # literals under A25 (9.2.3 requirement 4), so an entry containing
+        # only brackets is an ordinary substring.
+        if "*" in lower_pat or "?" in lower_pat:
+            if match_glob(lower_pat, lower_key):
                 return True
         else:
             if _normalize_for_match(pat) in norm_key:
@@ -177,12 +184,45 @@ def _value_matches(value: Any, regex_patterns: list[str]) -> bool:
     for pat in regex_patterns:
         if not pat:
             continue
-        try:
-            if re.search(pat, value, flags=re.IGNORECASE) is not None:
-                return True
-        except re.error:
+        compiled = _compile_value_regex(pat)
+        if compiled is None:
             continue
+        if compiled.search(value) is not None:
+            return True
     return False
+
+
+#: Patterns already reported by :func:`_compile_value_regex`, so a rule that
+#: cannot compile is named once rather than on every log record.
+_REPORTED_BAD_REGEXES: set[str] = set()
+
+
+def _compile_value_regex(pattern: str) -> re.Pattern[str] | None:
+    """Compile one ``obs.redaction.regex_patterns`` entry, or report it.
+
+    PROTOCOL_SPEC §9.2.3 requirement 6d and §10.6.1: a pattern the engine
+    cannot compile **MUST NOT** be discarded in silence.  It was, here — a
+    bare ``except re.error: continue`` that re-failed on every log line and
+    said nothing, leaving an operator-authored redaction rule that redacts
+    nothing and looks, from the outside, exactly like one that works.  On this
+    surface the difference is credentials in plaintext (#117 §2).
+
+    Returns the compiled pattern, or ``None`` after logging once.
+    """
+    try:
+        return re.compile(pattern, flags=re.IGNORECASE)
+    except re.error as exc:
+        if pattern not in _REPORTED_BAD_REGEXES:
+            _REPORTED_BAD_REGEXES.add(pattern)
+            logger.warning(
+                "obs.redaction.regex_patterns entry %r does not compile and will "
+                "redact nothing: %s. Patterns should stay inside the portable "
+                "subset (no lookaround, no backreferences, no inline (?i) flags) "
+                "— see PROTOCOL_SPEC 9.2.3 requirement 6.",
+                pattern,
+                exc,
+            )
+        return None
 
 
 def _redact_by_keys_and_regex(

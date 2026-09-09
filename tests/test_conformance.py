@@ -48,7 +48,7 @@ from apcore.schema.loader import SchemaLoader
 from apcore.schema.validator import SchemaValidator
 from apcore.utils.call_chain import guard_call_chain
 from apcore.utils.normalize import normalize_to_canonical_id
-from apcore.utils.pattern import calculate_specificity, match_pattern
+from apcore.utils.pattern import calculate_specificity, match_glob, match_pattern
 from apcore.version import VersionIncompatibleError, negotiate_version
 
 # ---------------------------------------------------------------------------
@@ -193,6 +193,45 @@ def test_pattern_matching(case: dict[str, Any]) -> None:
     assert (
         result == case["expected"]
     ), f"match_pattern({case['pattern']!r}, {case['value']!r}) returned {result}, expected {case['expected']}"
+
+
+# ---------------------------------------------------------------------------
+# Glob matching — Algorithm A25, PROTOCOL_SPEC 9.2.3 (#116, #117)
+#
+# The matcher for every glob-dialect pattern-valued value EXCEPT module-ID
+# matching: `bindings.pattern`, `obs.redaction.sensitive_keys` glob entries,
+# event patterns, and `path_filter`. Kept distinct from `pattern_matching`
+# (A08) above on purpose — 9.2.3 requirement 5 states why the two algorithms
+# are separate, and a single shared fixture would hide it.
+# ---------------------------------------------------------------------------
+
+_glob_data = _load("glob_matching")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _glob_data["test_cases"],
+    ids=[c["id"] for c in _glob_data["test_cases"]],
+)
+def test_glob_matching(case: dict[str, Any]) -> None:
+    result = match_glob(case["pattern"], case["value"])
+    assert result == case["expected"], (
+        f"match_glob({case['pattern']!r}, {case['value']!r}) returned {result}, "
+        f"expected {case['expected']} — {case.get('_why', '')}"
+    )
+
+
+def test_glob_matching_never_raises() -> None:
+    """9.2.3 requirement 2: every string is a valid pattern, so there is no parse phase.
+
+    Pinned separately from the cases above because the failure it guards is a
+    RAISE, not a wrong boolean: `glob::Pattern` rejects `a[b` and `a**b`, and an
+    implementation that adopted a validating matcher would fail here rather than
+    silently at a user's control-plane request.
+    """
+    for pattern in ("a[b", "a**b", "[!", "{a,b}", "\\", "***", "[]", "?"):
+        for value in ("", "a", "a[b", "executor.email.send"):
+            match_glob(pattern, value)
 
 
 # ---------------------------------------------------------------------------

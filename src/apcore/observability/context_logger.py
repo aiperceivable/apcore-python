@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import re
 import sys
@@ -11,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from apcore.utils.pattern import match_glob
 from apcore.utils.redaction import PROTECTED_LOG_FIELDS as _PROTECTED_LOG_FIELDS
 
 from apcore.context_keys import LOGGING_STARTS
@@ -56,11 +56,14 @@ class RedactionConfig:
     Fields:
         field_patterns: Glob patterns matched against field names (e.g. ``"*password*"``).
         value_patterns: Regex patterns matched against string field values (e.g. ``r"^Bearer .*"``).
-        sensitive_keys: Case-insensitive substring patterns matched against field
-            **names** (Issue #43 §5).  A field is redacted whenever its name
-            contains one of these substrings, regardless of nesting.  Glob
-            wildcards (``*``) are also honoured via :mod:`fnmatch` so legacy
-            prefixes like ``"_secret_*"`` keep working.
+        sensitive_keys: Matched case-insensitively against field **names**
+            (Issue #43 §5, PROTOCOL_SPEC §10.6.1), per entry: an entry
+            containing ``*`` or ``?`` is a glob-dialect pattern (Algorithm
+            A25, anchored to the whole name); an entry containing neither is
+            a substring match against the normalized name, so a field is
+            redacted whenever its name contains it, at any nesting depth.
+            ``[``, ``]``, ``{``, ``}`` and ``\\`` are literals, never a
+            character class.
         regex_patterns: Compiled regex patterns matched against string field
             **values** (Issue #43 §5).  Matched values are replaced with
             ``replacement``.  Patterns are compiled with ``re.IGNORECASE``.
@@ -120,7 +123,8 @@ def _normalize_key_for_match(s: str) -> str:
     Lower-cases and treats ``-`` / ``_`` / whitespace as equivalent so
     ``"X-API-Key"`` matches the ``"api_key"`` substring (per the §5 spec
     example).  Glob patterns are NOT normalized — they go through
-    :func:`fnmatch.fnmatchcase` instead.
+    :func:`apcore.utils.pattern.match_glob` instead, with the case fold
+    applied to the pattern and the key alike (PROTOCOL_SPEC §10.6.1).
     """
     return s.lower().replace("-", "_").replace(" ", "_")
 
@@ -138,7 +142,8 @@ def _key_matches_sensitive(key: str, sensitive_keys: list[str]) -> bool:
     """Return True if *key* matches any entry in ``sensitive_keys``.
 
     Each pattern is interpreted as either:
-    - a :mod:`fnmatch`-style glob when it contains ``*`` / ``?`` / ``[`` (case-insensitive),
+    - a glob-dialect pattern (Algorithm A25) when it contains ``*`` or ``?``,
+      matched case-insensitively and anchored to the whole name,
     - or a plain case-insensitive substring match otherwise.  Hyphen,
       underscore, and space are treated as equivalent on both sides so
       ``"X-API-Key"`` matches ``"api_key"`` (Issue #43 §5).  The match also
@@ -152,8 +157,14 @@ def _key_matches_sensitive(key: str, sensitive_keys: list[str]) -> bool:
         if not pat:
             continue
         lower_pat = pat.lower()
-        if any(ch in lower_pat for ch in ("*", "?", "[")):
-            if fnmatch.fnmatchcase(lower_key, lower_pat):
+        # PROTOCOL_SPEC 10.6.1: an entry containing `*` or `?` is a glob-dialect
+        # pattern (A25, anchored); anything else is a substring. `[` is NOT a
+        # trigger — brackets are literals under A25, and reading them as a class
+        # is what let apcore-typescript invert `[!p]assword` into "redact
+        # password" (#117). The fold is applied to BOTH sides: folding the key
+        # alone left `"*Token*"` matching nothing in apcore-rust, silently.
+        if "*" in lower_pat or "?" in lower_pat:
+            if match_glob(lower_pat, lower_key):
                 return True
         else:
             norm_pat = _normalize_key_for_match(pat)
@@ -201,7 +212,10 @@ def _apply_redaction_config(data: dict[str, Any], config: RedactionConfig) -> di
         if key in PROTECTED_LOG_FIELDS:
             result[key] = value
             continue
-        field_match = any(fnmatch.fnmatch(key, pattern) for pattern in config.field_patterns)
+        # Legacy programmatic `field_patterns` is the same surface as
+        # `sensitive_keys` and takes the same matcher (A25, 9.2.3). It stays
+        # case-SENSITIVE, as it has always been; only the dialect changes.
+        field_match = any(match_glob(pattern, key) for pattern in config.field_patterns)
         value_str = str(value) if not isinstance(value, str) else value
         value_match = any(re.search(pattern, value_str) for pattern in config.value_patterns)
         sensitive_key_match = _key_matches_sensitive(key, config.sensitive_keys)
