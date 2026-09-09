@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib
 import logging
 import pathlib
+import re
 from typing import Any, Callable
 
 import yaml
@@ -127,6 +128,95 @@ def _detect_schema_modes(binding: dict[str, Any]) -> list[str]:
     return modes
 
 
+#: PROTOCOL_SPEC §9.1.2 requirement 6 — the semver.org grammar, unmodified and
+#: written into the specification as a literal so three implementations cannot
+#: invent three. Note `1.0` does NOT match: the patch component is required.
+_SEMVER_RE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?"
+    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
+
+
+def _limit(config: Config | None, key: str) -> Any:
+    """Read one ``validation.*`` key, or None when there is no configuration."""
+    if config is None:
+        return None
+    return config.get(key)
+
+
+def _validate_binding_limits(entry: dict[str, Any], config: Config | None, *, file_path: str) -> None:
+    """Apply the ``validation.binding.*`` limits to one binding entry (§9.1.2).
+
+    **Every limit is unconstrained by default.** apcore does not impose limits
+    on the content its users author; it offers them, and an operator opts in.
+    A key left at its default (``None`` / ``False``) checks nothing here, so a
+    binding file that loads before this function existed still loads after it.
+
+    When a limit IS configured it is enforced, not warned about: the operator
+    asked for a limit, and a limit that only warns is the `regex_patterns`
+    failure of §10.6.1 in another place.
+    """
+    if config is None:
+        return
+
+    for field, key in (
+        ("description", "validation.binding.description_max_length"),
+        ("documentation", "validation.binding.documentation_max_length"),
+    ):
+        max_length = _limit(config, key)
+        value = entry.get(field)
+        if max_length is None or not isinstance(value, str):
+            continue
+        if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 0:
+            continue
+        # §9.1.2 requirement 4: characters, not bytes.
+        if len(value) > max_length:
+            raise BindingFileInvalidError(
+                file_path=file_path,
+                reason=(
+                    f"binding '{entry.get('module_id', '<unknown>')}' field '{field}' is "
+                    f"{len(value)} characters, over the {max_length} configured by {key}"
+                ),
+            )
+
+    tags_pattern = _limit(config, "validation.binding.tags_pattern")
+    tags = entry.get("tags")
+    if isinstance(tags_pattern, str) and tags_pattern and isinstance(tags, list):
+        try:
+            compiled = re.compile(tags_pattern)
+        except re.error as exc:
+            # §9.2.3 requirement 6d: never skipped in silence.
+            raise BindingFileInvalidError(
+                file_path=file_path,
+                reason=(
+                    f"validation.binding.tags_pattern {tags_pattern!r} does not compile "
+                    f"({exc}), so no tag could be checked against it"
+                ),
+            ) from exc
+        for tag in tags:
+            if isinstance(tag, str) and compiled.search(tag) is None:
+                raise BindingFileInvalidError(
+                    file_path=file_path,
+                    reason=(
+                        f"binding '{entry.get('module_id', '<unknown>')}' tag {tag!r} does not "
+                        f"match validation.binding.tags_pattern {tags_pattern!r}"
+                    ),
+                )
+
+    if _limit(config, "validation.binding.version_require_semver") is True:
+        version = entry.get("version")
+        if isinstance(version, str) and _SEMVER_RE.match(version) is None:
+            raise BindingFileInvalidError(
+                file_path=file_path,
+                reason=(
+                    f"binding '{entry.get('module_id', '<unknown>')}' version {version!r} is not "
+                    "SemVer, required by validation.binding.version_require_semver"
+                ),
+            )
+
+
 class BindingLoader:
     """Loads YAML binding files and creates FunctionModule instances.
 
@@ -150,8 +240,22 @@ class BindingLoader:
             frozenset(trusted_package_prefixes) if trusted_package_prefixes is not None else None
         )
 
-    def load_bindings(self, file_path: str, registry: Registry) -> list[FunctionModule]:
-        """Load binding file and register all modules."""
+    def load_bindings(
+        self,
+        file_path: str,
+        registry: Registry,
+        config: Config | None = None,
+    ) -> list[FunctionModule]:
+        """Load binding file and register all modules.
+
+        Args:
+            file_path: The binding file to read.
+            registry: Registry the loaded modules are registered into.
+            config: Optional configuration supplying the ``validation.binding.*``
+                limits of PROTOCOL_SPEC §9.1.2. All four are **unconstrained by
+                default**, so omitting this argument — as every caller before
+                v1.38.0 did — checks nothing and rejects nothing.
+        """
         path = pathlib.Path(file_path)
         binding_file_dir = str(path.parent)
 
@@ -211,6 +315,7 @@ class BindingLoader:
                     file_path=file_path,
                     reason="Binding entry missing 'target'",
                 )
+            _validate_binding_limits(entry, config, file_path=file_path)
             fm = self._create_module_from_binding(entry, binding_file_dir, file_path=file_path)
             registry.register(entry["module_id"], fm)
             results.append(fm)
@@ -312,7 +417,7 @@ class BindingLoader:
             entry for entry in p.iterdir() if entry.is_file() and match_glob(resolved_pattern, entry.name)
         )
         for f in candidates:
-            results.extend(self.load_bindings(str(f), registry))
+            results.extend(self.load_bindings(str(f), registry, config))
         return results
 
     def resolve_target(self, target_string: str) -> Callable:

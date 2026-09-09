@@ -181,6 +181,17 @@ _DEFAULTS: dict[str, Any] = {
     "stream": {
         "max_merge_depth": 32,
     },
+    # PROTOCOL_SPEC §9.1.2 (spec v1.38.0, apcore#118). The six `validation.*`
+    # keys are UNCONSTRAINED by default — apcore does not impose limits on the
+    # content its users author, it offers them. Five of the six are unconstrained
+    # AS `None`, and `None` is the absence of a default, so only this one carries
+    # a canonical value: `defaults.schema.json` declares exactly this entry and
+    # `config_key_governance.json` pins the table to that file.
+    "validation": {
+        "binding": {
+            "version_require_semver": False,
+        },
+    },
     # Added by spec v1.36.0 (apcore#114). `defaults.schema.json` gained a
     # `bindings` section so that the `./bindings` default §5.12.6 promises is
     # reachable through the mechanism meant to serve it; before that the two

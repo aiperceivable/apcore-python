@@ -246,6 +246,60 @@ def _import_step(handler_path: str, name: str, config: dict[str, Any]) -> BaseSt
     return step
 
 
+def _validate_pipeline_limits(pipeline_config: dict[str, Any], config: Any) -> None:
+    """Apply the ``validation.pipeline.*`` limits (PROTOCOL_SPEC §9.1.2).
+
+    **Both are unconstrained by default.** apcore does not impose limits on the
+    content its users author; it offers them, and an operator opts in. With no
+    configuration, or with the keys left at their defaults, this checks nothing
+    and a pipeline that parsed before this function existed still parses.
+
+    Checked here — when the ``pipeline:`` section is parsed — because that is
+    where the authored values enter, per §9.1.2 requirement 3. `remove:` is not
+    checked: those names identify steps that already exist rather than naming
+    new ones, so a limit on them would reject a request to remove a step the
+    operator did not author.
+    """
+    if config is None:
+        return
+    max_name = config.get("validation.pipeline.step_name_max_length")
+    max_timeout = config.get("validation.pipeline.timeout_ms_max")
+    if max_name is None and max_timeout is None:
+        return
+
+    def check_timeout(where: str, value: Any) -> None:
+        if max_timeout is None or isinstance(value, bool) or not isinstance(value, int):
+            return
+        if not isinstance(max_timeout, int) or isinstance(max_timeout, bool):
+            return
+        if value > max_timeout:
+            raise ConfigurationError(
+                f"{where}: timeout_ms {value} is over the {max_timeout} configured by "
+                "validation.pipeline.timeout_ms_max"
+            )
+
+    for step_name, overrides in (pipeline_config.get("configure", {}) or {}).items():
+        if isinstance(overrides, dict):
+            check_timeout(f"Step '{step_name}'", overrides.get("timeout_ms"))
+
+    for step_def in pipeline_config.get("steps", []) or []:
+        if not isinstance(step_def, dict):
+            continue
+        name = step_def.get("name")
+        if (
+            max_name is not None
+            and isinstance(max_name, int)
+            and not isinstance(max_name, bool)
+            and isinstance(name, str)
+            and len(name) > max_name
+        ):
+            raise ConfigurationError(
+                f"Step '{name}': name is {len(name)} characters, over the {max_name} configured "
+                "by validation.pipeline.step_name_max_length"
+            )
+        check_timeout(f"Step '{name or '<unnamed>'}'", step_def.get("timeout_ms"))
+
+
 def build_strategy_from_config(
     pipeline_config: dict[str, Any],
     *,
@@ -274,6 +328,8 @@ def build_strategy_from_config(
         Configured ExecutionStrategy.
     """
     from apcore.builtin_steps import build_standard_strategy
+
+    _validate_pipeline_limits(pipeline_config, config)
 
     strategy = build_standard_strategy(
         registry=registry,
