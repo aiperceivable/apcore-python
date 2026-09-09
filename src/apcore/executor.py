@@ -1155,6 +1155,12 @@ class Executor:
         # iteration: raise ModuleTimeoutError between chunks if the deadline
         # passes, so long-running streams cannot silently outrun their budget.
         accumulated: dict[str, Any] = {}
+        # PROTOCOL_SPEC §5: resolved ONCE per stream, not per chunk. A
+        # configuration mutated mid-stream — `system.control.update_config`
+        # can do exactly that — must not change the cap of a stream already
+        # in flight. This used to be called inside the chunk loop, which
+        # contradicted the guarantee its own commit message stated.
+        merge_depth_cap = self._merge_depth_cap()
         global_deadline = getattr(pipe_ctx.context, "global_deadline", None)
         try:
             async for idx, chunk in _aenumerate(pipe_ctx.output_stream):
@@ -1183,7 +1189,7 @@ class Executor:
                             "actual_type": actual_type,
                         },
                     )
-                _deep_merge(accumulated, chunk, max_depth=self._merge_depth_cap())
+                _deep_merge(accumulated, chunk, max_depth=merge_depth_cap)
                 yield chunk
         except ExecutionCancelledError:
             raise
