@@ -1060,6 +1060,37 @@ def _warn_if_project_root_diverges(config: Config) -> None:
     )
 
 
+def _collect_uncompilable_regex_patterns(data: dict[str, Any]) -> list[str]:
+    """Report every ``obs.redaction.regex_patterns`` entry that does not compile.
+
+    PROTOCOL_SPEC §9.2.3 requirement 6d. The three SDKs previously handled an
+    unusable pattern the same way — skip it and carry on — so the divergence was
+    never in the failure *policy* but in what counts as a failure: the Rust
+    ``regex`` crate refuses lookaround and backreferences by design, JavaScript
+    rejects an inline ``(?i)``. Reporting at validation time makes an
+    engine-specific rejection visible at deploy rather than never.
+    """
+    import re as _re
+
+    section = _get_nested(data, "obs.redaction.regex_patterns")
+    if not isinstance(section, list):
+        return []
+    out: list[str] = []
+    for index, pattern in enumerate(section):
+        if not isinstance(pattern, str) or not pattern:
+            continue
+        try:
+            _re.compile(pattern)
+        except _re.error as exc:
+            out.append(
+                f"obs.redaction.regex_patterns[{index}] does not compile and would redact "
+                f"nothing: {pattern!r} ({exc}). Patterns should stay inside the portable subset "
+                "— no lookaround, no backreferences, no inline (?i) flags (PROTOCOL_SPEC §9.2.3 "
+                "requirement 6)."
+            )
+    return out
+
+
 class Config:
     """Configuration system with YAML loading, env overrides, and validation.
 
@@ -1775,6 +1806,14 @@ class Config:
         #    both; §9.14 step 3 only requires that every offending key be named.
         if _meta_strict(self._data):
             errors.extend(_collect_unknown_framework_keys(self._data))
+
+        # 5. PROTOCOL_SPEC §9.2.3 requirement 6d / §10.6.1: an
+        #    `obs.redaction.regex_patterns` entry the engine cannot compile MUST
+        #    be reported here, not skipped at the first log record. A redaction
+        #    rule that redacts nothing is indistinguishable, from the outside,
+        #    from one that works — and on this surface the difference is
+        #    credentials in plaintext.
+        errors.extend(_collect_uncompilable_regex_patterns(self._data))
 
         if errors:
             raise ConfigError(
