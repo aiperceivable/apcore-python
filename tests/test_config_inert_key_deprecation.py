@@ -379,3 +379,58 @@ class TestACLAuditBlockNotice:
         notices = _acl_notices(caplog)
         assert len(notices) == 1
         assert "telemetry" not in notices[0]
+
+
+def _write_namespace_config(directory: Path, *sections: dict[str, Any]) -> Path:
+    """Write the same document in §9.6 NAMESPACE-mode layout.
+
+    The framework sections live under an ``apcore:`` root, which is the whole
+    point: ``config.declared`` is then ``{"apcore": {...}}`` and a flat lookup
+    finds nothing.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    inner: dict[str, Any] = {"version": "1.0", "project": {"name": "inert-keys"}}
+    for section in sections:
+        _merge(inner, section)
+    target = directory / "apcore.yaml"
+    target.write_text(yaml.safe_dump({"apcore": inner}, sort_keys=False), encoding="utf-8")
+    return target
+
+
+class TestNamespaceModeIsNotAnExemption:
+    """§9.2.4 requirement 1 says "a loaded configuration document" — both layouts.
+
+    §9.6 puts the framework sections under an ``apcore:`` root in namespace
+    mode, so ``config.declared`` is ``{"apcore": {...}}`` there. The first
+    implementation of this notice looked only at the flat spelling and was
+    therefore **silent for every namespace-mode document**, however many
+    deprecated keys it declared. apcore-typescript reaches through the layout in
+    ``getDeclared`` and apcore-rust merges the ``apcore:`` members up to the top
+    of ``user_namespaces``, so both were already correct — this was a one-SDK
+    divergence on a requirement written for all three.
+    """
+
+    def test_namespace_mode_declaring_a_key_warns(self, tmp_path: Path) -> None:
+        path = _write_namespace_config(tmp_path, {"logging": {"level": "debug"}})
+        _, messages = _load_capturing_warnings(path)
+        notices = _notices(messages)
+        assert len(notices) == 1
+        assert "logging.level" in notices[0]
+
+    def test_namespace_mode_names_every_declared_key(self, tmp_path: Path) -> None:
+        path = _write_namespace_config(
+            tmp_path,
+            {"observability": {"tracing": {"sampling_rate": 0.1}}},
+            {"acl": {"audit": {"enabled": False}}},
+        )
+        _, messages = _load_capturing_warnings(path)
+        notices = _notices(messages)
+        assert len(notices) == 1
+        assert "observability.tracing.sampling_rate" in notices[0]
+        assert "acl.audit.enabled" in notices[0]
+
+    def test_a_clean_namespace_mode_document_is_silent(self, tmp_path: Path) -> None:
+        """The half that fails against a merged-view or always-on implementation."""
+        path = _write_namespace_config(tmp_path)
+        _, messages = _load_capturing_warnings(path)
+        assert _notices(messages) == []

@@ -1055,6 +1055,26 @@ _DEPRECATED_INERT_KEYS: tuple[str, ...] = (
 )
 
 
+def _is_declared_either_mode(config: Config, key: str) -> bool:
+    """Was *key* written by the operator, in legacy OR namespace mode?
+
+    §9.6 puts the framework sections under an ``apcore:`` root in namespace
+    mode, so ``config.declared`` is ``{"apcore": {...}}`` there and a flat
+    lookup finds nothing. §9.2.4 requirement 1 says "a loaded configuration
+    document", which does not exclude one layout — a namespace-mode document
+    that declares `logging.level` has declared it, and the first implementation
+    of this warning was silent for every such document.
+
+    The fallback shape mirrors ``get_declared``'s own: try the flat spelling,
+    then the ``apcore.``-prefixed one. Both are tried unconditionally rather
+    than branching on the mode, because a key present under either spelling was
+    written by somebody either way.
+    """
+    if _get_nested(config.declared, key) is not None:
+        return True
+    return _get_nested(config.declared, f"apcore.{key}") is not None
+
+
 def _warn_deprecated_inert_keys(config: Config) -> None:
     """PROTOCOL_SPEC §9.2.4 — warn for declared keys that reach no consumer.
 
@@ -1068,7 +1088,7 @@ def _warn_deprecated_inert_keys(config: Config) -> None:
     adds the one thing they have never had — a way for an operator to find out
     that setting them does nothing.
     """
-    declared = [key for key in _DEPRECATED_INERT_KEYS if _get_nested(config.declared, key) is not None]
+    declared = [key for key in _DEPRECATED_INERT_KEYS if _is_declared_either_mode(config, key)]
     if not declared:
         return
     _emit_per_load(
