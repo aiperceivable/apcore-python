@@ -410,6 +410,7 @@ def register_sys_modules(
     _register_sys_modules(
         registry,
         config,
+        sys_cfg,
         metrics_collector,
         error_history,
         usage_collector,
@@ -468,64 +469,84 @@ def _register_sys_module(
 def _register_sys_modules(
     registry: Registry,
     config: Config,
+    sys_cfg: dict[str, Any] | None,
     metrics_collector: MetricsCollector | None,
     error_history: ErrorHistory,
     usage_collector: UsageCollector,
     fail_on_error: bool = False,
 ) -> None:
-    """Register all sys.* modules: health, manifest, and usage."""
+    """Register the sys.* module groups the configuration selects.
+
+    ``sys_modules.enabled`` is the master switch and is checked by the caller.
+    The three per-group flags below select *which* modules register once
+    activation has happened — the split the v1.17.0 revision of §9.15.3 states
+    and the one ``schemas/sys-modules.schema.json`` declares, key by key:
+
+    - ``health.enabled``   — "Whether system.health.summary and system.health.module are registered"
+    - ``manifest.enabled`` — "Whether system.manifest.module and system.manifest.full are registered"
+    - ``usage.enabled``    — "Whether system.usage.summary and system.usage.module are registered"
+
+    All three default to ``True``, so the flags narrow and never widen.
+
+    They were read by no code path until now (apcore#118): every flag false
+    registered the same six modules as every flag true, while the master switch
+    worked — a section that is half alive, so a smoke test of it passes.
+    """
     effective_metrics = metrics_collector if metrics_collector is not None else MetricsCollector()
 
-    _register_sys_module(
-        registry,
-        "system.health.summary",
-        HealthSummaryModule(
-            registry=registry,
-            metrics_collector=effective_metrics,
-            error_history=error_history,
-            config=config,
-        ),
-        fail_on_error=fail_on_error,
-    )
+    if _cfg_get(sys_cfg, config, "health.enabled", True):
+        _register_sys_module(
+            registry,
+            "system.health.summary",
+            HealthSummaryModule(
+                registry=registry,
+                metrics_collector=effective_metrics,
+                error_history=error_history,
+                config=config,
+            ),
+            fail_on_error=fail_on_error,
+        )
 
-    _register_sys_module(
-        registry,
-        "system.health.module",
-        HealthModule(
-            registry=registry,
-            metrics_collector=effective_metrics,
-            error_history=error_history,
-        ),
-        fail_on_error=fail_on_error,
-    )
+        _register_sys_module(
+            registry,
+            "system.health.module",
+            HealthModule(
+                registry=registry,
+                metrics_collector=effective_metrics,
+                error_history=error_history,
+            ),
+            fail_on_error=fail_on_error,
+        )
 
-    _register_sys_module(
-        registry,
-        "system.manifest.module",
-        ManifestModule(registry=registry, config=config),
-        fail_on_error=fail_on_error,
-    )
+    if _cfg_get(sys_cfg, config, "manifest.enabled", True):
+        _register_sys_module(
+            registry,
+            "system.manifest.module",
+            ManifestModule(registry=registry, config=config),
+            fail_on_error=fail_on_error,
+        )
 
-    _register_sys_module(
-        registry,
-        "system.manifest.full",
-        ManifestFullModule(registry=registry, config=config),
-        fail_on_error=fail_on_error,
-    )
+        _register_sys_module(
+            registry,
+            "system.manifest.full",
+            ManifestFullModule(registry=registry, config=config),
+            fail_on_error=fail_on_error,
+        )
 
-    _register_sys_module(
-        registry,
-        "system.usage.summary",
-        UsageSummaryModule(collector=usage_collector),
-        fail_on_error=fail_on_error,
-    )
+    if _cfg_get(sys_cfg, config, "usage.enabled", True):
+        _register_sys_module(
+            registry,
+            "system.usage.summary",
+            UsageSummaryModule(collector=usage_collector),
+            fail_on_error=fail_on_error,
+        )
 
-    _register_sys_module(
-        registry,
-        "system.usage.module",
-        UsageModule(registry=registry, usage_collector=usage_collector),
-        fail_on_error=fail_on_error,
-    )
+        _register_sys_module(
+            registry,
+            "system.usage.module",
+            UsageModule(registry=registry, usage_collector=usage_collector),
+            fail_on_error=fail_on_error,
+        )
 
 
 def _setup_events(
@@ -558,16 +579,29 @@ def _setup_events(
     executor.use(pn_middleware)
     result["platform_notify_middleware"] = pn_middleware
 
-    effective_toggle_state = _register_control_modules(
-        registry,
-        config,
-        event_emitter,
-        overrides_path=overrides_path,
-        overrides_store=overrides_store,
-        audit_store=audit_store,
-        fail_on_error=fail_on_error,
-        toggle_state=toggle_state,
-    )
+    # `control.enabled` selects whether the Level 2 write plane registers once
+    # `events.enabled` has activated it — schemas/sys-modules.schema.json:
+    # "Whether the system.control.* modules are registered". Default True, so
+    # the flag narrows and never widens. It was read by nothing until now
+    # (apcore#118), which made it the most consequential of the four inert
+    # sub-flags: an operator writing `control.enabled: false` to keep the
+    # approval-gated write surface off a deployment got all three modules.
+    #
+    # When the flag is off, no ToggleState is created here: `toggle_feature`
+    # owns it, and the caller's `toggle.*` overrides have nothing to apply to.
+    if _cfg_get(sys_cfg, config, "control.enabled", True):
+        effective_toggle_state = _register_control_modules(
+            registry,
+            config,
+            event_emitter,
+            overrides_path=overrides_path,
+            overrides_store=overrides_store,
+            audit_store=audit_store,
+            fail_on_error=fail_on_error,
+            toggle_state=toggle_state,
+        )
+    else:
+        effective_toggle_state = toggle_state if toggle_state is not None else _default_toggle_state
     result["toggle_state"] = effective_toggle_state
 
     # Apply persisted overrides AFTER control modules are registered so the
