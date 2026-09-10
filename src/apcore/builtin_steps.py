@@ -207,6 +207,32 @@ class BuiltinCallChainGuard(BaseStep):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_redaction(config: Any | None) -> Any:
+    """The `obs.redaction.*` rules the capture point applies.
+
+    PROTOCOL_SPEC §10.6.1 "Where the rules apply": the union of `x-sensitive`,
+    `sensitive_keys` and `regex_patterns` MUST hold at log emission **and** at
+    the executor's input/output capture point, with the SAME rules at each.
+    Until this existed the capture point applied `x-sensitive` and the default
+    key list only, so a configured `regex_patterns` entry redacted a bearer
+    token in the log line an operator was watching and stored it in the audit
+    record they were not (aiperceivable/apcore#120).
+
+    Requirement 3: with no configuration the DEFAULTS apply, which is what
+    `redact_sensitive(data, schema)` already did — so a caller who configures
+    nothing sees no change.
+
+    Resolved once per strategy, not per execution: §10.6.1 requirement 5 puts
+    compilation at the configuration read, and `RedactionConfig` compiles
+    `regex_patterns` in its constructor.
+    """
+    from apcore.observability.context_logger import RedactionConfig
+
+    if config is None:
+        return RedactionConfig.default()
+    return RedactionConfig.from_config(config)
+
+
 class BuiltinModuleLookup(BaseStep):
     """Resolve module from registry by ID with optional version hint.
 
@@ -221,6 +247,7 @@ class BuiltinModuleLookup(BaseStep):
         *,
         registry: Any,
         toggle_state: Any | None = None,
+        redaction: Any | None = None,
     ) -> None:
         super().__init__(
             name="module_lookup",
@@ -231,6 +258,7 @@ class BuiltinModuleLookup(BaseStep):
             provides=("module",),
         )
         self._registry = registry
+        self._redaction = redaction
         # Use the injected toggle_state when provided (e.g. for testing);
         # fall back to the package-level default singleton.
         if toggle_state is not None:
@@ -269,7 +297,14 @@ class BuiltinModuleLookup(BaseStep):
                 from apcore.utils.redaction import redact_sensitive
 
                 schema = cast(dict[str, Any], schema_dict_fn())
-                ctx.context.redacted_inputs = redact_sensitive(ctx.inputs, schema)
+                rules = self._redaction or _resolve_redaction(None)
+                ctx.context.redacted_inputs = redact_sensitive(
+                    ctx.inputs,
+                    schema,
+                    sensitive_keys=rules.sensitive_keys,
+                    regex_patterns=rules.compiled_regex_patterns,
+                    replacement=rules.replacement,
+                )
             else:
                 # No schema → no redaction needed; store raw inputs so
                 # downstream consumers don't see None.
@@ -899,7 +934,7 @@ class BuiltinMiddlewareBefore(BaseStep):
 class BuiltinInputValidation(BaseStep):
     """Validate inputs against module schema and redact sensitive fields."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, redaction: Any | None = None) -> None:
         super().__init__(
             name="input_validation",
             description="Validate inputs against schema and redact sensitive fields",
@@ -909,6 +944,7 @@ class BuiltinInputValidation(BaseStep):
             requires=("module",),
             provides=("validated_inputs",),
         )
+        self._redaction = redaction
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         module = ctx.module
@@ -947,7 +983,14 @@ class BuiltinInputValidation(BaseStep):
             from apcore.utils.redaction import redact_sensitive
 
             schema = cast(dict[str, Any], schema_dict_fn())
-            redacted = redact_sensitive(ctx.inputs, schema)
+            rules = self._redaction or _resolve_redaction(None)
+            redacted = redact_sensitive(
+                ctx.inputs,
+                schema,
+                sensitive_keys=rules.sensitive_keys,
+                regex_patterns=rules.compiled_regex_patterns,
+                replacement=rules.replacement,
+            )
             if ctx.context is not None and hasattr(ctx.context, "redacted_inputs"):
                 ctx.context.redacted_inputs = redacted
 
@@ -1050,7 +1093,7 @@ class BuiltinExecute(BaseStep):
 class BuiltinOutputValidation(BaseStep):
     """Validate output against module schema and redact sensitive fields."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, redaction: Any | None = None) -> None:
         super().__init__(
             name="output_validation",
             description="Validate output against schema and redact sensitive fields",
@@ -1060,6 +1103,7 @@ class BuiltinOutputValidation(BaseStep):
             requires=("module", "output"),
             provides=("validated_output",),
         )
+        self._redaction = redaction
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         module = ctx.module
@@ -1099,7 +1143,14 @@ class BuiltinOutputValidation(BaseStep):
                 from apcore.utils.redaction import redact_sensitive
 
                 schema = cast(dict[str, Any], schema_dict_fn())
-                ctx.context.redacted_output = redact_sensitive(ctx.output, schema)
+                rules = self._redaction or _resolve_redaction(None)
+                ctx.context.redacted_output = redact_sensitive(
+                    ctx.output,
+                    schema,
+                    sensitive_keys=rules.sensitive_keys,
+                    regex_patterns=rules.compiled_regex_patterns,
+                    replacement=rules.replacement,
+                )
             else:
                 ctx.context.redacted_output = dict(ctx.output) if ctx.output else None
 
@@ -1216,21 +1267,26 @@ def build_standard_strategy(
     Returns:
         An ExecutionStrategy containing the 11 built-in steps.
     """
+    # PROTOCOL_SPEC §10.6.1 requirement 5: compiled once, here, rather than at
+    # every execution — and the SAME object reaches all three capture points, so
+    # the two `redacted_inputs` writers and the `redacted_output` writer cannot
+    # drift apart the way the two log-emission passes did.
+    redaction = _resolve_redaction(config)
     return ExecutionStrategy(
         "standard",
         [
             BuiltinContextCreation(config=config, executor=executor),
             BuiltinCallChainGuard(config=config),
-            BuiltinModuleLookup(registry=registry, toggle_state=toggle_state),
+            BuiltinModuleLookup(registry=registry, toggle_state=toggle_state, redaction=redaction),
             BuiltinACLCheck(acl=acl, event_emitter=event_emitter),
             BuiltinApprovalGate(handler=approval_handler, policy=policy, event_emitter=event_emitter),
             BuiltinMiddlewareBefore(
                 middlewares=middlewares or [],
                 middleware_manager=middleware_manager,
             ),
-            BuiltinInputValidation(),
+            BuiltinInputValidation(redaction=redaction),
             BuiltinExecute(config=config),
-            BuiltinOutputValidation(),
+            BuiltinOutputValidation(redaction=redaction),
             BuiltinMiddlewareAfter(
                 middlewares=middlewares or [],
                 middleware_manager=middleware_manager,
