@@ -109,6 +109,12 @@ class OTLPExporter:
             ) from None
 
         self._StatusCode = StatusCode
+        #: The collector this exporter targets. Retained because
+        #: PROTOCOL_SPEC §10.1.1 requirement 3 makes it configurable through
+        #: `observability.tracing.otlp_endpoint`, and a value that reaches the
+        #: exporter unobservably cannot be told apart from one that does not.
+        #: `None` means the OTel SDK's own default.
+        self._endpoint = endpoint
         self._attribute_allowlist: frozenset[str] | None = (
             frozenset(attribute_allowlist) if attribute_allowlist is not None else None
         )

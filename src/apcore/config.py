@@ -84,6 +84,18 @@ _CONSTRAINTS: dict[str, tuple[Any, str]] = {
         lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= v <= 1.0,
         "must be a number in [0.0, 1.0]",
     ),
+    "observability.tracing.strategy": (
+        lambda v: v in ("full", "proportional", "error_first", "off"),
+        "must be 'full', 'proportional', 'error_first' or 'off'",
+    ),
+    "observability.tracing.exporter": (
+        lambda v: v in ("stdout", "otlp", "jaeger"),
+        "must be 'stdout', 'otlp' or 'jaeger'",
+    ),
+    "observability.tracing.otlp_endpoint": (
+        lambda v: v is None or (isinstance(v, str) and bool(v.strip())),
+        "must be a non-empty URL string, or null",
+    ),
     "extensions.max_depth": (
         lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 16,
         "must be an integer in [1, 16]",
@@ -159,6 +171,9 @@ _DEFAULTS: dict[str, Any] = {
         "tracing": {
             "enabled": False,
             "sampling_rate": 1.0,
+            "strategy": "full",
+            "exporter": "stdout",
+            "otlp_endpoint": None,
         },
         "metrics": {
             "enabled": False,
@@ -301,7 +316,9 @@ _FRAMEWORK_CONFIG_KEYS: frozenset[str] = frozenset(
         "observability.metrics.exporter",
         "observability.tracing.enabled",
         "observability.tracing.exporter",
+        "observability.tracing.otlp_endpoint",
         "observability.tracing.sampling_rate",
+        "observability.tracing.strategy",
         "pipeline.configure",
         "pipeline.remove",
         "pipeline.steps",
@@ -1038,13 +1055,15 @@ def _emit_per_load(message: str, category: type[Warning], *, stacklevel: int) ->
     )
 
 
-#: PROTOCOL_SPEC §9.2.4 — the ten declared configuration keys that reach no
+#: PROTOCOL_SPEC §9.2.4 — the declared configuration keys that reach no
 #: consumer in any implementation (apcore#118). Order is the order they are
 #: reported in, so two SDKs name them the same way.
+#:
+#: Ten when the window opened in spec v1.39.0; seven since v1.44.0, which gave
+#: `observability.tracing.enabled` / `.sampling_rate` / `.exporter` consumers
+#: (§10.1.1) and cancelled their withdrawal. A key that has left the table MUST
+#: NOT warn — §9.2.4 requirement 1.
 _DEPRECATED_INERT_KEYS: tuple[str, ...] = (
-    "observability.tracing.enabled",
-    "observability.tracing.sampling_rate",
-    "observability.tracing.exporter",
     "observability.metrics.enabled",
     "observability.metrics.exporter",
     "logging.level",
@@ -1862,6 +1881,21 @@ class Config:
                 errors.append(f"Invalid value for '{field}': {err_msg} (got {value!r})")
 
         # 3. Semantic validation
+        #
+        # PROTOCOL_SPEC §10.1.1 requirement 3: an OTLP endpoint set against an
+        # exporter that does not read it is a rejected configuration, not a
+        # silent no-op. A value an operator wrote down and nothing reads is the
+        # shape of every defect apcore#118 found.
+        otlp_endpoint = _get_nested(self._data, "observability.tracing.otlp_endpoint")
+        if otlp_endpoint is not None:
+            exporter = _get_nested(self._data, "observability.tracing.exporter", "stdout")
+            if exporter != "otlp":
+                errors.append(
+                    f"observability.tracing.otlp_endpoint is set but "
+                    f"observability.tracing.exporter is {exporter!r}, which does not read it. "
+                    f"Set exporter to 'otlp', or remove the endpoint."
+                )
+
         ext_root = _get_nested(self._data, "extensions.root")
         auto_discover = _get_nested(self._data, "extensions.auto_discover", False)
         if auto_discover and ext_root and not Path(str(ext_root)).exists():

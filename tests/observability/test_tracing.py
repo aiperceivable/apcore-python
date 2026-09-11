@@ -154,8 +154,26 @@ class TestOTLPExporter:
     """Tests for OTLPExporter."""
 
     def test_raises_import_error_when_opentelemetry_not_installed(self):
-        """OTLPExporter should raise ImportError at instantiation when opentelemetry is absent."""
-        with patch.dict(sys.modules, {"opentelemetry": None}):
+        """OTLPExporter should raise ImportError at instantiation when opentelemetry is absent.
+
+        Every submodule the constructor imports is blanked, not just the parent
+        package. `from opentelemetry.sdk.trace import ...` resolves straight out
+        of ``sys.modules`` when the submodule is already cached there, so
+        patching only ``"opentelemetry"`` simulates absence exactly as long as
+        nothing else in the suite has ever imported the real thing — and this
+        case went red the day a test constructed a real ``OTLPExporter``.
+        """
+        absent = dict.fromkeys(
+            [
+                "opentelemetry",
+                "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+                "opentelemetry.sdk.resources",
+                "opentelemetry.sdk.trace",
+                "opentelemetry.sdk.trace.export",
+                "opentelemetry.trace",
+            ]
+        )
+        with patch.dict(sys.modules, absent):
             with pytest.raises(ImportError, match="opentelemetry"):
                 OTLPExporter()
 

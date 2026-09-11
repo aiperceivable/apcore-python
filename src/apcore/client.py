@@ -101,6 +101,26 @@ class APCore:
             if discovered_acl is not None:
                 self.executor.set_acl(discovered_acl)
 
+        # Config-driven tracing (PROTOCOL_SPEC §10.1.1). `observability.tracing.*`
+        # was five declared keys that reached nothing: no SDK had ever built a
+        # TracingMiddleware from configuration, so `enabled: true` installed
+        # nothing and the other four configured a middleware that did not exist.
+        #
+        # Skipped when the caller supplied their own Executor — an Executor the
+        # caller built is respected as-is, tracing included, exactly as
+        # config-driven ACL discovery above treats it. That is also what makes
+        # §10.1.1 requirement 6 hold without a second check here: the
+        # auto-created Executor's middleware chain is empty at this point, so
+        # configuration can never be the thing that adds a SECOND tracing
+        # middleware. A caller who calls `use(TracingMiddleware(...))` after
+        # construction is adding one deliberately, and keeps it.
+        if self.config is not None and not executor_supplied:
+            from apcore.observability.tracing_config import build_tracing_middleware
+
+            tracing_mw = build_tracing_middleware(self.config)
+            if tracing_mw is not None:
+                self.executor.use(tracing_mw)
+
         # Auto-register sys.* modules and middleware from config
         self._sys_modules_context: dict[str, Any] = {}
         if self.config is not None:

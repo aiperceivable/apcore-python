@@ -418,16 +418,29 @@ class TestNamespaceModeIsNotAnExemption:
         assert "logging.level" in notices[0]
 
     def test_namespace_mode_names_every_declared_key(self, tmp_path: Path) -> None:
+        # `observability.tracing.sampling_rate` used to be the first half of
+        # this pair. Spec v1.44.0 gave it a consumer (§10.1.1) and took it out
+        # of §9.2.4's table, so it must NOT appear here any more — the second
+        # assertion is what would catch a table that never shrank.
         path = _write_namespace_config(
             tmp_path,
-            {"observability": {"tracing": {"sampling_rate": 0.1}}},
+            {"observability": {"metrics": {"exporter": "stdout"}}},
             {"acl": {"audit": {"enabled": False}}},
         )
         _, messages = _load_capturing_warnings(path)
         notices = _notices(messages)
         assert len(notices) == 1
-        assert "observability.tracing.sampling_rate" in notices[0]
+        assert "observability.metrics.exporter" in notices[0]
         assert "acl.audit.enabled" in notices[0]
+
+    def test_a_wired_tracing_key_is_not_named(self, tmp_path: Path) -> None:
+        """The withdrawal cancelled by spec v1.44.0, pinned from the other side."""
+        path = _write_namespace_config(
+            tmp_path,
+            {"observability": {"tracing": {"sampling_rate": 0.1, "enabled": True}}},
+        )
+        _, messages = _load_capturing_warnings(path)
+        assert _notices(messages) == []
 
     def test_a_clean_namespace_mode_document_is_silent(self, tmp_path: Path) -> None:
         """The half that fails against a merged-view or always-on implementation."""

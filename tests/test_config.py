@@ -398,15 +398,30 @@ class TestNumericConstraintsRejectBooleans:
     of them.
     """
 
+    #: Constrained keys whose value is not a number. Named rather than derived:
+    #: this list used to be "everything except `acl.default_effect`", and the
+    #: three `observability.tracing.*` constraints added in spec v1.44.0 turned
+    #: the whole class red. Adding a NUMERIC key still cannot skip this test —
+    #: that is what the derivation is for — while adding a non-numeric one now
+    #: costs one deliberate line here.
+    NON_NUMERIC_FIELDS = frozenset({
+        "acl.default_effect",
+        "observability.tracing.strategy",
+        "observability.tracing.exporter",
+        "observability.tracing.otlp_endpoint",
+    })
+
     # Every numeric key in `_CONSTRAINTS`, derived from the table itself so a
-    # newly added key cannot quietly skip this test.
-    NUMERIC_FIELDS = sorted(f for f in _CONSTRAINTS if f != "acl.default_effect")
+    # newly added key cannot quietly skip this test. A set difference rather
+    # than a comprehension: a comprehension's condition is evaluated outside
+    # the class body and cannot see the name above it.
+    NUMERIC_FIELDS = sorted(set(_CONSTRAINTS) - NON_NUMERIC_FIELDS)
 
     def test_the_numeric_field_list_is_complete(self) -> None:
-        # Guards the derivation above: `acl.default_effect` is the only
-        # non-numeric constrained key.
-        assert len(self.NUMERIC_FIELDS) == len(_CONSTRAINTS) - 1
-        assert "acl.default_effect" not in self.NUMERIC_FIELDS
+        # Guards the derivation above.
+        assert len(self.NUMERIC_FIELDS) == len(_CONSTRAINTS) - len(self.NON_NUMERIC_FIELDS)
+        assert self.NON_NUMERIC_FIELDS.isdisjoint(self.NUMERIC_FIELDS)
+        assert self.NON_NUMERIC_FIELDS <= set(_CONSTRAINTS)
 
     @pytest.mark.parametrize("field", NUMERIC_FIELDS)
     @pytest.mark.parametrize("value", [True, False])
