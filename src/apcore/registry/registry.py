@@ -712,8 +712,8 @@ class Registry:
         Mirrors the structure of
         ``apcore-typescript/src/registry/registry.ts:_discoverDefault``.
         """
-        max_depth, follow_symlinks = self._scan_params()
-        discovered = self._scan_roots(max_depth, follow_symlinks)
+        max_depth, follow_symlinks, ignore_patterns = self._scan_params()
+        discovered = self._scan_roots(max_depth, follow_symlinks, ignore_patterns)
         if path_filter is not None:
             discovered = self._apply_path_filter(discovered, path_filter)
         self._apply_id_map_overrides(discovered)
@@ -745,9 +745,10 @@ class Registry:
         configuration enables a potentially sensitive feature.
         """
         if self._config is None:
-            return 8, False
+            return 8, False, []
         max_depth = self._config.get("extensions.max_depth", 8)
         follow_symlinks = self._config.get("extensions.follow_symlinks", False)
+        ignore_patterns = self._config.get("extensions.ignore_patterns", []) or []
         if follow_symlinks and not getattr(self, "_logged_follow_symlinks_warning", False):
             logger.warning(
                 "extensions.follow_symlinks=True — scanner will traverse symlinked "
@@ -755,9 +756,9 @@ class Registry:
                 "trusted; see apcore.registry.entry_point for the trust-boundary note."
             )
             self._logged_follow_symlinks_warning = True
-        return (max_depth, follow_symlinks)
+        return (max_depth, follow_symlinks, list(ignore_patterns))
 
-    def _scan_roots(self, max_depth: int, follow_symlinks: bool) -> list[Any]:
+    def _scan_roots(self, max_depth: int, follow_symlinks: bool, ignore_patterns: list[str] | None = None) -> list[Any]:
         """Stage 1 — walk extension root(s) and return DiscoveredModule entries."""
         has_namespace = any("namespace" in r for r in self._extension_roots)
         if len(self._extension_roots) > 1 or has_namespace:
@@ -765,6 +766,7 @@ class Registry:
                 roots=self._extension_roots,
                 max_depth=max_depth,
                 follow_symlinks=follow_symlinks,
+                ignore_patterns=ignore_patterns,
             )
         else:
             root_path = Path(self._extension_roots[0]["root"])
@@ -772,6 +774,7 @@ class Registry:
                 root=root_path,
                 max_depth=max_depth,
                 follow_symlinks=follow_symlinks,
+                ignore_patterns=ignore_patterns,
             )
         self._reject_ephemeral_discoveries(discovered)
         return discovered

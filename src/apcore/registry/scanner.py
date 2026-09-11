@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from apcore.errors import ConfigError, ConfigNotFoundError
 from apcore.registry.types import DiscoveredModule
+from apcore.utils.pattern import match_glob
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +24,30 @@ def scan_extensions(
     root: Path,
     max_depth: int = 8,
     follow_symlinks: bool = False,
+    ignore_patterns: Sequence[str] | None = None,
 ) -> list[DiscoveredModule]:
-    """Recursively scan an extensions directory for Python module files."""
+    """Recursively scan an extensions directory for Python module files.
+
+    `ignore_patterns` is `extensions.ignore_patterns`, matched with Algorithm
+    A25 (PROTOCOL_SPEC §9.2.3) against the ENTRY NAME — one path segment, never
+    a path, case-sensitively. It is a UNION with `_SKIP_DIR_NAMES` and the
+    hidden/internal prefixes of §3.5: a configured pattern adds to those and
+    cannot switch one off.
+
+    Until spec v1.42.0 the key was registered in every SDK's configuration key
+    surface and read by none, so §3.6 step 3a was a MUST whose input nothing
+    supplied and a directory a project had excluded from discovery was scanned
+    and registered anyway — a skip rule that failed OPEN (apcore#118).
+    """
     root = Path(root).resolve()
     if not root.exists():
         raise ConfigNotFoundError(config_path=str(root))
+
+    # Empty entries are dropped rather than treated as a pattern matching
+    # nothing in particular: A25 anchors, so `""` would match only the empty
+    # name, but an operator who leaves a blank line in a YAML list means
+    # nothing by it.
+    patterns = [p for p in (ignore_patterns or ()) if p]
 
     visited_real_paths: set[Path] = {root.resolve()}
     results: list[DiscoveredModule] = []
@@ -52,6 +73,8 @@ def scan_extensions(
             if name.startswith(".") or name.startswith("_"):
                 continue
             if name in _SKIP_DIR_NAMES:
+                continue
+            if any(match_glob(pattern, name) for pattern in patterns):
                 continue
 
             try:
@@ -142,6 +165,7 @@ def scan_multi_root(
     roots: list[dict[str, Any]],
     max_depth: int = 8,
     follow_symlinks: bool = False,
+    ignore_patterns: Sequence[str] | None = None,
 ) -> list[DiscoveredModule]:
     """Scan multiple extension roots with namespace prefixing."""
     all_results: list[DiscoveredModule] = []
@@ -158,7 +182,12 @@ def scan_multi_root(
         resolved.append((root_path, namespace))
 
     for root_path, namespace in resolved:
-        modules = scan_extensions(root_path, max_depth=max_depth, follow_symlinks=follow_symlinks)
+        modules = scan_extensions(
+            root_path,
+            max_depth=max_depth,
+            follow_symlinks=follow_symlinks,
+            ignore_patterns=ignore_patterns,
+        )
         for m in modules:
             all_results.append(
                 DiscoveredModule(
