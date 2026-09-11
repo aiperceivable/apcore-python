@@ -231,6 +231,48 @@ def _deep_merge(
             base[key] = value
 
 
+#: Steps whose removal withdraws a protection rather than a convenience
+#: (PROTOCOL_SPEC §5.16 requirement 7).
+_SECURITY_STEPS = ("acl_check", "approval_gate")
+
+
+def _pipeline_section(config: Any | None) -> dict[str, Any]:
+    """The `pipeline:` block of a loaded configuration, or `{}`."""
+    if config is None:
+        return {}
+    section = config.get("pipeline")
+    return section if isinstance(section, dict) and section else {}
+
+
+def _warn_removed_security_steps(pipeline_config: dict[str, Any]) -> None:
+    """§5.16 requirement 7 — removing `acl_check` or `approval_gate` warns.
+
+    The reason is the TRANSITION, not the steady state. Requirement 6 makes a
+    previously ignored section take effect, so a configuration that has been
+    carrying `remove: [acl_check]` while ACL was enforced anyway starts having
+    ACL genuinely removed. That is the operator getting what they asked for, and
+    equally the one direction in which honouring configuration can withdraw a
+    protection that was in place a moment earlier.
+
+    A notice, never a refusal: the configuration is valid and was written
+    deliberately, and rejecting it would break projects whose `pipeline:` block
+    is harmless.
+    """
+    removed = [name for name in pipeline_config.get("remove", []) if name in _SECURITY_STEPS]
+    if not removed:
+        return
+    _logger.warning(
+        "pipeline.remove takes %s out of the execution pipeline. Until spec v1.43.0 a "
+        "`pipeline:` section was accepted and then ignored, so this removal may not have "
+        "been in effect before this release even though it was configured. "
+        "%s. See PROTOCOL_SPEC 5.16 requirement 7.",
+        " and ".join(repr(name) for name in removed),
+        "Inter-module calls are no longer access-checked"
+        if "acl_check" in removed
+        else "Calls requiring approval are no longer gated",
+    )
+
+
 class Executor:
     """Central execution engine that orchestrates the module call pipeline.
 
@@ -308,7 +350,23 @@ class Executor:
         if strategy is None:
             from apcore.builtin_steps import build_standard_strategy
 
-            self._strategy = build_standard_strategy(**strategy_kwargs)
+            # PROTOCOL_SPEC §5.16 requirement 6: a configured `pipeline:` section
+            # MUST be applied. The builder has always existed — it takes the
+            # section as a dict — but nothing extracted that dict from a loaded
+            # Config, so `pipeline: remove: [acl_check]` in apcore.yaml left all
+            # eleven steps in place and a declared custom step silently never
+            # ran (apcore#118, decision D-72).
+            #
+            # Only when the caller supplied no explicit strategy: an explicit
+            # one is an API argument and wins over configuration, per D-73.
+            pipeline_config = _pipeline_section(config)
+            if pipeline_config:
+                from apcore.pipeline_config import build_strategy_from_config
+
+                _warn_removed_security_steps(pipeline_config)
+                self._strategy = build_strategy_from_config(pipeline_config, **strategy_kwargs)
+            else:
+                self._strategy = build_standard_strategy(**strategy_kwargs)
         elif isinstance(strategy, str):
             self._strategy = self._resolve_strategy_name(strategy, **strategy_kwargs)
         else:

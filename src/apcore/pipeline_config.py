@@ -310,6 +310,9 @@ def build_strategy_from_config(
     middlewares: list[Any] | None = None,
     middleware_manager: Any | None = None,
     executor: Any | None = None,
+    policy: Any | None = None,
+    event_emitter: Any | None = None,
+    toggle_state: Any | None = None,
 ) -> Any:
     """Build an ExecutionStrategy from YAML pipeline configuration.
 
@@ -331,6 +334,12 @@ def build_strategy_from_config(
 
     _validate_pipeline_limits(pipeline_config, config)
 
+    # `policy`, `event_emitter` and `toggle_state` are forwarded because the
+    # caller is now the Executor rather than an application assembling a
+    # strategy by hand (PROTOCOL_SPEC §5.16 requirement 6). Omitting them would
+    # mean a project that configures a `pipeline:` section silently loses its
+    # ExecutionPolicy, its governance events and its per-instance ToggleState —
+    # a worse defect than the ignored section this wiring exists to fix.
     strategy = build_standard_strategy(
         registry=registry,
         config=config,
@@ -339,6 +348,9 @@ def build_strategy_from_config(
         middlewares=middlewares,
         middleware_manager=middleware_manager,
         executor=executor,
+        policy=policy,
+        event_emitter=event_emitter,
+        toggle_state=toggle_state,
     )
 
     # (1) Remove steps — fail-fast (Issue #33 §1.2)
