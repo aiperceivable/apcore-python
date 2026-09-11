@@ -197,6 +197,24 @@ def test_proportional_samples_at_the_configured_rate() -> None:
 # The exporter, by name
 # ---------------------------------------------------------------------------
 
+def _otlp_is_buildable() -> bool:
+    """Can this installation construct an OTLP exporter at all?
+
+    `OTLPExporter` needs the `opentelemetry` extra, which is optional and is not
+    installed in CI. §10.1.1 requirement 4 makes that a first-class outcome
+    rather than a skip: the middleware is NOT installed and the reason is
+    logged, because one whose exporter discards every span would show an
+    operator tracing "enabled" and no traces. Both branches are asserted below.
+    """
+    from apcore.observability.tracing import OTLPExporter
+
+    try:
+        OTLPExporter()
+    except ImportError:
+        return False
+    return True
+
+
 def test_stdout_is_the_default_exporter() -> None:
     from apcore.observability.tracing import StdoutExporter
 
@@ -204,6 +222,7 @@ def test_stdout_is_the_default_exporter() -> None:
     assert isinstance(mw._exporter, StdoutExporter)
 
 
+@pytest.mark.skipif(not _otlp_is_buildable(), reason="the opentelemetry extra is not installed")
 def test_otlp_endpoint_reaches_the_exporter() -> None:
     mw = _tracing_middlewares(_client({
         "enabled": True, "exporter": "otlp",
@@ -212,11 +231,44 @@ def test_otlp_endpoint_reaches_the_exporter() -> None:
     assert "collector.internal" in str(getattr(mw._exporter, "_endpoint", ""))
 
 
+@pytest.mark.skipif(not _otlp_is_buildable(), reason="the opentelemetry extra is not installed")
 def test_a_null_endpoint_uses_the_specified_default() -> None:
     from apcore.observability.tracing_config import DEFAULT_OTLP_ENDPOINT
 
     mw = _tracing_middlewares(_client({"enabled": True, "exporter": "otlp"}))[0]
     assert str(getattr(mw._exporter, "_endpoint", "")) == DEFAULT_OTLP_ENDPOINT
+
+
+def test_otlp_without_its_extra_installs_nothing_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """§10.1.1 requirement 4's second case, asserted rather than skipped.
+
+    The two cases above are conditional on an optional dependency; this one
+    runs either way, by simulating its absence. Every submodule the constructor
+    imports is blanked, not just the parent package — `from
+    opentelemetry.sdk.trace import ...` resolves straight out of `sys.modules`
+    when the submodule is cached, so patching only `"opentelemetry"` simulates
+    absence exactly as long as nothing else has imported the real thing.
+    """
+    import sys
+    from unittest.mock import patch
+
+    absent = dict.fromkeys([
+        "opentelemetry",
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+        "opentelemetry.sdk.resources",
+        "opentelemetry.sdk.trace",
+        "opentelemetry.sdk.trace.export",
+        "opentelemetry.trace",
+    ])
+    with patch.dict(sys.modules, absent), caplog.at_level(logging.WARNING, logger="apcore"):
+        client = _client({"enabled": True, "exporter": "otlp"})
+
+    assert _tracing_middlewares(client) == []
+    hits = [r for r in caplog.records if "OTLP exporter could not be built" in r.getMessage()]
+    assert len(hits) == 1, [r.getMessage() for r in caplog.records]
+    assert "stdout" in hits[0].getMessage()
 
 
 def test_an_endpoint_with_a_non_otlp_exporter_is_rejected_at_load() -> None:
