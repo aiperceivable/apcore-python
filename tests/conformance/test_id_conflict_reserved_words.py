@@ -84,7 +84,19 @@ def test_id_conflict_reserved_words(case: dict[str, Any]) -> None:
         with pytest.raises(Exception) as excinfo:
             registry.register(case["new_id"], _Module())
         # The fixture names the conflict `type`; SDKs surface it through their
-        # own error classes, so assert the registration was refused and that
-        # the message identifies the offending id rather than pinning a class
-        # name three languages do not share.
+        # own error classes, so the message check identifies the offending id
+        # rather than pinning a class name three languages do not share.
         assert case["new_id"].split(".")[0] in str(excinfo.value) or case["new_id"] in str(excinfo.value), case["note"]
+
+        # ...and the WIRE CODE says WHICH conflict it was. Without this the
+        # driver only asserts "refused", so `check_case_pinning.py` could mutate
+        # `expected` from `reserved_word` to `duplicate_id` — a value this very
+        # fixture uses — and every SDK stayed green: the distinction the fixture
+        # exists to draw was asserted by nobody. The mapping lives in the
+        # fixture, not here, because it is one rule and §8's codes are the
+        # cross-language contract.
+        codes = load_fixture(FIXTURE)["error_code_by_conflict"]
+        assert getattr(excinfo.value, "code", None) == codes[expected], (
+            f"{case['id']}: expected the {expected!r} conflict to surface as "
+            f"{codes[expected]}, got {getattr(excinfo.value, 'code', None)!r} — {case['note']}"
+        )

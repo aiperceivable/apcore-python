@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,7 +21,9 @@ from jsonschema import Draft202012Validator
 
 import pytest
 
-from apcore import ModuleAnnotations, Registry
+from apcore import APCore, ModuleAnnotations, Registry
+from apcore.config import Config
+from apcore.errors import ModuleError
 from apcore.observability.usage import UsageCollector, UsageMiddleware
 from apcore.sys_modules.usage import UsageModuleModule, UsageSummaryModule
 from conformance.canonical_fixtures import case_ids, load_fixture, schemas_dir
@@ -139,6 +142,34 @@ def test_usage_contract(case: dict[str, Any]) -> None:
         assert not re.match(pattern, case["inputs"]["period"]), (
             f"{case['id']}: fixture expects {case['inputs']['period']!r} to be rejected, "
             f"but the declared pattern accepts it"
+        )
+
+        # ...and then assert what the case actually SAYS. The two checks above
+        # are about the schema; neither reads `expected["error_code"]`, so this
+        # branch used to pass whatever wire code the fixture declared — the case
+        # was run and its expectation asserted nothing. Found by
+        # `check_case_pinning.py`: mutating the code left every driver green.
+        #
+        # The rejection happens at input validation (§6.7.1.1), which is the
+        # pipeline's job rather than `execute`'s, so the assertion has to go
+        # through a real client.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            client = APCore(
+                config=Config(
+                    {
+                        "version": "1.0",
+                        "project": {"name": "usage-contract"},
+                        "sys_modules": {"enabled": True, "usage": {"enabled": True}},
+                    }
+                )
+            )
+        with pytest.raises(ModuleError) as raised:
+            client.call(case["module"], dict(case["inputs"]))
+        assert raised.value.code == expected["error_code"], (
+            f"{case['id']}: {case['inputs']['period']!r} was rejected with "
+            f"{raised.value.code!r}, and the fixture declares "
+            f"{expected['error_code']!r} as the wire code an operator sees"
         )
         return
 
