@@ -317,26 +317,26 @@ def _acl_notices(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 class TestACLAuditBlockNotice:
-    def test_an_audit_block_is_reported_and_still_ignored(
+    def test_an_audit_block_no_longer_produces_a_deprecation_notice(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The block has never been read; the notice is the only thing that is new.
+        """§9.2.4.1's notice is SUPERSEDED by §6.3.2 (spec v1.45.0).
 
-        ``acl-config.schema.json`` declares an ``audit`` block byte-equivalent to
-        ``acl.audit.*``, and deleting it from the schema would produce no signal
-        at all — nothing validates an ACL file against that schema. Hence the
-        loader.
+        The block had never been read, so the notice was the only signal an
+        operator got. It is now read — it has a delivery contract — and a key
+        that has gained a consumer must stop being announced as going away,
+        for the same reason §9.2.4 requirement 1 says the table is the whole
+        list. This case is the one that fails against a loader that kept the
+        notice.
         """
-        acl_file = _write_acl(tmp_path, audit={"enabled": True, "include_denied": True, "log_level": "info"})
+        acl_file = _write_acl(
+            tmp_path, audit={"enabled": True, "include_denied": True, "log_level": "info"}
+        )
 
         with caplog.at_level(logging.WARNING):
             acl = ACL.load(str(acl_file))
 
-        notices = _acl_notices(caplog)
-        assert len(notices) == 1
-        assert "audit" in notices[0]
-        assert str(acl_file) in notices[0]
-        # Nothing about the file's behaviour changes: the block is still ignored.
+        assert _acl_notices(caplog) == []
         assert len(acl.rules) == 1
         assert acl.default_effect == "deny"
 
@@ -368,17 +368,22 @@ class TestACLAuditBlockNotice:
         assert [record.getMessage() for record in caplog.records if "telemetry" in record.getMessage()] == []
         assert len(acl.rules) == 1
 
-    def test_an_audit_block_beside_another_unknown_key_reports_only_audit(
+    def test_an_audit_block_beside_another_unknown_key_still_validates_only_audit(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """§6.3.2 requirement 8 — wiring one block is not unknown-key closure.
+
+        The `audit` subtree is validated; every other unrecognised root key in
+        an ACL file keeps being ignored, exactly as §9.2.4.1 scoped its own
+        notice. A `telemetry:` block that loaded yesterday loads today.
+        """
         acl_file = _write_acl(tmp_path, audit={"enabled": False}, telemetry={"enabled": True})
 
         with caplog.at_level(logging.WARNING):
-            ACL.load(str(acl_file))
+            acl = ACL.load(str(acl_file))
 
-        notices = _acl_notices(caplog)
-        assert len(notices) == 1
-        assert "telemetry" not in notices[0]
+        assert len(acl.rules) == 1
+        assert [r.getMessage() for r in caplog.records if "telemetry" in r.getMessage()] == []
 
 
 def _write_namespace_config(directory: Path, *sections: dict[str, Any]) -> Path:

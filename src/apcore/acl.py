@@ -11,7 +11,7 @@ import inspect
 import logging
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ClassVar
@@ -36,10 +36,11 @@ from apcore.acl_handlers import (
 )
 from apcore.config import Config
 from apcore.context import Context
-from apcore.errors import ACLRuleError, ConfigNotFoundError
+from apcore.errors import ACLRuleError, ConfigError, ConfigNotFoundError
 from apcore.utils.pattern import match_pattern
 
 __all__ = [
+    "AUDIT_EVENT_NAME",
     "AccessDecision",
     "ACLRule",
     "AuditEntry",
@@ -609,6 +610,221 @@ class _Fault:
     reason: str
     sync_resolvable: bool = False
     async_resolvable: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Audit delivery (PROTOCOL_SPEC §6.3.2, apcore#118 decision D-66)
+# ---------------------------------------------------------------------------
+
+#: The three settings of an ACL file's `audit:` block, and their defaults.
+_AUDIT_FIELDS = ("enabled", "include_denied", "log_level")
+_AUDIT_DEFAULTS: dict[str, Any] = {"enabled": True, "include_denied": True, "log_level": "info"}
+_AUDIT_LEVELS = {
+    "trace": logging.DEBUG,
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+#: The stable name the default sink emits under (§10.3's event table).
+AUDIT_EVENT_NAME = "apcore.acl.audit"
+
+
+class _AuditSink:
+    """The ONE effective sink for an ACL, per §6.3.2 requirement 1.
+
+    Never two. A callback supplied to the constructor receives every entry and
+    is not narrowed, levelled or silenced by the `audit:` block: an API argument
+    beats configuration, and the alternative lets a file silently truncate a
+    compliance sink a developer installed deliberately. The block configures the
+    **default sink** and nothing else.
+
+    A sink also owns its failure state. Requirement 5 suppresses diagnostics
+    after the first, scoped to one ACL instance **and one effective sink
+    configuration** — replacing the sink or reloading a configuration that
+    changes it builds a new `_AuditSink`, so a new failure is never hidden
+    behind an old one.
+    """
+
+    __slots__ = ("_callback", "_config", "_failed", "_rejected_awaitable")
+
+    def __init__(
+        self,
+        callback: Callable[[AuditEntry], None] | None,
+        config: dict[str, Any] | None,
+    ) -> None:
+        self._callback = callback
+        #: `None` means the document declared no `audit:` block. Requirement 2:
+        #: DECLARATION activates the default sink, never the default value —
+        #: `enabled` defaults to true, so reading the merged view would switch a
+        #: log record per check on for every ACL file in existence.
+        self._config = config
+        self._failed = False
+        self._rejected_awaitable = False
+
+    @property
+    def is_active(self) -> bool:
+        if self._callback is not None:
+            return True
+        return bool(self._config) and bool(self._config.get("enabled", True))
+
+    def deliver(self, entry: AuditEntry) -> None:
+        """Deliver one entry. NEVER raises (§6.3.2 requirement 3)."""
+        if self._callback is not None:
+            self._deliver_to_callback(entry)
+            return
+        if self._config is None or not self._config.get("enabled", True):
+            return
+        if entry.decision == "deny" and not self._config.get("include_denied", True):
+            # Requirement 6 — the load-time notice for this is emitted once, at
+            # load; withholding here is silent by design.
+            return
+        self._emit_default(entry)
+
+    def _deliver_to_callback(self, entry: AuditEntry) -> None:
+        callback = self._callback
+        assert callback is not None
+        try:
+            result = callback(entry)
+        except Exception as exc:  # noqa: BLE001 — containment IS the requirement
+            self._report_failure(exc)
+            return
+        if inspect.isawaitable(result):
+            # Requirement 4. An async callback's failure surfaces after the
+            # decision has already been returned, outside the containment
+            # requirement 3 promises. Treated as an invalid delivery, reported
+            # once, and the coroutine is closed so it does not warn on GC.
+            if not self._rejected_awaitable:
+                self._rejected_awaitable = True
+                _logger.warning(
+                    "The ACL audit_logger returned an awaitable. PROTOCOL_SPEC §6.3.2 "
+                    "requirement 4 requires a SYNCHRONOUS callback: an async one fails after "
+                    "the access decision has been returned, where it can no longer be "
+                    "contained. This entry was NOT delivered. Enqueue the entry inside the "
+                    "callback and return instead."
+                )
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
+
+    def _emit_default(self, entry: AuditEntry) -> None:
+        """§6.3.2 requirement 2 — the default sink.
+
+        All thirteen §6.3.1 fields go out as STRUCTURED data under their
+        `snake_case` wire names, not interpolated into the message. Without
+        that, one specification yields three different "structured records"
+        across the SDKs and nothing downstream consumes all three.
+        """
+        level = _AUDIT_LEVELS.get(str(self._config.get("log_level", "info")), logging.INFO)
+        try:
+            _audit_logger_default.log(
+                level, AUDIT_EVENT_NAME, extra={"apcore_audit": asdict(entry)}
+            )
+        except Exception as exc:  # noqa: BLE001 — a logging handler can fail too
+            self._report_failure(exc)
+
+    def _report_failure(self, exc: BaseException) -> None:
+        if self._failed:
+            return
+        self._failed = True
+        _logger.warning(
+            "ACL audit delivery failed (%s: %s). The access decision is unaffected "
+            "(PROTOCOL_SPEC §6.3.2 requirement 3) — auditing is a side channel and does not "
+            "hold a veto over access. Further failures from this sink are not reported; "
+            "replacing the sink or reloading the ACL starts a new report.",
+            type(exc).__name__,
+            exc,
+        )
+
+
+def _parse_audit_block(data: dict[str, Any], yaml_path: str) -> dict[str, Any] | None:
+    """Validate an ACL file's ``audit:`` block (§6.3.2 requirement 8).
+
+    Returns ``None`` only when the document declares no ``audit`` key at all —
+    the distinction requirement 2 turns on, because `enabled` defaults to
+    ``True`` and reading the merged view would switch a log record per check on
+    for every ACL file in existence.
+
+    **Presence, not truthiness.** ``audit:`` with nothing under it parses to
+    ``None``, and the operator still wrote the block: that is a declaration with
+    every setting at its default, not an absence.
+
+    Validates the SUBTREE only: types and unknown keys inside the block. Every
+    other unrecognised root key in an ACL file keeps being ignored.
+    """
+    if "audit" not in data:
+        return None
+    raw = data["audit"]
+    if raw is None:
+        return dict(_AUDIT_DEFAULTS)
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"{yaml_path}: 'audit' must be a mapping (PROTOCOL_SPEC §6.3.2), got "
+            f"{type(raw).__name__}"
+        )
+
+    unknown = sorted(set(raw) - set(_AUDIT_FIELDS))
+    if unknown:
+        raise ConfigError(
+            f"{yaml_path}: unknown key(s) in the 'audit' block: {', '.join(unknown)}. "
+            f"The block accepts exactly {', '.join(_AUDIT_FIELDS)} "
+            f"($defs/AuditConfig in schemas/acl-config.schema.json)."
+        )
+
+    config = dict(_AUDIT_DEFAULTS)
+    for key in ("enabled", "include_denied"):
+        if key in raw:
+            if not isinstance(raw[key], bool):
+                raise ConfigError(
+                    f"{yaml_path}: 'audit.{key}' must be a boolean, got {raw[key]!r}"
+                )
+            config[key] = raw[key]
+    if "log_level" in raw:
+        if raw["log_level"] not in _AUDIT_LEVELS:
+            raise ConfigError(
+                f"{yaml_path}: 'audit.log_level' must be one of "
+                f"{', '.join(_AUDIT_LEVELS)}, got {raw['log_level']!r}"
+            )
+        config["log_level"] = raw["log_level"]
+
+    if not config["include_denied"]:
+        # §6.3.2 requirement 6 — a notice, not a refusal. It withholds the
+        # security-relevant half of the record, so an operator who wrote it
+        # deliberately gets told once per load rather than stopped.
+        _logger.warning(
+            "%s sets audit.include_denied: false, so DENIED access attempts will not be "
+            "recorded by the default audit sink (PROTOCOL_SPEC §6.3.2 requirement 6). "
+            "Allowed calls are still recorded. Remove the entry to restore denials.",
+            yaml_path,
+        )
+    return config
+
+
+def _warn_audit_block_overridden(
+    callback: Callable[[AuditEntry], None] | None,
+    config: dict[str, Any] | None,
+) -> None:
+    """§6.3.2 requirement 1 — name EVERY field the callback overrides.
+
+    Not only the most visible one: an operator who set `include_denied` and
+    `log_level` and hears about one of them has been told the smaller half of
+    what happened.
+    """
+    if callback is None or not config:
+        return
+    _logger.warning(
+        "An audit_logger was supplied to this ACL, so it is the effective sink and the ACL "
+        "file's 'audit:' block does not apply. The callback receives EVERY entry, allow and "
+        "deny alike. These declared settings have no effect: %s "
+        "(PROTOCOL_SPEC §6.3.2 requirement 1).",
+        ", ".join(f"audit.{f}" for f in _AUDIT_FIELDS if f in config),
+    )
+
+
+#: The default sink's own logger, separate from this module's so an operator can
+#: route `apcore.acl.audit` records without touching ACL diagnostics.
+_audit_logger_default = logging.getLogger("apcore.acl.audit")
 
 
 class ACL:
@@ -1267,6 +1483,7 @@ class ACL:
         default_effect: str = "deny",
         *,
         audit_logger: Callable[[AuditEntry], None] | None = None,
+        audit_config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize ACL with ordered rules and a default effect.
 
@@ -1275,7 +1492,14 @@ class ACL:
             default_effect: Effect when no rule matches — ``"allow"`` or
                 ``"deny"``, a closed set (PROTOCOL_SPEC §6.1.5).
             audit_logger: Optional callback invoked with an AuditEntry for
-                every check() call. Useful for structured audit trails.
+                every check() call. Useful for structured audit trails. It
+                receives EVERY entry and is never narrowed, levelled or
+                silenced by *audit_config* (PROTOCOL_SPEC §6.3.2 requirement 1).
+            audit_config: The ACL file's ``audit:`` block, as declared. ``None``
+                means the document declared none, which keeps the pre-v1.45.0
+                behaviour of no audit output without a callback. Supplied by
+                :meth:`load`; callers constructing an ACL directly normally pass
+                *audit_logger* instead.
 
         Raises:
             ACLRuleError: When *default_effect* is outside ``allow`` / ``deny``,
@@ -1327,6 +1551,15 @@ class ACL:
         self._default_effect: str = default_effect
         self._yaml_path: str | None = None
         self._audit_logger: Callable[[AuditEntry], None] | None = audit_logger
+        self._audit_config: dict[str, Any] | None = (
+            dict(audit_config) if audit_config is not None else None
+        )
+        # §6.3.2 requirement 1: one effective sink, never two. Built here and
+        # rebuilt by `reload()`, which is what scopes requirement 5's
+        # once-per-failure suppression to a sink CONFIGURATION rather than to
+        # the ACL object's lifetime.
+        self._audit_sink = _AuditSink(audit_logger, self._audit_config)
+        _warn_audit_block_overridden(audit_logger, self._audit_config)
         self._logger: logging.Logger = logging.getLogger(__name__)
         self._lock = threading.Lock()
         self.debug: bool = False
@@ -1366,11 +1599,22 @@ class ACL:
             return tuple(self._rules)
 
     @classmethod
-    def load(cls, yaml_path: str) -> ACL:
+    def load(
+        cls,
+        yaml_path: str,
+        *,
+        audit_logger: Callable[[AuditEntry], None] | None = None,
+    ) -> ACL:
         """Load ACL configuration from a YAML file.
 
         Args:
             yaml_path: Path to the YAML configuration file.
+            audit_logger: Optional audit callback. Supplying it here makes it
+                the effective sink for the loaded ACL, ahead of the file's
+                ``audit:`` block (PROTOCOL_SPEC §6.3.2 requirement 1), and
+                :meth:`reload` preserves it (requirement 7). Without this
+                parameter the two halves of that contract — load from a file,
+                audit through a callback — had no supported path between them.
 
         A rule referencing a condition key with no handler registered at load
         time is **not** an error: ``register_condition`` writes to a runtime,
@@ -1413,20 +1657,16 @@ class ACL:
         # takes the fields it wants, so any unknown root key is dropped in
         # silence. The diagnostic therefore has to live here.
         #
-        # Scoped to `audit` deliberately: this is a deprecation notice, NOT
-        # unknown-key closure for ACL files. Every other unrecognised root key
-        # keeps being ignored exactly as before, and the block itself is still
-        # ignored — nothing about this file's behaviour changes.
-        if "audit" in data:
-            _logger.warning(
-                "apcore#118 (PROTOCOL_SPEC §9.2.4.1): %s declares an 'audit:' block, which "
-                "no apcore SDK has ever read — auditing is wired programmatically through "
-                "ACL(audit_logger=...). The same three settings are also declared as "
-                "'acl.audit.*' in apcore.yaml and are equally inert. One of the two "
-                "declarations is removed no earlier than v2.0 (§13.2 / §13.4); nothing has "
-                "changed in this release.",
-                yaml_path,
-            )
+        # Scoped to `audit` deliberately: §6.3.2 requirement 8 validates this
+        # SUBTREE and nothing else, so every other unrecognised root key in an
+        # ACL file keeps being ignored exactly as before. This was never
+        # unknown-key closure for ACL files, and wiring the block does not make
+        # it one.
+        #
+        # The §9.2.4.1 deprecation notice that used to stand here is gone: spec
+        # v1.45.0 gave the block a delivery contract, and a key that has gained
+        # a consumer must stop being announced as going away.
+        audit_config = _parse_audit_block(data, yaml_path)
 
         # PROTOCOL_SPEC §6.2.1: `default_effect` is judged FIRST, before any
         # rule, at every door. It is not a rule and has no index, so the rule
@@ -1515,7 +1755,12 @@ class ACL:
                 )
             )
 
-        acl = cls(rules=rules, default_effect=default_effect)
+        acl = cls(
+            rules=rules,
+            default_effect=default_effect,
+            audit_logger=audit_logger,
+            audit_config=audit_config,
+        )
         acl._yaml_path = yaml_path
         return acl
 
@@ -1648,7 +1893,7 @@ class ACL:
             An :class:`AccessDecision` carrying ``access``,
             ``approval_required``, ``matched_rule_index`` and ``reason``.
         """
-        effective_caller, rules, default_effect, audit_logger = self._snapshot(caller_id)
+        effective_caller, rules, default_effect, audit_sink = self._snapshot(caller_id)
 
         token = _handler_error_var.set({})
         try:
@@ -1677,7 +1922,7 @@ class ACL:
                 default_effect=default_effect,
                 matched=matched,
                 pending_approval=pending_approval,
-                audit_logger=audit_logger,
+                audit_sink=audit_sink,
                 context=context,
             )
         finally:
@@ -1743,7 +1988,7 @@ class ACL:
         condition registry is consulted first, exactly as in
         :meth:`async_check`.
         """
-        effective_caller, rules, default_effect, audit_logger = self._snapshot(caller_id)
+        effective_caller, rules, default_effect, audit_sink = self._snapshot(caller_id)
 
         token = _handler_error_var.set({})
         try:
@@ -1772,17 +2017,23 @@ class ACL:
                 default_effect=default_effect,
                 matched=matched,
                 pending_approval=pending_approval,
-                audit_logger=audit_logger,
+                audit_sink=audit_sink,
                 context=context,
             )
         finally:
             _handler_error_var.reset(token)
 
-    def _snapshot(self, caller_id: str | None) -> tuple[str, list[ACLRule], str, Callable[[AuditEntry], None] | None]:
-        """Atomically snapshot mutable state for a check call."""
+    def _snapshot(self, caller_id: str | None) -> tuple[str, list[ACLRule], str, "_AuditSink"]:
+        """Atomically snapshot mutable state for a check call.
+
+        Hands out the SINK rather than the raw callback: delivery has to be
+        contained (§6.3.2 requirement 3) and the failure state that scopes
+        requirement 5's suppression lives on the sink, so a call site holding a
+        bare callable could not honour either.
+        """
         effective_caller = "@external" if caller_id is None else caller_id
         with self._lock:
-            return effective_caller, list(self._rules), self._default_effect, self._audit_logger
+            return effective_caller, list(self._rules), self._default_effect, self._audit_sink
 
     def _finalize_check(
         self,
@@ -1795,7 +2046,7 @@ class ACL:
         default_effect: str,
         matched: tuple[int, ACLRule] | None,
         pending_approval: bool,
-        audit_logger: Callable[[AuditEntry], None] | None,
+        audit_sink: "_AuditSink",
         context: Context | None,
     ) -> AccessDecision:
         """Log the decision, emit an audit entry, and return the structured result.
@@ -1863,8 +2114,8 @@ class ACL:
             rule_label,
         )
 
-        if audit_logger is not None:
-            audit_logger(
+        if audit_sink.is_active:
+            audit_sink.deliver(
                 self._build_audit_entry(
                     caller_id=effective_caller,
                     target_id=target_id,
@@ -2346,10 +2597,27 @@ class ACL:
             yaml_path = self._yaml_path
         if yaml_path is None:
             raise ACLRuleError("Cannot reload: ACL was not loaded from a YAML file")
+        # The callback is NOT passed here: `reload` preserves the one this
+        # instance already has (requirement 7), and handing it to the
+        # temporary would emit requirement 1's override notice a second time
+        # for a configuration the caller has already been told about.
         reloaded = ACL.load(yaml_path)
         with self._lock:
             self._rules = reloaded._rules
             self._default_effect = reloaded._default_effect
+            # §6.3.2 requirement 7: a reload refreshes the `audit:` block and
+            # PRESERVES a programmatic callback, which was never read from the
+            # file. Before v1.45.0 this method refreshed only the rules and the
+            # default effect, so the audit block was the one part of the
+            # document a reload did not pick up.
+            #
+            # Building a NEW sink is also what scopes requirement 5's
+            # once-per-failure suppression: a reload that changes the sink's
+            # configuration starts a fresh report rather than hiding a new
+            # failure behind an old one.
+            self._audit_config = reloaded._audit_config
+            self._audit_sink = _AuditSink(self._audit_logger, self._audit_config)
+            _warn_audit_block_overridden(self._audit_logger, self._audit_config)
             # The §6.5 once-per-rule warning is keyed by rule index, which the
             # reload may have repointed at a different rule. Start fresh.
             self._warned_missing_context.clear()
