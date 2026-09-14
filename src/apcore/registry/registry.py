@@ -460,11 +460,17 @@ class Registry:
         elif extensions_dirs is not None:
             self._extension_roots = [{"root": item} if isinstance(item, str) else item for item in extensions_dirs]
         elif config is not None:
-            ext_root = config.get("extensions.root")
-            if ext_root:
-                self._extension_roots = [{"root": ext_root}]
-            else:
-                self._extension_roots = [{"root": Config.get_default("extensions.root")}]
+            # `extensions.roots` before `extensions.root`: §9.1.1 declares both
+            # and `$defs/ExtensionsConfig` puts them in exclusive `oneOf`
+            # branches, so a document carrying `roots` is in multi-root mode and
+            # `root` is only its single-root sibling.
+            #
+            # apcore#118 decision D-70. This key was read by apcore-rust alone,
+            # so a multi-root project worked on one SDK of three, silently.
+            # `scan_multi_root` below has always been able to do the work —
+            # including the namespace prefixing `roots` exists for — and nothing
+            # extracted the list from a `Config` to reach it.
+            self._extension_roots = self._roots_from_config(config)
         else:
             self._extension_roots = [{"root": Config.get_default("extensions.root")}]
 
@@ -512,9 +518,85 @@ class Registry:
         # Concurrent same-ID registrations see the in-flight set and raise DUPLICATE_MODULE_ID.
         self._in_flight: set[str] = set()
 
-        # Load ID map if provided
-        if id_map_path is not None:
-            self._id_map = load_id_map(Path(id_map_path))
+        # Load the ID map: explicit argument > `id_map.overrides` > none.
+        #
+        # PROTOCOL_SPEC §9.1.1 declares `id_map.overrides` and nothing read it
+        # (apcore#118, decision D-71). The MECHANISM was implemented in all
+        # three SDKs — this class's `_apply_id_map_overrides` is stage 2 of
+        # discovery — and the map arrived only through this constructor's
+        # `id_map_path`. Measured before the fix: with `id_map.overrides`
+        # pointing at a map that renames `executor/orig/mod.py`, discovery still
+        # registered `executor.orig.mod`.
+        #
+        # The precedence is D-73's, and the same one `extensions.root` follows
+        # above: an API argument beats `Config`.
+        #
+        # A relative value is used AS DECLARED — resolved against the process
+        # working directory, exactly as `extensions.root` two blocks up is.
+        # PROTOCOL_SPEC §9.2.1 states that the resolution base for path-typed
+        # keys is deliberately unspecified and tracked in #113: `acl.root`
+        # resolves against the config file's directory, `schema.root` against
+        # the CWD. This key is not the place to settle that — but it does have
+        # to pick, and it picks the base its SIBLING uses. `id_map.overrides`
+        # and `extensions.root` are two halves of one discovery configuration
+        # and are always read together, so a split base between them would be
+        # worse than either base. Recorded as an input to #113, not an answer.
+        resolved_id_map = id_map_path
+        if resolved_id_map is None and config is not None:
+            from_config = config.get("id_map.overrides")
+            if isinstance(from_config, str) and from_config.strip():
+                resolved_id_map = from_config
+        if resolved_id_map is not None:
+            self._id_map = load_id_map(Path(resolved_id_map))
+
+    @staticmethod
+    def _roots_from_config(config: Config) -> list[dict[str, Any]]:
+        """`extensions.roots` if declared, else `extensions.root`, else the default.
+
+        Both element shapes `$defs/ExtensionsConfig` admits are accepted: a bare
+        path string and an object carrying an explicit `namespace`.
+
+        **Every entry gets a namespace here**, derived from the last path
+        segment when the entry does not name one — the same value
+        `scan_multi_root` would derive. Deriving it at this door rather than
+        leaving it to the scanner is what makes a ONE-element `roots` list
+        behave like an n-element one: the scan dispatches on "more than one root
+        or any namespace", so a lone `roots: ["./beta"]` would otherwise take
+        the single-root branch and prefix nothing. Nothing in the schema makes a
+        one-element list special, and `roots` versus `root` is the whole
+        distinction between namespaced and backward-compatible mode.
+
+        A `roots` list that is present but yields no usable entry falls through
+        to the single-root branch rather than scanning nothing: an empty list is
+        a configuration that discovers no modules, and silently discovering none
+        is the failure this whole audit is about.
+        """
+        declared = config.get("extensions.roots")
+        if isinstance(declared, list):
+            entries: list[dict[str, Any]] = []
+            for item in declared:
+                if isinstance(item, str) and item.strip():
+                    entries.append({"root": item, "namespace": Path(item).name})
+                elif isinstance(item, dict) and item.get("root"):
+                    root_value = item["root"]
+                    entries.append({
+                        "root": root_value,
+                        "namespace": item.get("namespace") or Path(str(root_value)).name,
+                    })
+            if entries:
+                return entries
+            if declared:
+                logger.warning(
+                    "extensions.roots is declared with %d entry/entries and none of them "
+                    "names a root, so it was ignored and extensions.root is used instead. "
+                    "An entry is either a path string or an object with a 'root' key.",
+                    len(declared),
+                )
+
+        ext_root = config.get("extensions.root")
+        if ext_root:
+            return [{"root": ext_root}]
+        return [{"root": Config.get_default("extensions.root")}]
 
     # ----- Custom Discoverer / Validator -----
 

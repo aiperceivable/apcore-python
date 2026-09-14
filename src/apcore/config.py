@@ -698,6 +698,71 @@ def _resolve_env_suffix(
     return key, "." in key
 
 
+def _apply_allow_unknown(
+    merged: dict[str, Any],
+    registrations: list[_NamespaceRegistration],
+) -> dict[str, Any]:
+    """PROTOCOL_SPEC §9.6.3's `allow_unknown` row (apcore#118, decision D-69).
+
+    Both halves of that row were inert. ``allow_unknown: false`` is documented
+    as "silently ignored (not stored)" and the namespace was stored anyway, so
+    `get()` answered for it; ``allow_unknown: true`` is documented as "stored,
+    accessible, **WARN logged**" and no implementation logged anything. Fixing
+    one without the other would leave the row half true, and both live here.
+
+    **Namespace mode only, by construction.** §9.6.3 is about *namespaces*, and
+    a legacy document has none — its root IS the `apcore` namespace, so an
+    unrecognised top-level key there is a framework key governed by §9.14's
+    walk under `strict`, not by this field. `strict`'s own clause (b) says it
+    "applies in legacy mode too", which is the specification saying clause (a)
+    does not.
+
+    Only a deployment that explicitly writes ``allow_unknown: false`` changes
+    behaviour, and what changes is that it finally gets the published contract
+    instead of a no-op — but the change is real: a `get()` that returned a value
+    now returns ``None``.
+    """
+    # An ABSENT `_config` is the default pair `strict: false, allow_unknown:
+    # true`, not an exemption: §9.6.3's matrix describes the defaults, so a
+    # document that declares an unregistered namespace and no `_config` at all
+    # is the row that warns. This is not the blanket warning §9.2.2 rejects —
+    # it fires on a condition specific to the document (there IS an
+    # unregistered namespace), never on every configuration ever loaded.
+    meta = merged.get("_config")
+    if not isinstance(meta, dict):
+        meta = {}
+    if meta.get("strict", False):
+        # `strict` already rejects an unknown namespace outright (clause a), so
+        # this field is "only relevant when strict: false" per §9.6.3's own
+        # comment. Nothing to decide.
+        return merged
+
+    known = {r.name for r in registrations} | {"apcore", "_config"}
+    unknown = sorted(k for k in merged if k not in known)
+    if not unknown:
+        return merged
+
+    if meta.get("allow_unknown", True):
+        _logger.warning(
+            "Configuration declares %d namespace(s) that no package has registered: %s. "
+            "They are stored and readable through get(), and NOT validated against any "
+            "schema (PROTOCOL_SPEC §9.6.3). Set _config.allow_unknown: false to have them "
+            "dropped instead, or _config.strict: true to reject them.",
+            len(unknown),
+            ", ".join(unknown),
+        )
+        return merged
+
+    _logger.info(
+        "Dropping %d unregistered namespace(s) per _config.allow_unknown: false: %s "
+        "(PROTOCOL_SPEC §9.6.3). Their keys are not stored and get() will not answer for "
+        "them.",
+        len(unknown),
+        ", ".join(unknown),
+    )
+    return {k: v for k, v in merged.items() if k not in set(unknown)}
+
+
 def _apply_namespace_env_overrides(
     data: dict[str, Any],
     registrations: list[_NamespaceRegistration],
@@ -1539,6 +1604,12 @@ class Config:
 
         # Apply per-namespace env overrides for registered namespaces
         merged = _apply_namespace_env_overrides(merged, registrations)
+
+        # §9.6.3's `allow_unknown` row, both halves of which were inert
+        # (apcore#118, decision D-69). Applied AFTER the env overrides so a
+        # namespace that exists only because of an `APCORE_*` variable is
+        # treated the same as one written in the file.
+        merged = _apply_allow_unknown(merged, registrations)
 
         config = cls(data=merged)
         # Same rule as legacy mode (§9.1): file + env overrides, never defaults.
