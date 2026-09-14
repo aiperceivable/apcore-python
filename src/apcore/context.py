@@ -329,7 +329,37 @@ class Context(Generic[T]):
 
     @property
     def logger(self) -> ContextLogger:
-        """Return a ContextLogger with this context's trace_id and caller_id."""
+        """DEPRECATED — use the host application's logger (apcore#121).
+
+        Application and module code SHOULD log through the logger the host
+        application has already configured. To emit automatic apcore execution
+        events instead, install ``ObsLoggingMiddleware`` explicitly — that is a
+        different facility, not a drop-in replacement for ad-hoc logging.
+
+        This property has no configuration door and cannot acquire one without
+        paying for it somewhere the framework should not: its logger is built
+        per access from a ``Context``, which carries no ``Config`` in any SDK,
+        and the only route that avoids threading one through ``Context``'s
+        pinned six-parameter contract is a process-global logger — which would
+        end the multi-instance isolation apcore currently gets for free. So the
+        output is fixed at stderr / ``info`` / JSON, bypassing whatever the host
+        has configured. Per PROTOCOL_SPEC §9.2.4's D-67 boundary, apcore does
+        not own the host's logging policy.
+
+        Removed at v2.0. Returns a logger carrying this context's ``trace_id``,
+        ``module_id`` and ``caller_id`` until then.
+        """
+        import warnings
+
+        warnings.warn(
+            "Context.logger is deprecated and will be removed in version 2.0. "
+            "Application and module code SHOULD use the host application's logger; "
+            "its output is under the host's control, and this one's is not "
+            "(always stderr, info, JSON). To emit automatic apcore execution events, "
+            "install ObsLoggingMiddleware explicitly. See apcore#121.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from apcore.observability.context_logger import ContextLogger
 
         return ContextLogger.from_context(self, name=self.caller_id or "unknown")
