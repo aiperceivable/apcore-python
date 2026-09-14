@@ -50,6 +50,7 @@ _NOTICE_MARKER = "apcore#118"
 #: A representative value per key, so each case declares the key with something
 #: the schema would recognise rather than a placeholder.
 _SAMPLE_VALUES: dict[str, Any] = {
+    "acl.default_effect": "allow",
     "observability.tracing.enabled": True,
     "observability.tracing.sampling_rate": 0.25,
     "observability.tracing.exporter": "otlp",
@@ -221,14 +222,21 @@ class TestAConfigDeclaringNoneOfThemIsSilent:
         assert config.get("observability.metrics.enabled") is False
 
     def test_a_document_declaring_only_live_keys_is_silent(self, tmp_path: Path) -> None:
-        """The notice is keyed on the ten names, not on the sections holding them.
+        """The notice is keyed on the names, not on the sections holding them.
 
         ``acl.root`` sits beside ``acl.audit.*`` and ``obs.redaction.*`` beside
         ``observability.*``; a section-level check would sweep all four in.
+
+        ``acl.default_effect`` used to stand here as the live key beside the
+        deprecated ones. Spec v1.47.0 moved it INTO the table (§9.1.3's first
+        application): an ACL's default effect is read from the ACL file, and
+        this twin reaches nothing — measured, `allow` here yields `deny`. Its
+        replacement is ``acl.root``, which is genuinely live and shares the same
+        section, so the case still tests what it was written to test.
         """
         config_file = _write_config(
             tmp_path,
-            {"acl": {"root": str(tmp_path / "acl"), "default_effect": "deny"}},
+            {"acl": {"root": str(tmp_path / "acl")}},
             {"executor": {"default_timeout": 1000}},
             {"stream": {"max_merge_depth": 8}},
             {"obs": {"redaction": {"replacement": "***"}}},
