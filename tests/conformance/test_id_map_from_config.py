@@ -52,14 +52,14 @@ def _tree(declare_override: bool) -> Path:
     leaf = root / "ext" / "executor" / "orig"
     leaf.mkdir(parents=True)
     (leaf / "mod.py").write_text(_MODULE, encoding="utf-8")
-    for name, module_id in (("map.yaml", "executor.renamed.mod"),
-                            ("explicit.yaml", "executor.explicit.mod")):
+    for name, module_id in (("map.yaml", "executor.renamed.mod"), ("explicit.yaml", "executor.explicit.mod")):
         (root / name).write_text(
             yaml.safe_dump({"mappings": [{"file": "executor/orig/mod.py", "id": module_id}]}),
             encoding="utf-8",
         )
     doc: dict[str, Any] = {
-        "version": "1.0", "project": {"name": "id-map-probe"},
+        "version": "1.0",
+        "project": {"name": "id-map-probe"},
         "extensions": {"root": "./ext"},
     }
     if declare_override:

@@ -57,8 +57,7 @@ def _tree(extensions: dict[str, Any]) -> Path:
         leaf.mkdir(parents=True)
         (leaf / "mod.py").write_text(_MODULE, encoding="utf-8")
     (root / "apcore.yaml").write_text(
-        yaml.safe_dump({"version": "1.0", "project": {"name": "multi-root-probe"},
-                        "extensions": extensions}),
+        yaml.safe_dump({"version": "1.0", "project": {"name": "multi-root-probe"}, "extensions": extensions}),
         encoding="utf-8",
     )
     return root

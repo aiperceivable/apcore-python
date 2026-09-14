@@ -718,9 +718,7 @@ class _AuditSink:
         """
         level = _AUDIT_LEVELS.get(str(self._config.get("log_level", "info")), logging.INFO)
         try:
-            _audit_logger_default.log(
-                level, AUDIT_EVENT_NAME, extra={"apcore_audit": asdict(entry)}
-            )
+            _audit_logger_default.log(level, AUDIT_EVENT_NAME, extra={"apcore_audit": asdict(entry)})
         except Exception as exc:  # noqa: BLE001 — a logging handler can fail too
             self._report_failure(exc)
 
@@ -760,8 +758,7 @@ def _parse_audit_block(data: dict[str, Any], yaml_path: str) -> dict[str, Any] |
         return dict(_AUDIT_DEFAULTS)
     if not isinstance(raw, dict):
         raise ConfigError(
-            f"{yaml_path}: 'audit' must be a mapping (PROTOCOL_SPEC §6.3.2), got "
-            f"{type(raw).__name__}"
+            f"{yaml_path}: 'audit' must be a mapping (PROTOCOL_SPEC §6.3.2), got " f"{type(raw).__name__}"
         )
 
     unknown = sorted(set(raw) - set(_AUDIT_FIELDS))
@@ -776,9 +773,7 @@ def _parse_audit_block(data: dict[str, Any], yaml_path: str) -> dict[str, Any] |
     for key in ("enabled", "include_denied"):
         if key in raw:
             if not isinstance(raw[key], bool):
-                raise ConfigError(
-                    f"{yaml_path}: 'audit.{key}' must be a boolean, got {raw[key]!r}"
-                )
+                raise ConfigError(f"{yaml_path}: 'audit.{key}' must be a boolean, got {raw[key]!r}")
             config[key] = raw[key]
     if "log_level" in raw:
         if raw["log_level"] not in _AUDIT_LEVELS:
@@ -1551,9 +1546,7 @@ class ACL:
         self._default_effect: str = default_effect
         self._yaml_path: str | None = None
         self._audit_logger: Callable[[AuditEntry], None] | None = audit_logger
-        self._audit_config: dict[str, Any] | None = (
-            dict(audit_config) if audit_config is not None else None
-        )
+        self._audit_config: dict[str, Any] | None = dict(audit_config) if audit_config is not None else None
         # §6.3.2 requirement 1: one effective sink, never two. Built here and
         # rebuilt by `reload()`, which is what scopes requirement 5's
         # once-per-failure suppression to a sink CONFIGURATION rather than to

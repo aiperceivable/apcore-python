@@ -579,10 +579,12 @@ class Registry:
                     entries.append({"root": item, "namespace": Path(item).name})
                 elif isinstance(item, dict) and item.get("root"):
                     root_value = item["root"]
-                    entries.append({
-                        "root": root_value,
-                        "namespace": item.get("namespace") or Path(str(root_value)).name,
-                    })
+                    entries.append(
+                        {
+                            "root": root_value,
+                            "namespace": item.get("namespace") or Path(str(root_value)).name,
+                        }
+                    )
             if entries:
                 return entries
             if declared:

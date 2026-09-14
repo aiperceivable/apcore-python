@@ -134,8 +134,7 @@ def _build_exporter(name: str, endpoint: Any) -> Any | None:
     # `_CONSTRAINTS` rejects anything else. Kept so a caller reaching this
     # helper directly gets the same refusal rather than a None with no reason.
     _logger.warning(
-        "observability.tracing.exporter is %r, which is not one of %s. No tracing middleware "
-        "was installed.",
+        "observability.tracing.exporter is %r, which is not one of %s. No tracing middleware " "was installed.",
         name,
         ", ".join(_EXPORTERS),
     )

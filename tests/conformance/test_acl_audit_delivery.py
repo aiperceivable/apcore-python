@@ -24,8 +24,10 @@ FIXTURE = load_fixture("acl_audit_delivery.json")
 CASES: dict[str, dict[str, Any]] = {tc["id"]: tc for tc in FIXTURE["test_cases"]}
 
 _LEVEL_NAMES = {
-    logging.DEBUG: "debug", logging.INFO: "info",
-    logging.WARNING: "warn", logging.ERROR: "error",
+    logging.DEBUG: "debug",
+    logging.INFO: "info",
+    logging.WARNING: "warn",
+    logging.ERROR: "error",
 }
 
 
@@ -45,7 +47,9 @@ def test_acl_audit_delivery(case_id: str, caplog: pytest.LogCaptureFixture) -> N
         raise RuntimeError("the audit sink is down")
 
     callback = {
-        "none": None, "collecting": collected.append, "failing": failing,
+        "none": None,
+        "collecting": collected.append,
+        "failing": failing,
     }[inp["callback"]]
 
     path = _write(dict(inp["acl_file"]))
@@ -60,10 +64,7 @@ def test_acl_audit_delivery(case_id: str, caplog: pytest.LogCaptureFixture) -> N
             return
 
         acl = ACL.load(path, audit_logger=callback)
-        decisions = [
-            "allow" if acl.check(c["caller_id"], c["target_id"]) else "deny"
-            for c in inp["checks"]
-        ]
+        decisions = ["allow" if acl.check(c["caller_id"], c["target_id"]) else "deny" for c in inp["checks"]]
 
     if "decisions" in expected:
         assert decisions == expected["decisions"]

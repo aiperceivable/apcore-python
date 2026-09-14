@@ -337,9 +337,7 @@ class TestACLAuditBlockNotice:
         list. This case is the one that fails against a loader that kept the
         notice.
         """
-        acl_file = _write_acl(
-            tmp_path, audit={"enabled": True, "include_denied": True, "log_level": "info"}
-        )
+        acl_file = _write_acl(tmp_path, audit={"enabled": True, "include_denied": True, "log_level": "info"})
 
         with caplog.at_level(logging.WARNING):
             acl = ACL.load(str(acl_file))

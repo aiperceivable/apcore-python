@@ -47,9 +47,8 @@ def _audit_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 # Requirement 2 — declaration activates the default sink, not the default value
 # ---------------------------------------------------------------------------
 
-def test_no_audit_block_produces_no_audit_output(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+
+def test_no_audit_block_produces_no_audit_output(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The compatibility boundary, and the reason declaration is the switch.
 
     `enabled` defaults to True, so a merged-view reading would switch a log
@@ -62,9 +61,7 @@ def test_no_audit_block_produces_no_audit_output(
     assert _audit_records(caplog) == []
 
 
-def test_a_declared_block_activates_the_default_sink(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_a_declared_block_activates_the_default_sink(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     acl = ACL.load(_write(tmp_path, audit={"enabled": True}))
     with caplog.at_level(logging.DEBUG):
         acl.check("api.x", "executor.y")
@@ -78,17 +75,17 @@ def test_an_empty_block_is_declared_with_every_setting_at_its_default(
     wrote the block. Requirement 2 makes DECLARATION the switch, so presence —
     not truthiness — is what activates the default sink."""
     path = tmp_path / "acl.yaml"
-    path.write_text("version: '1.0.0'\nrules:\n  - callers: ['api.*']\n    "
-                    "targets: ['executor.*']\n    effect: allow\naudit:\n", encoding="utf-8")
+    path.write_text(
+        "version: '1.0.0'\nrules:\n  - callers: ['api.*']\n    " "targets: ['executor.*']\n    effect: allow\naudit:\n",
+        encoding="utf-8",
+    )
     acl = ACL.load(str(path))
     with caplog.at_level(logging.DEBUG):
         acl.check("api.x", "executor.y")
     assert len(_audit_records(caplog)) == 1
 
 
-def test_a_declared_block_with_enabled_false_is_silent(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_a_declared_block_with_enabled_false_is_silent(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     acl = ACL.load(_write(tmp_path, audit={"enabled": False}))
     with caplog.at_level(logging.DEBUG):
         acl.check("api.x", "executor.y")
@@ -113,18 +110,34 @@ def test_the_default_sink_carries_all_thirteen_fields_as_structured_data(
     assert record.getMessage() == AUDIT_EVENT_NAME
     payload = getattr(record, "apcore_audit")
     assert set(payload) == {
-        "timestamp", "caller_id", "target_id", "decision", "reason", "matched_rule",
-        "matched_rule_index", "identity_type", "roles", "call_depth", "trace_id",
-        "handler_error", "approval_required",
+        "timestamp",
+        "caller_id",
+        "target_id",
+        "decision",
+        "reason",
+        "matched_rule",
+        "matched_rule_index",
+        "identity_type",
+        "roles",
+        "call_depth",
+        "trace_id",
+        "handler_error",
+        "approval_required",
     }
     assert payload["caller_id"] == "api.x"
     assert payload["decision"] == "allow"
 
 
-@pytest.mark.parametrize(("level", "expected"), [
-    ("trace", logging.DEBUG), ("debug", logging.DEBUG), ("info", logging.INFO),
-    ("warn", logging.WARNING), ("error", logging.ERROR),
-])
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        ("trace", logging.DEBUG),
+        ("debug", logging.DEBUG),
+        ("info", logging.INFO),
+        ("warn", logging.WARNING),
+        ("error", logging.ERROR),
+    ],
+)
 def test_log_level_sets_the_default_sinks_level(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, level: str, expected: int
 ) -> None:
@@ -137,6 +150,7 @@ def test_log_level_sets_the_default_sinks_level(
 # ---------------------------------------------------------------------------
 # Requirement 1 — one effective sink, never two
 # ---------------------------------------------------------------------------
+
 
 def test_a_callback_receives_every_entry_and_the_block_does_not_apply(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -153,7 +167,7 @@ def test_a_callback_receives_every_entry_and_the_block_does_not_apply(
     )
 
     with caplog.at_level(logging.DEBUG):
-        acl.check("api.x", "executor.y")     # allow
+        acl.check("api.x", "executor.y")  # allow
         acl.check("worker.x", "executor.y")  # deny
     assert [e.decision for e in seen] == ["allow", "deny"]
     assert _audit_records(caplog) == []
@@ -185,6 +199,7 @@ def test_no_override_notice_without_a_block(caplog: pytest.LogCaptureFixture) ->
 # ---------------------------------------------------------------------------
 # Requirement 3 — delivery never changes the access decision
 # ---------------------------------------------------------------------------
+
 
 def _raising(_entry: AuditEntry) -> None:
     raise RuntimeError("the audit sink is down")
@@ -227,9 +242,11 @@ def test_a_failing_sink_is_reported_once(caplog: pytest.LogCaptureFixture) -> No
 # Requirement 4 — the callback must be synchronous
 # ---------------------------------------------------------------------------
 
+
 def test_an_async_callback_is_an_invalid_delivery(caplog: pytest.LogCaptureFixture) -> None:
     """Its failure would surface after the decision has been returned, outside
     the containment requirement 3 promises."""
+
     async def later(_entry: AuditEntry) -> None:  # pragma: no cover - never awaited
         raise RuntimeError("too late to matter")
 
@@ -246,20 +263,19 @@ def test_an_async_callback_is_an_invalid_delivery(caplog: pytest.LogCaptureFixtu
 # Requirement 6 — include_denied
 # ---------------------------------------------------------------------------
 
+
 def test_include_denied_false_withholds_denials_from_the_default_sink(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     acl = ACL.load(_write(tmp_path, audit={"enabled": True, "include_denied": False}))
     with caplog.at_level(logging.DEBUG):
-        acl.check("api.x", "executor.y")     # allow — delivered
+        acl.check("api.x", "executor.y")  # allow — delivered
         acl.check("worker.x", "executor.y")  # deny  — withheld
     payloads = [getattr(r, "apcore_audit") for r in _audit_records(caplog)]
     assert [p["decision"] for p in payloads] == ["allow"]
 
 
-def test_include_denied_false_warns_once_per_load(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_include_denied_false_warns_once_per_load(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Security friction, not a refusal: it withholds the security-relevant
     half, so the operator is told once rather than stopped."""
     with caplog.at_level(logging.WARNING):
@@ -279,6 +295,7 @@ def test_include_denied_true_is_silent(tmp_path: Path, caplog: pytest.LogCapture
 # Requirement 7 — reload
 # ---------------------------------------------------------------------------
 
+
 def test_reload_refreshes_the_block_and_preserves_the_callback(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -291,8 +308,7 @@ def test_reload_refreshes_the_block_and_preserves_the_callback(
     assert _audit_records(caplog)[0].levelno == logging.INFO
 
     Path(path).write_text(
-        yaml.safe_dump({"version": "1.0.0", "rules": _RULES,
-                        "audit": {"enabled": True, "log_level": "error"}}),
+        yaml.safe_dump({"version": "1.0.0", "rules": _RULES, "audit": {"enabled": True, "log_level": "error"}}),
         encoding="utf-8",
     )
     acl.reload()
@@ -302,9 +318,7 @@ def test_reload_refreshes_the_block_and_preserves_the_callback(
     assert _audit_records(caplog)[0].levelno == logging.ERROR
 
 
-def test_reload_starts_a_new_failure_report_scope(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_reload_starts_a_new_failure_report_scope(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """§6.3.2 requirement 5's scoping: per ACL instance AND per effective sink
     configuration, so a new failure is never hidden behind an old one."""
     path = _write(tmp_path, audit={"enabled": True})
@@ -326,25 +340,28 @@ def test_reload_starts_a_new_failure_report_scope(
 # Requirement 8 — the block is validated, nothing else gets stricter
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("bad", [
-    {"enabled": "yes"},
-    {"log_level": "verbose"},
-    {"include_denied": 1},
-    {"enabled": True, "unknown_key": True},
-    "not-a-mapping",
-])
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"enabled": "yes"},
+        {"log_level": "verbose"},
+        {"include_denied": 1},
+        {"enabled": True, "unknown_key": True},
+        "not-a-mapping",
+    ],
+)
 def test_a_malformed_audit_block_is_rejected_at_load(tmp_path: Path, bad: Any) -> None:
     with pytest.raises(ConfigError):
         ACL.load(_write(tmp_path, audit=bad))
 
 
-def test_other_unknown_root_keys_are_still_ignored(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_other_unknown_root_keys_are_still_ignored(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Wiring one block is not unknown-key closure for ACL files — the same
     scoping §9.2.4.1 gave its own notice."""
-    path = _write(tmp_path, audit={"enabled": True},
-                  telemetry={"enabled": True}, x_vendor_note="kept for the deploy tooling")
+    path = _write(
+        tmp_path, audit={"enabled": True}, telemetry={"enabled": True}, x_vendor_note="kept for the deploy tooling"
+    )
     with caplog.at_level(logging.WARNING):
         acl = ACL.load(path)
     assert len(acl.rules) == 1

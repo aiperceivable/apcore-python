@@ -404,12 +404,14 @@ class TestNumericConstraintsRejectBooleans:
     #: the whole class red. Adding a NUMERIC key still cannot skip this test —
     #: that is what the derivation is for — while adding a non-numeric one now
     #: costs one deliberate line here.
-    NON_NUMERIC_FIELDS = frozenset({
-        "acl.default_effect",
-        "observability.tracing.strategy",
-        "observability.tracing.exporter",
-        "observability.tracing.otlp_endpoint",
-    })
+    NON_NUMERIC_FIELDS = frozenset(
+        {
+            "acl.default_effect",
+            "observability.tracing.strategy",
+            "observability.tracing.exporter",
+            "observability.tracing.otlp_endpoint",
+        }
+    )
 
     # Every numeric key in `_CONSTRAINTS`, derived from the table itself so a
     # newly added key cannot quietly skip this test. A set difference rather

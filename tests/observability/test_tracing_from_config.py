@@ -81,8 +81,7 @@ def test_the_key_has_its_canonical_default(leaf: str, default: Any, written: Any
 
 @pytest.mark.parametrize(("leaf", "default", "written"), _KEYS)
 def test_the_key_round_trips_from_a_document(leaf: str, default: Any, written: Any) -> None:
-    config = Config({"version": "1.0", "project": {"name": "p"},
-                     "observability": {"tracing": {leaf: written}}})
+    config = Config({"version": "1.0", "project": {"name": "p"}, "observability": {"tracing": {leaf: written}}})
     assert config.get(f"observability.tracing.{leaf}") == written
 
 
@@ -104,24 +103,26 @@ def test_the_key_is_accepted_under_strict(leaf: str, default: Any, written: Any)
     tracing: dict[str, Any] = {leaf: written}
     if leaf == "otlp_endpoint" and written is not None:
         tracing["exporter"] = "otlp"
-    config = Config({"version": "1.0", "project": {"name": "p"},
-                     "_config": {"strict": True},
-                     "observability": {"tracing": tracing}})
+    config = Config(
+        {"version": "1.0", "project": {"name": "p"}, "_config": {"strict": True}, "observability": {"tracing": tracing}}
+    )
     config.validate()
 
 
-@pytest.mark.parametrize(("leaf", "bad"), [
-    ("strategy", "sometimes"),
-    ("exporter", "in_memory"),
-    ("sampling_rate", 2.0),
-    ("otlp_endpoint", ""),
-])
+@pytest.mark.parametrize(
+    ("leaf", "bad"),
+    [
+        ("strategy", "sometimes"),
+        ("exporter", "in_memory"),
+        ("sampling_rate", 2.0),
+        ("otlp_endpoint", ""),
+    ],
+)
 def test_an_out_of_range_value_is_rejected(leaf: str, bad: Any) -> None:
     """`in_memory` is in the list on purpose: §9.15.2 used to name it, and
     §10.1.1 requirement 2 forbids it as a configuration value because the
     in-memory exporter is a test buffer nothing can read back by name."""
-    config = Config({"version": "1.0", "project": {"name": "p"},
-                     "observability": {"tracing": {leaf: bad}}})
+    config = Config({"version": "1.0", "project": {"name": "p"}, "observability": {"tracing": {leaf: bad}}})
     with pytest.raises(ConfigError):
         config.validate()
 
@@ -129,6 +130,7 @@ def test_an_out_of_range_value_is_rejected(leaf: str, bad: Any) -> None:
 # ---------------------------------------------------------------------------
 # Installation
 # ---------------------------------------------------------------------------
+
 
 def test_no_tracing_configuration_installs_nothing() -> None:
     """The whole blast radius: a project that does not ask for tracing is untouched."""
@@ -143,9 +145,7 @@ def test_enabled_installs_a_middleware() -> None:
 
 
 def test_the_configured_strategy_and_rate_reach_the_middleware() -> None:
-    mw = _tracing_middlewares(
-        _client({"enabled": True, "strategy": "proportional", "sampling_rate": 0.1})
-    )[0]
+    mw = _tracing_middlewares(_client({"enabled": True, "strategy": "proportional", "sampling_rate": 0.1}))[0]
     assert mw._sampling_strategy == "proportional"
     assert mw._sampling_rate == 0.1
 
@@ -153,6 +153,7 @@ def test_the_configured_strategy_and_rate_reach_the_middleware() -> None:
 # ---------------------------------------------------------------------------
 # The rate is measured, not asserted on a field
 # ---------------------------------------------------------------------------
+
 
 def _sampled_fraction(tracing: dict[str, Any], runs: int = 400) -> float:
     """Drive `runs` real calls and report what fraction produced a span.
@@ -186,8 +187,7 @@ def test_proportional_samples_at_the_configured_rate() -> None:
     and it short-circuits ahead of the rate — which is why wiring
     `sampling_rate` alone would have been a fix that changed nothing.
     """
-    fraction = _sampled_fraction({"enabled": True, "strategy": "proportional",
-                                  "sampling_rate": 0.1}, runs=2000)
+    fraction = _sampled_fraction({"enabled": True, "strategy": "proportional", "sampling_rate": 0.1}, runs=2000)
     # Wide bounds: this is a real random draw, and the assertion that matters is
     # "roughly a tenth", not "not one" and not "all of them".
     assert 0.05 < fraction < 0.16, fraction
@@ -196,6 +196,7 @@ def test_proportional_samples_at_the_configured_rate() -> None:
 # ---------------------------------------------------------------------------
 # The exporter, by name
 # ---------------------------------------------------------------------------
+
 
 def _otlp_is_buildable() -> bool:
     """Can this installation construct an OTLP exporter at all?
@@ -224,10 +225,15 @@ def test_stdout_is_the_default_exporter() -> None:
 
 @pytest.mark.skipif(not _otlp_is_buildable(), reason="the opentelemetry extra is not installed")
 def test_otlp_endpoint_reaches_the_exporter() -> None:
-    mw = _tracing_middlewares(_client({
-        "enabled": True, "exporter": "otlp",
-        "otlp_endpoint": "http://collector.internal:4318/v1/traces",
-    }))[0]
+    mw = _tracing_middlewares(
+        _client(
+            {
+                "enabled": True,
+                "exporter": "otlp",
+                "otlp_endpoint": "http://collector.internal:4318/v1/traces",
+            }
+        )
+    )[0]
     assert "collector.internal" in str(getattr(mw._exporter, "_endpoint", ""))
 
 
@@ -254,14 +260,16 @@ def test_otlp_without_its_extra_installs_nothing_and_says_so(
     import sys
     from unittest.mock import patch
 
-    absent = dict.fromkeys([
-        "opentelemetry",
-        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
-        "opentelemetry.sdk.resources",
-        "opentelemetry.sdk.trace",
-        "opentelemetry.sdk.trace.export",
-        "opentelemetry.trace",
-    ])
+    absent = dict.fromkeys(
+        [
+            "opentelemetry",
+            "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+            "opentelemetry.sdk.resources",
+            "opentelemetry.sdk.trace",
+            "opentelemetry.sdk.trace.export",
+            "opentelemetry.trace",
+        ]
+    )
     with patch.dict(sys.modules, absent), caplog.at_level(logging.WARNING, logger="apcore"):
         client = _client({"enabled": True, "exporter": "otlp"})
 
@@ -296,6 +304,7 @@ def test_jaeger_warns_installs_nothing_and_substitutes_nothing(
 # Precedence (§10.1.1 requirement 6, D-73)
 # ---------------------------------------------------------------------------
 
+
 def test_configuration_never_installs_a_second_tracing_middleware() -> None:
     """§10.1.1 requirement 6, stated where it can actually be violated.
 
@@ -304,8 +313,7 @@ def test_configuration_never_installs_a_second_tracing_middleware() -> None:
     wrong is the caller-supplied Executor below; this one pins that repeated
     construction from the same `Config` does not accumulate.
     """
-    config = Config({"version": "1.0", "project": {"name": "p"},
-                     "observability": {"tracing": {"enabled": True}}})
+    config = Config({"version": "1.0", "project": {"name": "p"}, "observability": {"tracing": {"enabled": True}}})
     for _ in range(3):
         assert len(_tracing_middlewares(APCore(config=config))) == 1
 
@@ -328,17 +336,16 @@ def test_a_caller_supplied_executor_is_left_alone() -> None:
     from apcore.registry import Registry
 
     registry = Registry()
-    doc = {"version": "1.0", "project": {"name": "p"},
-           "observability": {"tracing": {"enabled": True}}}
+    doc = {"version": "1.0", "project": {"name": "p"}, "observability": {"tracing": {"enabled": True}}}
     config = Config(doc)
-    client = APCore(registry=registry, executor=Executor(registry=registry, config=config),
-                    config=config)
+    client = APCore(registry=registry, executor=Executor(registry=registry, config=config), config=config)
     assert _tracing_middlewares(client) == []
 
 
 # ---------------------------------------------------------------------------
 # §9.2.4 — the withdrawal is cancelled
 # ---------------------------------------------------------------------------
+
 
 def _load_capturing(observability: dict[str, Any]) -> list[str]:
     """Load a real file and return the deprecation warnings it produced.
@@ -356,8 +363,7 @@ def _load_capturing(observability: dict[str, Any]) -> list[str]:
     root = Path(tempfile.mkdtemp())
     path = root / "apcore.yaml"
     path.write_text(
-        yaml.safe_dump({"version": "1.0", "project": {"name": "p"},
-                        "observability": observability}),
+        yaml.safe_dump({"version": "1.0", "project": {"name": "p"}, "observability": observability}),
         encoding="utf-8",
     )
     with warnings.catch_warnings(record=True) as caught:
@@ -366,10 +372,16 @@ def _load_capturing(observability: dict[str, Any]) -> list[str]:
     return [str(w.message) for w in caught if issubclass(w.category, DeprecationWarning)]
 
 
-@pytest.mark.parametrize(("leaf", "value"), [
-    ("enabled", True), ("sampling_rate", 0.5), ("exporter", "stdout"),
-    ("strategy", "off"), ("otlp_endpoint", None),
-])
+@pytest.mark.parametrize(
+    ("leaf", "value"),
+    [
+        ("enabled", True),
+        ("sampling_rate", 0.5),
+        ("exporter", "stdout"),
+        ("strategy", "off"),
+        ("otlp_endpoint", None),
+    ],
+)
 def test_the_wired_keys_do_not_warn_as_deprecated(leaf: str, value: Any) -> None:
     """§9.2.4 requirement 1: the table is the whole list, and a key that has
     left it MUST NOT warn. Declaring one of the first three was a deprecation
