@@ -29,6 +29,7 @@ from apcore.errors import (
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
+    InvalidInputError,
 )
 from apcore.utils.call_chain import (
     DEFAULT_MAX_CALL_DEPTH,
@@ -45,25 +46,27 @@ from apcore.utils.call_chain import (
 def test_input_max_depth_below_one_rejected() -> None:
     """call_chain_guard.guard_call_chain.input.max_depth.below_one
 
-    The depth limit must be >= 1. A value below the floor is rejected with a
-    ValueError (the contract's ``max_depth`` input maps to the real
-    keyword-only ``max_call_depth``).
+    The depth limit must be >= 1. A value below the floor is rejected with
+    ``InvalidInputError(code=GENERAL_INVALID_INPUT)`` (D-84; the contract's
+    ``max_depth`` input maps to the real keyword-only ``max_call_depth``).
     """
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(InvalidInputError) as exc_info:
         guard_call_chain("a", ["a"], max_call_depth=0)
     assert "max_call_depth" in str(exc_info.value)
+    assert exc_info.value.code == "GENERAL_INVALID_INPUT"
 
 
 def test_input_max_repeat_below_one_rejected() -> None:
     """call_chain_guard.guard_call_chain.input.max_repeat.below_one
 
-    The repeat limit must be >= 1. A value below the floor is rejected with a
-    ValueError (the contract's ``max_repeat`` input maps to the real
-    keyword-only ``max_module_repeat``).
+    The repeat limit must be >= 1. A value below the floor is rejected with
+    ``InvalidInputError(code=GENERAL_INVALID_INPUT)`` (D-84; the contract's
+    ``max_repeat`` input maps to the real keyword-only ``max_module_repeat``).
     """
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(InvalidInputError) as exc_info:
         guard_call_chain("a", ["a"], max_module_repeat=0)
     assert "max_module_repeat" in str(exc_info.value)
+    assert exc_info.value.code == "GENERAL_INVALID_INPUT"
 
 
 def test_input_module_id_required() -> None:

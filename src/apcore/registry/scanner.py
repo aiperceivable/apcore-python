@@ -87,10 +87,35 @@ def scan_extensions(
 
             entry_path = Path(entry.path)
 
+            # Symlink handling runs BEFORE the dir/file split, because both
+            # branches are reachable through a symlink and only one of them was
+            # ever guarded. The confinement check below used to live inside the
+            # `is_dir` branch, so a symlinked FILE whose target escaped the root
+            # -- `extensions/evil.py -> /outside/evil.py` -- reached `elif
+            # is_file` with no check at all and was discovered, and the registry
+            # then imported and executed it. That is the exact failure the
+            # check's own comment describes, on the one branch that actually
+            # yields importable files. apcore-typescript (scanner.ts) and
+            # apcore-rust (scanner.rs) both check before the split; this now
+            # matches them.
+            if is_symlink:
+                if not follow_symlinks:
+                    continue
+                real = entry_path.resolve()
+                # Confinement: refuse any symlink whose real path escapes the
+                # extension root, whether it resolves to a directory or a file.
+                try:
+                    real.relative_to(root)
+                except ValueError:
+                    logger.warning(
+                        "Symlink target outside extension root, skipping: %s -> %s",
+                        entry_path,
+                        real,
+                    )
+                    continue
+
             if is_dir:
                 if is_symlink:
-                    if not follow_symlinks:
-                        continue
                     real = entry_path.resolve()
                     if real in visited_real_paths:
                         logger.warning(
@@ -99,21 +124,8 @@ def scan_extensions(
                             real,
                         )
                         continue
-                    # Confinement: even with follow_symlinks=True we refuse
-                    # to walk into targets whose real path escapes the
-                    # extension root. Unconfined traversal could exec .py
-                    # files from arbitrary parts of the filesystem if the
-                    # root contains a stray symlink (e.g., into `/etc`, a
-                    # user's home, or a sibling project's venv).
-                    try:
-                        real.relative_to(root)
-                    except ValueError:
-                        logger.warning(
-                            "Symlink target outside extension root, skipping: %s -> %s",
-                            entry_path,
-                            real,
-                        )
-                        continue
+                    # Confinement already ran above, before the dir/file
+                    # split, so a target outside the root never reaches here.
                     visited_real_paths.add(real)
                 _scan_dir(entry_path, depth + 1)
             elif is_file:

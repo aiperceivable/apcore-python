@@ -437,3 +437,99 @@ class TestConstraintStrictness:
         assert matches_version_hint("1.0.0", "~1") is True
         assert matches_version_hint("1.9.9", "~1") is True
         assert matches_version_hint("2.0.0", "~1") is False
+
+
+# ---------------------------------------------------------------------------
+# D-89 — deprecation warning cadence
+# ---------------------------------------------------------------------------
+
+
+class TestDeprecationWarningCadence:
+    """At most one warning per ``(module_id, version)`` per registry (D-89).
+
+    ``get_definition`` is a read that hosts call in loops, so warning on every
+    read produces log spam proportional to traffic — which is how operators
+    learn to filter the advisory out. Mirrors apcore-typescript.
+    """
+
+    _DEPRECATION = {
+        "deprecated_since": "1.0.0",
+        "sunset_version": "3.0.0",
+        "migration_guide": "Use mod.new instead.",
+    }
+
+    @staticmethod
+    def _deprecation_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.message for r in caplog.records if "deprecated" in r.message.lower()]
+
+    def _register(self, reg: Registry, module_id: str, version: str = "1.0.0") -> None:
+        reg.register(
+            module_id,
+            _VersionedModule(version=version),
+            version=version,
+            metadata={"x-deprecation": dict(self._DEPRECATION)},
+        )
+
+    def test_repeated_reads_warn_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.once")
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(10):
+                reg.get_definition("cadence.once", version_hint="1.0.0")
+
+        assert len(self._deprecation_warnings(caplog)) == 1
+
+    def test_the_dedupe_key_includes_the_version(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A newly registered version is a new key, so it warns again."""
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.versions", version="1.0.0")
+
+        with caplog.at_level(logging.WARNING):
+            reg.get_definition("cadence.versions")
+            reg.get_definition("cadence.versions")
+            self._register(reg, "cadence.versions", version="2.0.0")
+            reg.get_definition("cadence.versions")
+            reg.get_definition("cadence.versions")
+
+        warnings = self._deprecation_warnings(caplog)
+        assert len(warnings) == 2
+        assert "v1.0.0" in warnings[0]
+        assert "v2.0.0" in warnings[1]
+
+    def test_distinct_modules_warn_separately(self, caplog: pytest.LogCaptureFixture) -> None:
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.first")
+        self._register(reg, "cadence.second")
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):
+                reg.get_definition("cadence.first")
+                reg.get_definition("cadence.second")
+
+        assert len(self._deprecation_warnings(caplog)) == 2
+
+    def test_the_dedupe_is_per_registry_instance(self, caplog: pytest.LogCaptureFixture) -> None:
+        reg_a = Registry(extensions_dir="/tmp/fake_ext")
+        reg_b = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg_a, "cadence.instance")
+        self._register(reg_b, "cadence.instance")
+
+        with caplog.at_level(logging.WARNING):
+            reg_a.get_definition("cadence.instance", version_hint="1.0.0")
+            reg_b.get_definition("cadence.instance", version_hint="1.0.0")
+
+        assert len(self._deprecation_warnings(caplog)) == 2
+
+    def test_unregister_clears_the_dedupe(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A stale entry must not mask a genuinely new deprecation."""
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.cleared")
+
+        with caplog.at_level(logging.WARNING):
+            reg.get_definition("cadence.cleared", version_hint="1.0.0")
+            reg.unregister("cadence.cleared")
+            self._register(reg, "cadence.cleared")
+            reg.get_definition("cadence.cleared", version_hint="1.0.0")
+
+        assert len(self._deprecation_warnings(caplog)) == 2

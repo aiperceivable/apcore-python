@@ -432,6 +432,13 @@ class AsyncTaskManager:
         if inspect.isawaitable(result):
             await result
 
+    async def _store_list_expired(self, before_timestamp: float) -> list[TaskInfo]:
+        """Await-or-return adapter for ``self._store.list_expired`` (D-17 migration shim)."""
+        result = self._store.list_expired(before_timestamp)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
     async def submit(
         self,
         module_id: str,
@@ -532,6 +539,16 @@ class AsyncTaskManager:
     async def cancel(self, task_id: str) -> bool:
         """Cancel a running, pending, or retrying task.
 
+        ``False`` means exactly what the spec's cancel contract says it means:
+        the task did not exist, or it had already reached a terminal state. A
+        missing local ``asyncio.Task`` handle is **not** a third false case —
+        with a persistent/shared store an active record left behind by another
+        process has no in-process coroutine to interrupt, yet it must still be
+        cancellable (otherwise it consumes the ``max_tasks`` active budget
+        forever). In that case the interrupt step is skipped and the
+        active -> CANCELLED store write still happens. Mirrors the Rust SDK,
+        where a missing ``JoinHandle`` is not an early return.
+
         Returns:
             True if the task was successfully cancelled, False otherwise.
         """
@@ -542,21 +559,19 @@ class AsyncTaskManager:
             return False
 
         async_task = self._async_tasks.get(task_id)
-        if async_task is None:
-            return False
-
-        async_task.cancel()
-        try:
-            await async_task
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            _logger.warning(
-                "Task %s raised while being cancelled: %s",
-                task_id,
-                exc,
-                exc_info=True,
-            )
+        if async_task is not None:
+            async_task.cancel()
+            try:
+                await async_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                _logger.warning(
+                    "Task %s raised while being cancelled: %s",
+                    task_id,
+                    exc,
+                    exc_info=True,
+                )
 
         # Re-read after the task settles in case the runner already
         # transitioned to a terminal state inside its cancel-handler.
@@ -574,24 +589,39 @@ class AsyncTaskManager:
         Iterates the **store** (not the local live-handle dict) so that a
         store-resident active task with no local asyncio handle is still
         cancelled — required by the spec shutdown postcondition (no active
-        task survives) and matching the TypeScript/Rust SDKs. Tasks that have
-        a local handle are cancelled through :meth:`cancel`; store-only active
-        tasks are transitioned to CANCELLED directly.
+        task survives) and matching the TypeScript/Rust SDKs. Every active
+        task goes through :meth:`cancel`, which itself handles the
+        no-local-handle case by skipping the interrupt and still performing
+        the active -> CANCELLED store write.
+
+        Every active task is attempted even after one cancellation fails, and
+        the first failure is re-raised once they all have been (D-122). The two
+        failure modes are not symmetric: if the store is unreachable every
+        cancellation fails and stopping early reaches the same outcome sooner,
+        but if ONE task fails, stopping leaves every remaining task uncancelled
+        when they could have been cancelled. An uncancelled task in a shared
+        store is a lasting cost — it holds a ``max_tasks`` slot for every
+        manager sharing that store, and outlives the process that could have
+        cancelled it — while a slower shutdown is transient. This method is
+        already an unbounded wait by contract and takes no timeout, so a caller
+        needing a bound already imposes one.
+
+        Raises:
+            The first store failure encountered, re-raised after every active
+            task has been attempted.
         """
         await self.stop_reaper()
+        first_error: BaseException | None = None
         for info in await self._store_list():
             if info.status not in _ACTIVE_STATUSES:
                 continue
-            if self._async_tasks.get(info.task_id) is not None:
+            try:
                 await self.cancel(info.task_id)
-                continue
-            # Store-resident active task without a local handle: there is no
-            # coroutine to cancel, so terminate it directly in the store.
-            current = await self._store_get(info.task_id)
-            if current is not None and current.status in _ACTIVE_STATUSES:
-                current.status = TaskStatus.CANCELLED
-                current.completed_at = time.time()
-                await self._save(current)
+            except Exception as exc:  # noqa: BLE001 — re-raised after the loop
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def list_tasks(self, status: TaskStatus | None = None) -> list[TaskInfo]:
         """Return snapshots of all tasks, optionally filtered by status.
@@ -732,13 +762,66 @@ class AsyncTaskManager:
             _logger.warning("Reaper task raised during shutdown: %s", exc, exc_info=True)
 
     async def _reap_loop(self) -> None:
-        """Periodic cleanup loop executed by the reaper task."""
+        """Periodic expiry sweep executed by the reaper task.
+
+        Drives the sweep through :meth:`TaskStore.list_expired` rather than
+        :meth:`cleanup`, matching the TypeScript and Rust SDKs and
+        async-tasks.md §1.3. Two reasons this matters: a custom store whose
+        ``list_expired`` is the only efficient expiry query (Redis
+        ``ZRANGEBYSCORE``, SQL ``WHERE``) is otherwise bypassed and the entire
+        task set is pulled into the process on every sweep; and the two
+        predicates differ — ``cleanup()`` falls back to ``submitted_at`` when
+        ``completed_at`` is None, which ``list_expired`` deliberately does not.
+
+        A failing store must not kill the loop: the sweep is best-effort and
+        the next tick retries.
+        """
         try:
             while True:
                 await asyncio.sleep(self._reaper_interval)
-                await self.cleanup(self._reaper_max_age)
+                try:
+                    if callable(getattr(self._store, "list_expired", None)):
+                        expired = await self._store_list_expired(time.time() - self._reaper_max_age)
+                        for info in expired:
+                            await self._store_delete(info.task_id)
+                            self._async_tasks.pop(info.task_id, None)
+                    else:  # pragma: no cover - legacy custom stores
+                        # Custom store predating TaskStore.list_expired (D-17):
+                        # fall back to the full-scan cleanup predicate.
+                        await self.cleanup(self._reaper_max_age)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _logger.warning("Reaper sweep failed: %s", exc, exc_info=True)
         except asyncio.CancelledError:
             pass
+
+    async def _store_reached_terminal(self, task_id: str) -> bool:
+        """Report whether the *stored* record for ``task_id`` is already terminal.
+
+        Ported from the Rust SDK's ``save_terminal_if_not_cancelled``: the
+        runner consults this immediately before every status write. With a
+        shared or persistent :class:`TaskStore` another process (or a
+        concurrent :meth:`cancel`) may have finished the task while this
+        attempt was in flight, and protocol-spec.md §5.8 forbids transitions
+        out of a terminal state. Writing the runner's stale snapshot back
+        would resurrect a CANCELLED record as FAILED — or, on the retry path,
+        as PENDING.
+
+        The check is deliberately performed *before* the in-memory mutation,
+        not just before ``save``: :class:`InMemoryTaskStore` hands out the
+        live :class:`TaskInfo`, so mutating first would corrupt the stored
+        record even when the write is abandoned.
+
+        The check + mutate + ``save`` sequence is not atomic at the store
+        level, so a perfectly-timed concurrent write can still slip into the
+        gap; closing it entirely would require compare-and-swap support in the
+        :class:`TaskStore` Protocol. The remaining window is small and
+        non-corrupting (one extra terminal write that the next cancel no-ops
+        against).
+        """
+        current = await self._store_get(task_id)
+        return current is not None and current.status in _TERMINAL_STATUSES
 
     async def _run(
         self,
@@ -749,15 +832,23 @@ class AsyncTaskManager:
         retry_policy: "RetryPolicy | RetryConfig | None",
     ) -> None:
         """Internal coroutine: execute a module with optional retry/backoff."""
-        info = await self._store_get(task_id)
-        if info is None:
-            return
-
         max_retries = retry_policy.max_retries if retry_policy is not None else 0
 
         while True:
+            # Re-fetch at the top of every attempt rather than reusing the
+            # snapshot captured before the loop: with a shared store the
+            # record may have been cancelled or deleted during the backoff
+            # sleep, and a stale object would write that change away.
+            info = await self._store_get(task_id)
+            if info is None:
+                return
+            if info.status in _TERMINAL_STATUSES:
+                return
+
             try:
                 async with self._semaphore:
+                    if await self._store_reached_terminal(task_id):
+                        return
                     info.status = TaskStatus.RUNNING
                     if info.started_at is None:
                         info.started_at = time.time()
@@ -765,14 +856,8 @@ class AsyncTaskManager:
 
                     result = await self._executor.call_async(module_id, inputs, context)
 
-                    # Re-read before the terminal COMPLETED save so a cancel
-                    # that landed during execution is not clobbered (mirrors
-                    # Rust's save_terminal_if_not_cancelled). If the store now
-                    # holds a terminal status (e.g. CANCELLED), leave it alone.
-                    latest = await self._store_get(task_id)
-                    if latest is not None and latest.status in _TERMINAL_STATUSES:
+                    if await self._store_reached_terminal(task_id):
                         return
-
                     info.status = TaskStatus.COMPLETED
                     info.completed_at = time.time()
                     info.result = result
@@ -780,14 +865,17 @@ class AsyncTaskManager:
                     return
 
             except asyncio.CancelledError:
-                info.status = TaskStatus.CANCELLED
-                info.completed_at = time.time()
-                await self._save(info)
+                if not await self._store_reached_terminal(task_id):
+                    info.status = TaskStatus.CANCELLED
+                    info.completed_at = time.time()
+                    await self._save(info)
                 _logger.info("Task %s cancelled", task_id)
                 return
 
             except Exception as exc:
                 if retry_policy is not None and info.retry_count < max_retries:
+                    if await self._store_reached_terminal(task_id):
+                        return
                     info.retry_count += 1
                     delay = retry_policy.delay_for(info.retry_count)
                     # D-12: backoff state is PENDING (was RETRYING) — matches
@@ -804,12 +892,15 @@ class AsyncTaskManager:
                     try:
                         await asyncio.sleep(delay)
                     except asyncio.CancelledError:
-                        info.status = TaskStatus.CANCELLED
-                        info.completed_at = time.time()
-                        await self._save(info)
+                        if not await self._store_reached_terminal(task_id):
+                            info.status = TaskStatus.CANCELLED
+                            info.completed_at = time.time()
+                            await self._save(info)
                         _logger.info("Task %s cancelled during backoff", task_id)
                         return
                 else:
+                    if await self._store_reached_terminal(task_id):
+                        return
                     info.status = TaskStatus.FAILED
                     info.completed_at = time.time()
                     info.error = str(exc)

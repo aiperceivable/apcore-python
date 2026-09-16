@@ -22,9 +22,9 @@ def register_subscriber_factory(type_name: str, factory):  # type: ignore[no-unt
     """Register a custom subscriber-type factory.
 
     Re-exported from :mod:`apcore.sys_modules.registration` for cross-language
-    parity with TypeScript (``registerSubscriberFactory``) and Rust
-    (``register_factory``). Lazy-imported to avoid a circular import at
-    package init time.
+    parity with TypeScript (``registerSubscriberType``) and Rust
+    (``register_subscriber_type``). Lazy-imported to avoid a circular import
+    at package init time.
     """
     from apcore.sys_modules.registration import (
         register_subscriber_factory as _impl,

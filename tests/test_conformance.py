@@ -42,6 +42,7 @@ from apcore.errors import (
     CircularCallError,
     ErrorCodeCollisionError,
     ErrorCodeRegistry,
+    InvalidInputError,
     ModuleError,
 )
 from apcore.schema.loader import SchemaLoader
@@ -358,9 +359,12 @@ _CALL_CHAIN_ERROR_MAP: dict[str, type[Exception]] = {
     "CALL_DEPTH_EXCEEDED": CallDepthExceededError,
     "CIRCULAR_CALL": CircularCallError,
     "CALL_FREQUENCY_EXCEEDED": CallFrequencyExceededError,
-    # Non-positive limit floor (T-B-005): each SDK rejects with its idiomatic
-    # invalid-argument signal — Python ValueError, TS Error, Rust ModuleError.
-    "INVALID_LIMIT": ValueError,
+    # Non-positive limit floor. Was "each SDK rejects with its idiomatic
+    # invalid-argument signal" — a builtin ValueError here, a bare Error in
+    # TypeScript — which no cross-language caller could catch. D-84
+    # (spec v1.49.0) closed that: all three raise the typed apcore error, and
+    # the fixture now pins the wire code directly rather than a case label.
+    "GENERAL_INVALID_INPUT": InvalidInputError,
 }
 
 _call_chain_data = _load("call_chain")
@@ -1271,6 +1275,29 @@ class _FakeModule:
         return {}
 
 
+def _declared_requires_approval(case: dict[str, Any]) -> bool:
+    """Resolve the case's declared approval requirement.
+
+    Two shapes. The original cases carry a single ``module_requires_approval``
+    boolean, which each SDK was free to satisfy from whichever governance source
+    it preferred -- and that is precisely how an approval bypass survived this
+    fixture: apcore-rust decided gate firing from the registry DESCRIPTOR while
+    its test module left ``annotations()`` at the default, so all three SDKs
+    passed the same case off two different sources of truth (D-96).
+
+    The newer cases state ``governance_sources`` with the module and descriptor
+    declarations SEPARATELY. apcore-python derives the descriptor from the
+    module, so the two are not independently settable here; per D-96 the gate
+    fires on the UNION of the sources an implementation has, and the union of
+    what this SDK can express is ``module or descriptor``. That reaches the same
+    expected outcome, which is exactly why the union costs this SDK nothing.
+    """
+    sources = case.get("governance_sources")
+    if sources is None:
+        return bool(case["module_requires_approval"])
+    return bool(sources.get("module", False)) or bool(sources.get("descriptor", False))
+
+
 @pytest.mark.parametrize(
     "case",
     _approval_data["test_cases"],
@@ -1283,7 +1310,7 @@ def test_approval_gate(case: dict[str, Any]) -> None:
 
     gate = BuiltinApprovalGate(handler=handler if case["approval_handler_configured"] else None)
 
-    module = _FakeModule(requires_approval=case["module_requires_approval"])
+    module = _FakeModule(requires_approval=_declared_requires_approval(case))
     ctx_obj = Context.create()
 
     pipe_ctx = PipelineContext(

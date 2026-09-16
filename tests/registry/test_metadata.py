@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,41 @@ class TestParseDependencies:
     def test_empty_list(self) -> None:
         """Empty list returns empty list."""
         assert parse_dependencies([]) == []
+
+
+class TestParseDependenciesMalformed:
+    """A malformed ``dependencies:`` MUST degrade, never abort ``discover()``.
+
+    The key comes from hand-written filesystem YAML and no schema describes
+    it, so any shape can arrive. A truthy scalar used to slip past the
+    falsiness guard and make the ``for dep in deps_raw`` loop iterate
+    *characters*, raising a bare ``AttributeError`` that aborted the whole
+    discovery pass rather than skipping the one bad module. Both peers guard
+    it and return ``[]`` — apcore-typescript with ``Array.isArray``,
+    apcore-rust with ``.as_array()``.
+    """
+
+    @pytest.mark.parametrize("scalar", ["foo", 42, 3.5, True])
+    def test_scalar_returns_empty_without_raising(self, scalar: object) -> None:
+        assert parse_dependencies(scalar) == []
+
+    def test_mapping_returns_empty_without_raising(self) -> None:
+        """A mapping is the most common YAML slip (``dependencies: {module_id: x}``)."""
+        assert parse_dependencies({"module_id": "foo.bar"}) == []
+
+    def test_scalar_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="apcore.registry.metadata"):
+            parse_dependencies("foo")
+        assert any("must be a list" in msg for msg in caplog.messages)
+
+    def test_list_of_non_mappings_skips_the_bad_entries(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="apcore.registry.metadata"):
+            result = parse_dependencies(["foo", 42, None, {"module_id": "good.one"}])
+        assert [d.module_id for d in result] == ["good.one"]
+        assert any("must be a mapping" in msg for msg in caplog.messages)
+
+    def test_none_returns_empty(self) -> None:
+        assert parse_dependencies(None) == []
 
 
 # === merge_module_metadata() ===

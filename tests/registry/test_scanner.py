@@ -213,6 +213,65 @@ class TestScanExtensionsSymlinks:
         assert "ours" in ids
         assert not any("escape" in i for i in ids), "scanner walked into symlink escaping extension root"
 
+    def test_symlinked_file_escaping_root_refused(self, tmp_path: Path) -> None:
+        """A symlinked FILE whose target escapes the root must not be discovered.
+
+        The directory case above was guarded; this one was not. The confinement
+        check lived inside the ``is_dir`` branch, so a symlink to a .py file
+        outside the root reached ``elif is_file`` unchecked, was discovered, and
+        was then imported and executed by the registry -- code execution from
+        outside the declared trust boundary, which is precisely what the check's
+        own comment says it exists to prevent.
+        """
+        root = tmp_path / "ext_root"
+        root.mkdir()
+        (root / "ours.py").write_text("")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "evil.py").write_text("")
+
+        (root / "linked_evil.py").symlink_to(outside / "evil.py")
+
+        result = scan_extensions(root, follow_symlinks=True)
+        ids = {m.canonical_id for m in result}
+        assert "ours" in ids
+        assert (
+            "linked_evil" not in ids
+        ), "scanner discovered a symlinked file whose target is outside the extension root"
+
+    def test_symlinked_file_inside_root_still_followed(self, tmp_path: Path) -> None:
+        """Confinement must not cost the feature: an in-root symlinked file still resolves.
+
+        Guards this fix against over-correction -- refusing every symlinked file
+        would silence the escape and break deliberate aliasing at the same time.
+        """
+        root = tmp_path / "ext_root"
+        root.mkdir()
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "real.py").write_text("")
+
+        (root / "alias.py").symlink_to(sub / "real.py")
+
+        result = scan_extensions(root, follow_symlinks=True)
+        ids = {m.canonical_id for m in result}
+        assert "sub.real" in ids
+        assert "alias" in ids, "an in-root symlinked file must still be discovered"
+
+    def test_symlinked_file_not_followed_when_disabled(self, tmp_path: Path) -> None:
+        """follow_symlinks=False skips symlinked files, as it does directories."""
+        root = tmp_path / "ext_root"
+        root.mkdir()
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "real.py").write_text("")
+        (root / "alias.py").symlink_to(sub / "real.py")
+
+        result = scan_extensions(root, follow_symlinks=False)
+        ids = {m.canonical_id for m in result}
+        assert "sub.real" in ids
+        assert "alias" not in ids
+
 
 # === scan_multi_root() ===
 

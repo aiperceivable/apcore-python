@@ -17,16 +17,6 @@ _SEPARATORS: dict[str, str] = {
 
 _SUPPORTED_LANGUAGES: frozenset[str] = frozenset(_SEPARATORS)
 
-#: Regex for splitting PascalCase / camelCase into words.
-#  Handles transitions like: "Http" | "JSON" | "Parser" | "v2".
-_CASE_BOUNDARY = re.compile(
-    r"""
-    (?<=[a-z0-9])(?=[A-Z])       # lowercase/digit → uppercase  (e.g. "http|Json")
-    | (?<=[A-Z])(?=[A-Z][a-z0-9]) # uppercase run → start of word (e.g. "HTTP|Json")
-    """,
-    re.VERBOSE,
-)
-
 #: Canonical ID format from PROTOCOL_SPEC §2.7 EBNF grammar.
 _CANONICAL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 

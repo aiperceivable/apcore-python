@@ -64,6 +64,7 @@ __all__ = [
     "DependencyNotFoundError",
     "DependencyVersionMismatchError",
     "TaskLimitExceededError",
+    "TaskStoreError",
     "VersionConstraintError",
     "InternalError",
     "ModuleIdConflictError",
@@ -1200,6 +1201,45 @@ class TaskLimitExceededError(ModuleError):
         )
 
 
+class TaskStoreError(ModuleError):
+    """Raised when a ``TaskStore`` backend is unreachable or refuses an operation.
+
+    Spec v1.50.0, D-92. ``async-tasks.md`` declares
+    ``TaskStoreError(code=TASK_STORE_UNAVAILABLE)`` on eight surfaces — every
+    ``TaskStore`` method and every ``AsyncTaskManager`` method that touches the
+    store — and no SDK defined it, so no caller could ever catch it. A declared
+    error type that no implementation can raise is the "declared surface
+    reaches no mechanism" shape PROTOCOL_SPEC §9.1.3 forbids for configuration
+    keys, here applied to an error contract.
+
+    The bundled :class:`~apcore.async_task.InMemoryTaskStore` cannot fail and
+    therefore never raises this; that is exactly why the type is **exported**
+    rather than merely raised internally. The hosts who need it are the ones
+    writing the network-backed stores the contract was written for: they raise
+    it, and ``AsyncTaskManager`` propagates it (D-81) rather than mapping a
+    store outage onto "task not found" / an empty list / a ``cancel`` that
+    returns ``True`` for a save that never landed.
+    """
+
+    _default_retryable: bool | None = True
+
+    def __init__(self, operation: str = "", reason: str = "", **kwargs: Any) -> None:
+        detail = f"TaskStore operation '{operation}' failed" if operation else "TaskStore is unavailable"
+        if reason:
+            detail = f"{detail}: {reason}"
+        details: dict[str, Any] = {}
+        if operation:
+            details["operation"] = operation
+        if reason:
+            details["reason"] = reason
+        super().__init__(
+            code="TASK_STORE_UNAVAILABLE",
+            message=detail,
+            details=details or None,
+            **kwargs,
+        )
+
+
 class VersionConstraintError(ModuleError):
     """Raised when a declared version constraint string is malformed.
 
@@ -1419,6 +1459,7 @@ class ErrorCodes:
     DEPENDENCY_VERSION_MISMATCH = "DEPENDENCY_VERSION_MISMATCH"
     VERSION_CONSTRAINT_INVALID = "VERSION_CONSTRAINT_INVALID"
     TASK_LIMIT_EXCEEDED = "TASK_LIMIT_EXCEEDED"
+    TASK_STORE_UNAVAILABLE = "TASK_STORE_UNAVAILABLE"
     PIPELINE_STEP_ERROR = "PIPELINE_STEP_ERROR"
     PIPELINE_STEP_NOT_FOUND = "PIPELINE_STEP_NOT_FOUND"
     # The pipeline/step/strategy codes below are raised from `apcore.pipeline`,

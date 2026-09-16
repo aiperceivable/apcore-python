@@ -383,7 +383,7 @@ class TestStreamGlobalDeadline:
     async def test_stream_raises_on_deadline_elapsed(self) -> None:
         ex = _make_executor(module=SlowStreamingModule(), module_id="slow")
         ctx = Context.create()
-        ctx.global_deadline = time.monotonic() + 0.1  # 100ms budget
+        ctx.global_deadline = time.time() + 0.1  # 100ms budget (D-99: epoch seconds)
 
         collected: list[dict[str, Any]] = []
         with pytest.raises(ModuleTimeoutError):

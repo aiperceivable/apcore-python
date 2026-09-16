@@ -9,7 +9,7 @@ from typing import Any
 
 from apcore.events.emitter import ApCoreEvent, EventEmitter
 from apcore.middleware.base import Context, Middleware
-from apcore.observability.metrics import MetricsCollector, estimate_p99_latency_ms
+from apcore.observability.metrics import MetricsCollector, module_error_rate, module_latency_ms
 
 
 class PlatformNotifyMiddleware(Middleware):
@@ -73,52 +73,22 @@ class PlatformNotifyMiddleware(Middleware):
     # ------------------------------------------------------------------
 
     def _compute_error_rate(self, module_id: str) -> float:
-        """Compute the error rate for a module from MetricsCollector counters."""
+        """Compute the error rate for a module from MetricsCollector counters.
+
+        Delegates to the canonical snapshot extractor so this sensor and the
+        ``system.health`` sys module cannot drift apart on which counters they
+        read — the same split in apcore-rust had the second copy matching the
+        wrong label key, pinning its error rate at 0 forever.
+        """
         if self._metrics_collector is None:
             return 0.0
-        snap = self._metrics_collector.snapshot()
-        counters = snap.get("counters", {})
-        total = 0
-        errors = 0
-        for (name, labels_tuple), count in counters.items():
-            if name != "apcore_module_calls_total":
-                continue
-            labels = dict(labels_tuple)
-            if labels.get("module_id") == module_id:
-                total += count
-                if labels.get("status") == "error":
-                    errors += count
-        if total == 0:
-            return 0.0
-        return errors / total
+        return module_error_rate(self._metrics_collector, module_id)
 
     def _estimate_p99_ms(self, module_id: str) -> float:
         """Estimate the p99 latency in milliseconds from histogram buckets."""
         if self._metrics_collector is None:
             return 0.0
-        snap = self._metrics_collector.snapshot()
-        histograms = snap.get("histograms", {})
-        bucket_data = histograms.get("buckets", {})
-        counts = histograms.get("counts", {})
-
-        hist_name = "apcore_module_duration_seconds"
-
-        # Find the total observation count for this module
-        labels_key = None
-        total_count = 0
-        for (name, labels_tuple), count in counts.items():
-            if name != hist_name:
-                continue
-            labels = dict(labels_tuple)
-            if labels.get("module_id") == module_id:
-                labels_key = labels_tuple
-                total_count = count
-                break
-
-        if total_count == 0 or labels_key is None:
-            return 0.0
-
-        return estimate_p99_latency_ms(hist_name, labels_key, bucket_data, total_count)
+        return module_latency_ms(self._metrics_collector, module_id)[1]
 
     def _check_error_rate_threshold(self, module_id: str) -> None:
         """Emit ``apcore.health.error_threshold_exceeded`` if the rate is above threshold."""

@@ -406,6 +406,7 @@ class TestGovernanceProjection:
         is safe *logging* and which is a raw copy when there is no input schema.
         """
         seen: list[Context] = []
+        projections: list[Any] = []
         reg = Registry()
 
         class Recording(GitPush):
@@ -413,17 +414,33 @@ class TestGovernanceProjection:
                 seen.append(context)
                 return {"pushed": True}
 
+        class Probe(BaseStep):
+            def __init__(self) -> None:
+                super().__init__(name="probe", description="record the projection", pure=True)
+
+            async def execute(self, ctx: PipelineContext) -> StepResult:
+                projections.append(ctx.governance_projection)
+                return StepResult(action="continue")
+
         reg.register("cli.git_push", Recording())
-        Executor(registry=reg).call("cli.git_push", {"force": True, "remote": "origin"})
+        strategy = build_standard_strategy(registry=reg)
+        strategy.insert_before("acl_check", Probe())
+        Executor(registry=reg, strategy=strategy).call("cli.git_push", {"force": True, "remote": "origin"})
 
         ctx = seen[0]
         # The module declares a permissive schema with no x-sensitive markers,
         # so redacted_inputs holds the values verbatim...
         assert ctx.redacted_inputs == {"force": True, "remote": "origin"}
-        # ...while the projection beside it holds none of them.
-        assert ctx.governance_projection is not None
-        assert ctx.governance_projection.keys == {"force", "remote"}
-        assert ctx.governance_projection.types == {"force": "boolean", "remote": "string"}
+        # ...while the projection carried beside it holds none of them.
+        #
+        # CTX-2: the projection lives on the per-call PipelineContext, not on
+        # the execution Context — that object is handed to module code and
+        # outlives the ACL check it was computed for.
+        assert ctx.governance_projection is None
+        projection = projections[0]
+        assert projection is not None
+        assert projection.keys == {"force", "remote"}
+        assert projection.types == {"force": "boolean", "remote": "string"}
 
     def test_it_is_populated_before_step_4(self) -> None:
         """§6.1.8 rule 1: computed at Step 3 and available at Step 4. The
@@ -438,7 +455,7 @@ class TestGovernanceProjection:
                 super().__init__(name="probe", description="record the projection", pure=True)
 
             async def execute(self, ctx: PipelineContext) -> StepResult:
-                seen.append(getattr(ctx.context, "governance_projection", None))
+                seen.append(ctx.governance_projection)
                 return StepResult(action="continue")
 
         reg = _registry()
@@ -459,7 +476,10 @@ class TestGovernanceProjection:
         lookup = BuiltinModuleLookup(registry=reg)
         ctx = PipelineContext(module_id="cli.git_push", inputs={"force": True}, context=Context.create())
         await lookup.execute(ctx)
-        assert ctx.context.governance_projection == GovernanceProjection.of({"force": True})
+        # CTX-2: Step 3 writes it onto the PipelineContext, not onto the
+        # caller-visible execution Context.
+        assert ctx.governance_projection == GovernanceProjection.of({"force": True})
+        assert ctx.context.governance_projection is None
 
     def test_it_does_not_reach_the_serialized_context(self) -> None:
         """Transient, like ``executor`` and ``services``."""

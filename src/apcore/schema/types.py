@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -51,6 +52,12 @@ class SchemaDefinition:
     version: str = "1.0.0"
     documentation: str | None = None
     schema_url: str | None = None
+    #: The ``*.schema.yaml`` file this definition was read from, when it came
+    #: from one. Algorithm A05 step 4a (D-104) resolves a local ``#/…``
+    #: reference against the FILE ROOT first, so the resolver has to be told
+    #: which file that is. ``None`` for a definition built in memory, which
+    #: keeps a local reference resolving within the schema node alone.
+    source_path: Path | None = None
 
 
 @dataclass

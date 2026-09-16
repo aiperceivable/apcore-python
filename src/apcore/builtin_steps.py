@@ -41,6 +41,7 @@ from apcore.pipeline import (
     StepResult,
 )
 from apcore.policy import ExecutionPolicy, PolicyDecision
+from apcore.schema.annotations import governance_union
 from apcore.schema.hardening import warn_format_violations
 from apcore.config import Config
 from apcore.utils.call_chain import guard_call_chain
@@ -139,18 +140,38 @@ class BuiltinContextCreation(BaseStep):
         else:
             base_ctx = ctx.context
 
-        # Root call detection — empty call_chain means this is a top-level
-        # invocation. Per PROTOCOL_SPEC §"Contract: `global_deadline`
-        # distributed semantics", the receiving Executor MUST (re)compute
-        # global_deadline from local config at pipeline entry. If the
-        # caller already populated global_deadline (in-process cooperation),
-        # preserve it; only fill in when unset.
-        is_root_call = not base_ctx.call_chain
-        if is_root_call and base_ctx.global_deadline is None and self._global_timeout > 0:
-            base_ctx.global_deadline = time.monotonic() + self._global_timeout / 1000.0
-
-        # Derive child context to add module_id to call chain.
+        # Derive child context to add module_id to call chain. `child()`
+        # carries the parent's `global_deadline` forward, so a nested call
+        # inherits the budget of the tree it belongs to.
         ctx.context = base_ctx.child(ctx.module_id)
+
+        # D-101 — the deadline belongs to the CALL TREE, not to the Context.
+        # It is computed onto the context derived for THIS call, never onto
+        # the caller-supplied Context, which `bind_executor` mutates in place
+        # and which the caller is explicitly allowed to reuse across
+        # successive top-level `Executor.call()` invocations. Written onto
+        # that object, the second call inherits the first call's remaining
+        # time — or fails immediately, having already expired.
+        #
+        # D-102 — recomputation is UNCONDITIONAL. The old guard also required
+        # an empty `call_chain`, but a Context arriving from another process
+        # carries a non-empty chain BY DEFINITION, so that conjunct inverted
+        # core-executor.md's "The receiving Executor MUST recompute" exactly
+        # where it applies and every cross-process sub-tree ran with no
+        # global budget. The `global_deadline is None` clause alone is the
+        # correct guard: it already preserves an in-process caller's explicit
+        # value (and, via `child()`, the enclosing tree's).
+        #
+        # D-99 — the clock is EPOCH SECONDS (`time.time()`), as
+        # design-context-annotations-acl.md has stated since the field was
+        # introduced. `global_deadline` is a public `Context.create`
+        # parameter, so a spec-following caller writes `time.time() + budget`;
+        # compared against a monotonic basis that is roughly 1.8e9 against
+        # roughly 1e5, so the deadline never fires and the call runs with no
+        # budget at all — silent, and fail-open.
+        if ctx.context.global_deadline is None and self._global_timeout > 0:
+            ctx.context.global_deadline = time.time() + self._global_timeout / 1000.0
+
         return StepResult(action="continue")
 
 
@@ -284,6 +305,15 @@ class BuiltinModuleLookup(BaseStep):
             raise ModuleDisabledError(module_id=ctx.module_id)
 
         ctx.module = module
+        # PROTOCOL_SPEC §7.4 (D-96): resolve the registry's DECLARED annotations
+        # here and hand them to the gate, which has no registry of its own —
+        # the same shape as `acl_approval_required`, which Step 4 computes and
+        # Step 5 reads. Without this the gate could only ever see the live
+        # instance, and a `*.binding.yaml` / `metadata=` source declaring
+        # `requires_approval: true` reached `get_definition()` and the manifest
+        # while the module executed UNGATED.
+        get_declared = getattr(self._registry, "get_declared_annotations", None)
+        ctx.declared_annotations = get_declared(ctx.module_id) if callable(get_declared) else None
 
         # Early input redaction: set context.redacted_inputs BEFORE any
         # middleware runs (step 6: BuiltinMiddlewareBefore). This ensures
@@ -321,8 +351,16 @@ class BuiltinModuleLookup(BaseStep):
         # schema it is a raw copy of the arguments, values and all. The
         # projection carries the key set and each key's JSON type and has no
         # field a value could live in.
-        if ctx.context is not None and hasattr(ctx.context, "governance_projection"):
-            ctx.context.governance_projection = GovernanceProjection.of(ctx.inputs)
+        # CTX-2: onto the per-call PipelineContext, not onto `ctx.context`.
+        # The execution Context is handed to module code and is explicitly
+        # reusable across successive top-level calls, so a projection written
+        # there survives the check it was computed for: a later direct
+        # `acl.check_access(..., ctx)` then evaluated an `arguments` condition
+        # against the PREVIOUS call's argument key set. Step 4 passes this
+        # value to the ACL explicitly, which is the other delivery shape
+        # §6.1.8 rule 4 blesses and the one apcore-typescript and apcore-rust
+        # use.
+        ctx.governance_projection = GovernanceProjection.of(ctx.inputs)
 
         return StepResult(action="continue")
 
@@ -385,19 +423,39 @@ class BuiltinACLCheck(BaseStep):
         On the legacy path ``approval_required`` is False: the boolean cannot
         carry it, and inferring one would be inventing governance.
         """
+        # CTX-2: the projection is passed per check rather than read off the
+        # Context. `_call_access` degrades to the old positional call for a
+        # custom ACL object whose accessor does not accept the keyword, so a
+        # host implementation written against the previous surface keeps
+        # working.
         access = getattr(self._acl, "async_check_access", None)
         if callable(access):
-            decision = await access(caller_id, ctx.module_id, ctx.context)
+            decision = await self._call_access(access, caller_id, ctx, awaitable=True)
             return decision.access == "allow", bool(decision.approval_required)
 
         access = getattr(self._acl, "check_access", None)
         if callable(access):
-            decision = access(caller_id, ctx.module_id, ctx.context)
+            decision = self._call_access(access, caller_id, ctx, awaitable=False)
             return decision.access == "allow", bool(decision.approval_required)
 
         if hasattr(self._acl, "async_check"):
             return bool(await self._acl.async_check(caller_id, ctx.module_id, ctx.context)), False
         return bool(self._acl.check(caller_id, ctx.module_id, ctx.context)), False
+
+    @staticmethod
+    def _call_access(access: Any, caller_id: str, ctx: PipelineContext, *, awaitable: bool) -> Any:
+        """Invoke an ACL accessor, passing the call's governance projection.
+
+        A custom ACL predating the keyword still works: the TypeError is
+        narrowed to the keyword itself, so a genuine error inside the accessor
+        is never swallowed and retried.
+        """
+        try:
+            return access(caller_id, ctx.module_id, ctx.context, projection=ctx.governance_projection)
+        except TypeError as exc:
+            if "projection" not in str(exc):
+                raise
+            return access(caller_id, ctx.module_id, ctx.context)
 
     def _emit_denied(self, caller_id: str, module_id: str, ctx: Context, dry_run: bool) -> None:
         """Emit ``apcore.acl.denied`` on the event bus (apcore#77) when live."""
@@ -522,6 +580,19 @@ class BuiltinApprovalGate(BaseStep):
         # and does nothing.
         acl_requires_approval = bool(getattr(ctx, "acl_approval_required", False))
 
+        # PROTOCOL_SPEC §7.4 (D-96): governance is the UNION of the live module
+        # instance and the registry's declared annotations. Reading the instance
+        # alone ignored what an operator declared in a `*.binding.yaml` /
+        # `metadata=` source — a `requires_approval: true` that reached
+        # `get_definition()` and the manifest and gated nothing. Reading the
+        # declared slot alone would be worse: it carries YAML > code precedence,
+        # so a metadata `false` would cancel a module that asks to be gated.
+        # Both single-source readings are fail-OPEN.
+        governance = governance_union(
+            getattr(module, "annotations", None),
+            getattr(ctx, "declared_annotations", None),
+        )
+
         decision: PolicyDecision | None = None
         if self._policy is not None:
             # PROTOCOL_SPEC §7.9.6: policy resolution receives the call site.
@@ -534,7 +605,7 @@ class BuiltinApprovalGate(BaseStep):
             # above, so the policy never sees a protocol-level key.
             decision = self._policy.resolve(
                 ctx.module_id,
-                getattr(module, "annotations", None),
+                governance,
                 arguments=ctx.inputs,
                 context=ctx.context,
             )
@@ -551,8 +622,8 @@ class BuiltinApprovalGate(BaseStep):
             if decision.overridden:
                 self._emit_policy_audit(decision, ctx.context)
         else:
-            needs_approval = _module_requires_approval(module) or acl_requires_approval
-            effective_destructive = _module_is_destructive(module)
+            needs_approval = _requires_approval(governance) or acl_requires_approval
+            effective_destructive = _is_destructive(governance)
 
         if not needs_approval:
             if effective_destructive:
@@ -591,7 +662,10 @@ class BuiltinApprovalGate(BaseStep):
         if approval_token is not None:
             result = await self._handler.check_approval(approval_token)
         else:
-            annotations = _coerce_annotations(getattr(module, "annotations", None))
+            # The handler must be told what the gate fired on: the union, not a
+            # second, narrower read of the live instance. Gating on one source
+            # and describing the call from another is the split D-96 closes.
+            annotations = _coerce_annotations(governance)
             # Preserve the ApprovalRequest contract ("requires_approval is
             # guaranteed true", PROTOCOL_SPEC §7.3 / §7.9.3): the handler sees
             # the EFFECTIVE governance values, not the module's raw
@@ -748,9 +822,8 @@ class BuiltinApprovalGate(BaseStep):
             )
 
 
-def _module_requires_approval(module: Any) -> bool:
-    """Read ``requires_approval`` from a module's annotations (dataclass or dict)."""
-    annotations = getattr(module, "annotations", None)
+def _requires_approval(annotations: Any) -> bool:
+    """Read ``requires_approval`` off an annotations value (dataclass or dict)."""
     if annotations is None:
         return False
     if isinstance(annotations, ModuleAnnotations):
@@ -760,9 +833,18 @@ def _module_requires_approval(module: Any) -> bool:
     return False
 
 
-def _module_is_destructive(module: Any) -> bool:
-    """Read ``destructive`` from a module's annotations (dataclass or dict)."""
-    annotations = getattr(module, "annotations", None)
+def _module_requires_approval(module: Any) -> bool:
+    """Read ``requires_approval`` from a MODULE's own annotations.
+
+    Kept for callers that genuinely mean the instance. Anything deciding
+    governance wants the D-96 union instead — see
+    :func:`apcore.schema.governance_union`.
+    """
+    return _requires_approval(getattr(module, "annotations", None))
+
+
+def _is_destructive(annotations: Any) -> bool:
+    """Read ``destructive`` off an annotations value (dataclass or dict)."""
     if annotations is None:
         return False
     if isinstance(annotations, ModuleAnnotations):
@@ -770,6 +852,15 @@ def _module_is_destructive(module: Any) -> bool:
     if isinstance(annotations, dict):
         return bool(annotations.get("destructive", False))
     return False
+
+
+def _module_is_destructive(module: Any) -> bool:
+    """Read ``destructive`` from a MODULE's own annotations.
+
+    Kept for callers that genuinely mean the instance; governance decisions
+    want the D-96 union — see :func:`apcore.schema.governance_union`.
+    """
+    return _is_destructive(getattr(module, "annotations", None))
 
 
 def _read_module_timeout_ms(module: Any, module_id: str) -> int | None:
@@ -1033,8 +1124,10 @@ class BuiltinExecute(BaseStep):
             raise ExecutionCancelledError()
 
         # Check global deadline
+        # D-99: `global_deadline` is epoch seconds, so it is compared against
+        # `time.time()` — never a monotonic reading.
         global_deadline = getattr(ctx.context, "global_deadline", None)
-        if global_deadline is not None and time.monotonic() > global_deadline:
+        if global_deadline is not None and time.time() > global_deadline:
             timeout_ms = int(self._default_timeout)
             raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms)
 
@@ -1057,7 +1150,7 @@ class BuiltinExecute(BaseStep):
 
         # Clamp to global deadline if set
         if global_deadline is not None:
-            remaining = global_deadline - time.monotonic()
+            remaining = global_deadline - time.time()
             if remaining <= 0:
                 raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=int(self._default_timeout))
             if timeout_s is None or remaining < timeout_s:

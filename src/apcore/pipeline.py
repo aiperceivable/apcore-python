@@ -12,7 +12,7 @@ from enum import Enum
 from collections.abc import Sequence
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from apcore.errors import ModuleError
+from apcore.errors import ModuleError, ModuleTimeoutError
 from apcore.middleware.manager import MiddlewareChainError
 from apcore.utils.pattern import match_pattern
 
@@ -113,6 +113,24 @@ class PipelineContext:
     # False when no ACL is attached, when no rule matched, or when the attached
     # ACL is an older object with no structured accessor.
     acl_approval_required: bool = False
+    #: The registry's declared (descriptor) annotations for this module,
+    #: resolved by Step 3 (``module_lookup``) alongside ``module``.
+    #:
+    #: The second governance source PROTOCOL_SPEC §7.4 (D-96) unions with the
+    #: live instance. It travels on the context for the same reason
+    #: ``acl_approval_required`` does: the step that can compute it is not the
+    #: step that needs it, and the approval gate has no registry of its own.
+    #: ``None`` when the module was never merged (``register_internal``) or the
+    #: lookup was bypassed.
+    declared_annotations: Any | None = None
+    # PROTOCOL_SPEC §6.1.8: the governance projection of THIS call's arguments.
+    # Computed by Step 3 (module lookup) and handed to Step 4's ACL check.
+    # CTX-2: it lives here, on the per-call pipeline state, and NOT on the
+    # execution Context — that object is handed to module code and outlives the
+    # check, so a projection left on it decided a later, unrelated
+    # `check_access` against the previous call's argument key set. Framework-
+    # computed and never accepted from caller input (rule 3).
+    governance_projection: Any | None = None
 
 
 @dataclass
@@ -405,6 +423,28 @@ class ExecutionStrategy:
         self.steps.pop(idx)
         self._rebuild_index()
 
+    def _validate_replacement_name(self, new_step: Step, idx: int) -> None:
+        """Reject a replacement whose name is already taken by a DIFFERENT step.
+
+        EXE-007. ``design-execution-pipeline.md`` states the invariant: "Step
+        names MUST be unique within a strategy." The constructor checks it once
+        and never runs again, and ``insert_after`` / ``insert_before`` check it
+        on their own doors — but ``replace`` and ``configure_step`` assigned
+        straight into ``self.steps`` and rebuilt the index, so two identically
+        named steps could coexist. ``_rebuild_index`` then maps the name to the
+        LATER one, silently: a subsequent ``insert_after("module_lookup", …)``
+        anchors on the impostor, ``remove()`` targets the wrong entry, and a
+        ``skip_to`` resolves past the real step. apcore-rust validates on both
+        doors (``pipeline.rs``, ``validate_replacement_name``).
+
+        Renaming is still allowed — including replacing a step with one of the
+        same name, which is what ``configure_step``'s idempotence means; only a
+        collision with a different position is rejected.
+        """
+        existing = self._name_to_idx.get(new_step.name)
+        if existing is not None and existing != idx:
+            raise StepNameDuplicateError(f"Step '{new_step.name}' already exists")
+
     def replace(self, step_name: str, new_step: Step) -> None:
         """Replace a step by name. Raises if the step is not replaceable."""
         idx = self._name_to_idx.get(step_name)
@@ -412,6 +452,7 @@ class ExecutionStrategy:
             raise StepNotFoundError(f"Step '{step_name}' not found")
         if not self.steps[idx].replaceable:
             raise StepNotReplaceableError(f"Step '{step_name}' is not replaceable")
+        self._validate_replacement_name(new_step, idx)
         self.steps[idx] = new_step
         self._rebuild_index()
 
@@ -426,6 +467,7 @@ class ExecutionStrategy:
             raise PipelineStepNotFoundError(step_name)
         if not self.steps[idx].replaceable:
             raise StepNotReplaceableError(f"Step '{step_name}' is not replaceable")
+        self._validate_replacement_name(new_step, idx)
         self.steps[idx] = new_step
         self._rebuild_index()
 
@@ -719,46 +761,29 @@ class PipelineEngine:
                     )
                 else:
                     result = await step.execute(ctx)
-            except asyncio.TimeoutError:
-                duration = (time.monotonic() - step_start) * 1000
-                if ignore_errors:
-                    _logger.warning(
-                        "Step '%s' timed out after %dms (ignored)",
-                        step.name,
-                        timeout_ms,
-                    )
-                    trace.steps.append(
-                        StepTrace(
-                            name=step.name,
-                            duration_ms=duration,
-                            result=StepResult(
-                                action="continue",
-                                explanation=f"Timeout after {timeout_ms}ms (ignored)",
-                            ),
-                            skip_reason="error_ignored",
-                        )
-                    )
-                    i += 1
-                    continue
-                trace.steps.append(
-                    StepTrace(
-                        name=step.name,
-                        duration_ms=duration,
-                        result=StepResult(
-                            action="abort",
-                            explanation=f"Step timed out after {timeout_ms}ms",
-                        ),
-                    )
-                )
-                trace.total_duration_ms = (time.monotonic() - start) * 1000
-                raise PipelineAbortError(
-                    step=step.name,
-                    explanation=f"Step timed out after {timeout_ms}ms",
-                    trace=trace,
-                    abort_reason=AbortReason.MODULE_TIMEOUT,
-                )
             except Exception as exc:
                 duration = (time.monotonic() - step_start) * 1000
+
+                # EXE-006 — a per-step timeout is an ordinary step failure.
+                # `timeout_ms` is documented as a plain per-step timeout
+                # (core-executor.md "Step Metadata": "Per-step timeout in
+                # milliseconds (0 = no limit)") with no exemption from the
+                # step-error contract, and apcore-typescript and apcore-rust
+                # both route it here. It used to have a dedicated `except
+                # asyncio.TimeoutError` clause AHEAD of this one, which never
+                # called `_invoke_on_step_error` and raised PipelineAbortError
+                # directly — so `on_step_error` never observed the timeout, a
+                # recovery value could not resume the pipeline, and the
+                # Executor's PipelineAbortError branch re-raised without
+                # `_recover_from_call_error`, skipping the module's `on_error`
+                # too. Only `ignore_errors` was honoured, by that clause's own
+                # copy of the logic.
+                #
+                # The MODULE_TIMEOUT code is preserved by carrying a typed
+                # ModuleTimeoutError as the cause below, so the error a caller
+                # sees is unchanged.
+                is_timeout = isinstance(exc, asyncio.TimeoutError)
+                error_text = f"Step timed out after {timeout_ms}ms" if is_timeout else str(exc)
 
                 # ── Step middleware: on_step_error (reverse order) ──
                 # This is the STEP-BODY failure path: every registered step
@@ -799,14 +824,14 @@ class PipelineEngine:
                 else:
                     # (4) ignore_errors: log and continue
                     if ignore_errors:
-                        _logger.warning("Step '%s' failed (ignored): %s", step.name, exc)
+                        _logger.warning("Step '%s' failed (ignored): %s", step.name, error_text)
                         trace.steps.append(
                             StepTrace(
                                 name=step.name,
                                 duration_ms=duration,
                                 result=StepResult(
                                     action="continue",
-                                    explanation=str(exc),
+                                    explanation=error_text,
                                 ),
                                 skip_reason="error_ignored",
                             )
@@ -818,10 +843,20 @@ class PipelineEngine:
                         StepTrace(
                             name=step.name,
                             duration_ms=duration,
-                            result=StepResult(action="abort", explanation=str(exc)),
+                            result=StepResult(action="abort", explanation=error_text),
                         )
                     )
                     trace.total_duration_ms = (time.monotonic() - start) * 1000
+                    if is_timeout:
+                        # The typed cause carries MODULE_TIMEOUT, so the
+                        # Executor unwraps it to the same ModuleTimeoutError
+                        # callers caught before — via PipelineStepError, which
+                        # is the branch that runs the module's `on_error`.
+                        raise PipelineStepError(
+                            step_name=step.name,
+                            cause=ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms),
+                            trace=trace,
+                        ) from exc
                     if isinstance(exc, MiddlewareChainError):
                         # A middleware chain failure is already in its canonical
                         # wrapper; re-wrapping would hide MiddlewareChainError

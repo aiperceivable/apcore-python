@@ -260,6 +260,42 @@ class TestEndToEnd:
         assert not reg.has("broken_mod")
         assert not reg.has("empty_mod")
 
+    def test_scalar_dependencies_does_not_abort_the_whole_discover_pass(self, tmp_path: Path) -> None:
+        """A malformed ``dependencies:`` degrades to no dependencies (not an abort).
+
+        ``parse_dependencies`` is reached from ``_resolve_load_order`` during
+        discovery; a truthy scalar there used to raise a bare ``AttributeError``
+        that took down the entire pass, not just the one bad module.
+        """
+        from apcore.registry.registry import Registry
+
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        _write_module_file(ext, "bad_deps.py", "BadDepsModule", "Bad deps")
+        _write_module_file(ext, "good_mod.py", "GoodModModule", "Good")
+        _write_meta_yaml(ext, "bad_deps", {"dependencies": "good_mod"})
+
+        reg = Registry(extensions_dir=str(ext))
+        assert reg.discover() == 2
+        assert reg.has("bad_deps")
+        assert reg.has("good_mod")
+
+    def test_scalar_dependencies_yields_an_empty_descriptor_dependency_list(self, tmp_path: Path) -> None:
+        """The other reachable call site, ``get_definition``, degrades the same way."""
+        from apcore.registry.registry import Registry
+
+        ext = tmp_path / "extensions"
+        ext.mkdir()
+        _write_module_file(ext, "bad_deps.py", "BadDepsModule", "Bad deps")
+        _write_meta_yaml(ext, "bad_deps", {"dependencies": "good_mod"})
+
+        reg = Registry(extensions_dir=str(ext))
+        reg.discover()
+
+        defn = reg.get_definition("bad_deps")
+        assert defn is not None
+        assert defn.dependencies == []
+
     def test_conftest_fixtures_smoke(self, registry: Any, sample_module_class: type) -> None:
         """Smoke test: conftest fixtures work correctly."""
         from apcore.registry.registry import Registry

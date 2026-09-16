@@ -558,6 +558,7 @@ class TestPublicAPIAll:
         "DependencyNotFoundError",
         "DependencyVersionMismatchError",
         "TaskLimitExceededError",
+        "TaskStoreError",
         "VersionConstraintError",
         "FuncMissingReturnTypeError",
         "FuncMissingTypeHintError",

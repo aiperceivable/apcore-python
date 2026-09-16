@@ -48,6 +48,9 @@ class RefResolver:
         self._schemas_dir: Path = Path(schemas_dir).resolve()
         self._max_depth: int = max_depth
         self._file_cache: dict[Path, dict[str, Any]] = {}
+        # The file :meth:`resolve` was entered with. The D-104 node fallback is
+        # scoped to THAT document; see :meth:`_fallback_document`.
+        self._origin_file: Path | None = None
 
     def resolve(self, schema: dict[str, Any], current_file: Path | None = None) -> dict[str, Any]:
         """Resolve all $ref references in a schema dictionary.
@@ -56,15 +59,24 @@ class RefResolver:
         The original schema is never modified.
         """
         result = copy.deepcopy(schema)
-        # Cache the inline schema so local $ref (#/...) can resolve against it
+        # Cache the inline schema so local $ref (#/...) can resolve against it.
+        # With a `current_file` this is the D-104 fallback document: the schema
+        # NODE, tried after the file root.
         self._file_cache[_INLINE_SENTINEL] = result
-        # Only meaningful for an inline document: with a `current_file`, `#` points
-        # at that file rather than at the schema passed in.
-        visited: set[str] = set() if current_file else set(_root_ref_aliases(result))
+        # Seeded regardless of `current_file`. A bare `#` / `#/` denotes the
+        # schema being resolved — a recursive data structure — and §4.15.2
+        # requires it to stay a lazy self-reference rather than being inlined
+        # even once. The file root is the base for *pointers into* the file,
+        # not for the empty pointer: a file root is a schema FILE (module_id,
+        # description, input_schema, …), which is not a schema.
+        visited: set[str] = set(_root_ref_aliases(result))
+        previous_origin = self._origin_file
+        self._origin_file = current_file
         try:
             self._resolve_node(result, current_file, visited_refs=visited, depth=0)
         finally:
             self._file_cache.pop(_INLINE_SENTINEL, None)
+            self._origin_file = previous_origin
         return result
 
     def resolve_ref(
@@ -105,7 +117,20 @@ class RefResolver:
 
         file_path, json_pointer = self._parse_ref(ref_string, current_file)
         document = self._load_file(file_path)
-        target = self._resolve_json_pointer(document, json_pointer, ref_string)
+        try:
+            target = self._resolve_json_pointer(document, json_pointer, ref_string)
+        except SchemaNotFoundError:
+            # D-104 / Algorithm A05 step 4a — a local `#/…` reference resolves
+            # against the file root FIRST and falls back to the schema node
+            # being resolved. Both layouts are normative: `definitions:` as a
+            # top-level sibling of `input_schema` in the FILE (the layout
+            # §4.11's own example uses) and `$defs` nested inside the schema
+            # node. The two lookups cannot collide — a pointer either resolves
+            # at the file root or it does not.
+            fallback = self._fallback_document(ref_string, file_path)
+            if fallback is None:
+                raise
+            target = self._resolve_json_pointer(fallback, json_pointer, ref_string)
 
         result = copy.deepcopy(target)
 
@@ -129,6 +154,33 @@ class RefResolver:
 
         self._resolve_node(result, effective_file, visited_refs, depth + 1)
         return result
+
+    def _fallback_document(self, ref_string: str, file_path: Path) -> dict[str, Any] | None:
+        """The schema node a local ``#/…`` reference falls back to, or None.
+
+        Only local references fall back, and only when the first lookup went to
+        a real file — resolution that already targeted the inline node has
+        nowhere left to go.
+
+        The fallback is also scoped to the document ``resolve()`` was entered
+        with. D-104 settled WHICH two bases a local pointer tries; it did not
+        say how far the second one travels, and the answer was "everywhere":
+        a ``#/$defs/X`` written inside an EXTERNAL schema, for a definition that
+        document does not have, fell back to the calling module's schema node
+        and bound to whatever happened to share the name. Three consequences,
+        in increasing order of cost: an invalid reference reported success
+        where it owes ``SCHEMA_NOT_FOUND``; the resolved schema then validated
+        against a contract the external author never wrote; and §10.6 reads
+        ``x-sensitive`` off the RESOLVED schema, so a field the external
+        document marks sensitive could be replaced by a local definition that
+        does not and be logged in plaintext. A document only ever falls back to
+        its own node.
+        """
+        if not ref_string.startswith("#") or file_path == _INLINE_SENTINEL:
+            return None
+        if file_path != self._origin_file:
+            return None
+        return self._file_cache.get(_INLINE_SENTINEL)
 
     def _resolve_node(self, node: Any, current_file: Path | None, visited_refs: set[str], depth: int) -> Any:
         """Recursively walk a node, resolving any $ref found. Modifies in-place."""

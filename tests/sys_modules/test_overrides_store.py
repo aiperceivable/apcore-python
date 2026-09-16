@@ -17,9 +17,13 @@ Mirrors apcore-typescript's ``OverridesStore`` / ``InMemoryOverridesStore``
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
+import pytest
 import yaml
+
+from apcore.sys_modules import overrides as overrides_module
 
 from apcore.config import Config
 from apcore.executor import Executor
@@ -113,6 +117,199 @@ class TestFileStore:
         path.write_text(json.dumps({"a.b": 1}), encoding="utf-8")
         store = FileOverridesStore(path)
         assert store.load() == {"a.b": 1}
+
+    def test_path_property_exposes_the_underlying_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "overrides.yaml"
+        store = FileOverridesStore(str(path))
+        assert store.path == path
+        assert isinstance(store.path, Path)
+
+
+# ---------------------------------------------------------------------------
+# FileOverridesStore — degradation paths
+#
+# Every branch below is documented by the store as "degrade, do not raise":
+# an unreadable, corrupt, or unwritable overrides file must never take the
+# process down, because the sys-modules apply overrides during startup.
+# ---------------------------------------------------------------------------
+
+
+class TestFileStoreLoadDegradation:
+    def test_load_returns_empty_and_warns_when_read_raises_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An unreadable (but existing) file degrades to ``{}`` with a warning."""
+        path = tmp_path / "overrides.yaml"
+        path.write_text("a.b: 1", encoding="utf-8")
+
+        def _boom(self: Path, *args: object, **kwargs: object) -> str:
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.WARNING):
+            assert store.load() == {}
+        assert any("Failed to read overrides file" in msg for msg in caplog.messages)
+
+    def test_load_returns_empty_for_an_empty_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "overrides.yaml"
+        path.write_text("", encoding="utf-8")
+        assert FileOverridesStore(path).load() == {}
+
+    def test_load_returns_empty_when_yaml_parses_to_null(self, tmp_path: Path) -> None:
+        """``null`` / a comment-only file parses to ``None``, not a mapping."""
+        path = tmp_path / "overrides.yaml"
+        path.write_text("# nothing here\n", encoding="utf-8")
+        assert FileOverridesStore(path).load() == {}
+
+    def test_load_falls_back_to_json_when_the_yaml_loader_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A YAMLError on JSON content falls through to ``json.loads``.
+
+        The fallback exists for JSON edge cases the YAML loader rejects; it is
+        forced here rather than hunted for, so the branch is covered without
+        depending on a particular PyYAML version's edge-case behaviour.
+        """
+        path = tmp_path / "overrides.yaml"
+        path.write_text(json.dumps({"a.b": 1}), encoding="utf-8")
+
+        def _raise_yaml(*args: object, **kwargs: object) -> object:
+            raise yaml.YAMLError("synthetic")
+
+        monkeypatch.setattr(overrides_module.yaml, "safe_load", _raise_yaml)
+        assert FileOverridesStore(path).load() == {"a.b": 1}
+
+    def test_load_returns_empty_and_warns_when_neither_yaml_nor_json(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        path = tmp_path / "overrides.yaml"
+        path.write_text("a: b\n- c\n", encoding="utf-8")
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.WARNING):
+            assert store.load() == {}
+        assert any("not valid YAML/JSON" in msg for msg in caplog.messages)
+
+    @pytest.mark.parametrize("content", ["- a\n- b\n", "42\n", "just a string\n"])
+    def test_load_returns_empty_and_warns_when_root_is_not_a_mapping(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        content: str,
+    ) -> None:
+        path = tmp_path / "overrides.yaml"
+        path.write_text(content, encoding="utf-8")
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.WARNING):
+            assert store.load() == {}
+        assert any("root is not a mapping" in msg for msg in caplog.messages)
+
+
+class TestFileStoreSaveDegradation:
+    def test_save_returns_without_raising_when_mkdir_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        path = tmp_path / "nested" / "overrides.yaml"
+
+        def _boom(self: Path, *args: object, **kwargs: object) -> None:
+            raise OSError("read-only filesystem")
+
+        monkeypatch.setattr(Path, "mkdir", _boom)
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.ERROR):
+            store.save({"k": 1})  # must not raise
+        assert not path.exists()
+        assert any("Failed to create parent directory" in msg for msg in caplog.messages)
+
+    def test_save_returns_without_raising_when_mkstemp_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        path = tmp_path / "overrides.yaml"
+
+        def _boom(*args: object, **kwargs: object) -> tuple[int, str]:
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(overrides_module.tempfile, "mkstemp", _boom)
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.ERROR):
+            store.save({"k": 1})  # must not raise
+        assert not path.exists()
+        assert any("Failed to create tempfile" in msg for msg in caplog.messages)
+
+    def test_save_removes_the_tempfile_when_the_write_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A failing ``os.replace`` leaves neither a partial file nor a tempfile."""
+        path = tmp_path / "overrides.yaml"
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise OSError("cross-device link")
+
+        monkeypatch.setattr(overrides_module.os, "replace", _boom)
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.ERROR):
+            store.save({"k": 1})  # must not raise
+        assert not path.exists()
+        assert list(tmp_path.iterdir()) == []
+        assert any("Failed to write overrides file" in msg for msg in caplog.messages)
+
+    def test_save_degrades_when_a_value_is_not_yaml_serializable(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """``safe_dump`` raising a non-OSError still hits the cleanup path."""
+        path = tmp_path / "overrides.yaml"
+        store = FileOverridesStore(path)
+
+        with caplog.at_level(logging.ERROR):
+            store.save({"k": object()})  # must not raise
+        assert not path.exists()
+        assert list(tmp_path.iterdir()) == []
+        assert any("Failed to write overrides file" in msg for msg in caplog.messages)
+
+    def test_save_tolerates_a_failing_tempfile_cleanup(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The ``unlink`` guarding the cleanup must not turn into a raise."""
+        path = tmp_path / "overrides.yaml"
+
+        def _boom_replace(*args: object, **kwargs: object) -> None:
+            raise OSError("cross-device link")
+
+        def _boom_unlink(*args: object, **kwargs: object) -> None:
+            raise OSError("already gone")
+
+        monkeypatch.setattr(overrides_module.os, "replace", _boom_replace)
+        monkeypatch.setattr(overrides_module.os, "unlink", _boom_unlink)
+        store = FileOverridesStore(path)
+
+        store.save({"k": 1})  # must not raise
+        assert not path.exists()
 
 
 # ---------------------------------------------------------------------------

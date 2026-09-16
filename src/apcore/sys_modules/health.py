@@ -8,7 +8,7 @@ from apcore.config import Config
 from apcore.errors import InvalidInputError, ModuleNotFoundError
 from apcore.module import ModuleAnnotations
 from apcore.observability.error_history import ErrorHistory
-from apcore.observability.metrics import MetricsCollector, estimate_p99_latency_ms
+from apcore.observability.metrics import MetricsCollector, module_call_counts, module_latency_ms
 from apcore.registry.registry import Registry
 
 __all__ = [
@@ -47,23 +47,6 @@ def classify_health_status(
     if error_rate < degraded_threshold:
         return "degraded"
     return "error"
-
-
-def _get_call_counts(metrics: MetricsCollector, module_id: str) -> tuple[int, int]:
-    """Return (total_calls, error_calls) for a module from metrics."""
-    snapshot = metrics.snapshot()
-    counters = snapshot.get("counters", {})
-    success_key = (
-        "apcore_module_calls_total",
-        (("module_id", module_id), ("status", "success")),
-    )
-    error_key = (
-        "apcore_module_calls_total",
-        (("module_id", module_id), ("status", "error")),
-    )
-    success_calls: int = counters.get(success_key, 0)
-    error_calls: int = counters.get(error_key, 0)
-    return success_calls + error_calls, error_calls
 
 
 class HealthSummaryModule:
@@ -165,7 +148,7 @@ class HealthSummaryModule:
 
     def _get_call_counts(self, module_id: str) -> tuple[int, int]:
         """Return (total_calls, error_calls) for a module from metrics."""
-        return _get_call_counts(self._metrics, module_id)
+        return module_call_counts(self._metrics, module_id)
 
     @staticmethod
     def _compute_error_rate(total: int, errors: int) -> float:
@@ -284,26 +267,11 @@ class HealthModule:
 
     def _get_call_counts(self, module_id: str) -> tuple[int, int]:
         """Return (total_calls, error_calls) for a module from metrics."""
-        return _get_call_counts(self._metrics, module_id)
+        return module_call_counts(self._metrics, module_id)
 
     def _get_latency(self, module_id: str) -> tuple[float, float]:
         """Return (avg_latency_ms, p99_latency_ms) from histogram data."""
-        snapshot = self._metrics.snapshot()
-        histograms = snapshot.get("histograms", {})
-        sums = histograms.get("sums", {})
-        counts = histograms.get("counts", {})
-        buckets = histograms.get("buckets", {})
-
-        labels_key = (("module_id", module_id),)
-        hist_name = "apcore_module_duration_seconds"
-
-        total_sum: float = sums.get((hist_name, labels_key), 0.0)
-        total_count: int = counts.get((hist_name, labels_key), 0)
-
-        avg_ms = (total_sum / total_count * 1000.0) if total_count > 0 else 0.0
-        p99_ms = estimate_p99_latency_ms(hist_name, labels_key, buckets, total_count)
-
-        return avg_ms, p99_ms
+        return module_latency_ms(self._metrics, module_id)
 
     def _get_recent_errors(self, module_id: str, limit: int) -> list[dict[str, Any]]:
         """Return recent errors formatted as dicts."""

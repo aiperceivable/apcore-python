@@ -548,16 +548,35 @@ class SchemaLoader:
             version=data.get("version", "1.0.0"),
             documentation=data.get("documentation"),
             schema_url=data.get("$schema"),
+            source_path=file_path,
         )
         self._schema_cache[module_id] = sd
         return sd
 
     def resolve(self, schema_def: SchemaDefinition) -> tuple[ResolvedSchema, ResolvedSchema]:
         """Resolve all $ref references in a SchemaDefinition."""
-        # Pass current_file=None so local #/ refs resolve within the schema dict itself,
-        # not against the whole YAML file. Cross-file refs use schemas_dir as base.
-        resolved_input = self._resolver.resolve(schema_def.input_schema)
-        resolved_output = self._resolver.resolve(schema_def.output_schema)
+        # D-104 (PROTOCOL_SPEC Algorithm A05 step 4a): a local `#/…` reference
+        # resolves against the FILE ROOT first and falls back to the schema
+        # node being resolved. Both layouts are normative, so both must load.
+        #
+        # This used to pass `current_file=None`, which made the file root
+        # unreachable: `#/definitions/User` with `definitions:` as a top-level
+        # sibling of `input_schema` — the layout §4.11's own example uses —
+        # raised SCHEMA_NOT_FOUND here and loaded only on apcore-rust, while
+        # `#/$defs/User` nested inside `input_schema` loaded here and not
+        # there. Each SDK rejected what the other accepted, so no schema file
+        # containing a local `$ref` loaded in all three.
+        #
+        # Handing the resolver the source file also makes
+        # `SchemaDefinition.definitions` live: it was collected from the file's
+        # top level and read by nothing, precisely because the references that
+        # would have used it could not resolve.
+        #
+        # `source_path` is None for a definition built in memory rather than
+        # read from a file; the resolver then behaves exactly as before.
+        current_file = schema_def.source_path
+        resolved_input = self._resolver.resolve(schema_def.input_schema, current_file)
+        resolved_output = self._resolver.resolve(schema_def.output_schema, current_file)
 
         input_model = self.generate_model(resolved_input, f"{schema_def.module_id}_Input")
         output_model = self.generate_model(resolved_output, f"{schema_def.module_id}_Output")

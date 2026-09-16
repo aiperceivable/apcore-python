@@ -564,19 +564,27 @@ async def test_taskstore_save_property_idempotent() -> None:
     assert stored is not None and stored.status is TaskStatus.COMPLETED
 
 
-@pytest.mark.skip(
-    reason="missing symbol: TaskStoreError (contract gap) — no TaskStoreError "
-    "class / TASK_STORE_UNAVAILABLE code exists in apcore-python; InMemoryTaskStore "
-    "MUST NOT raise it, and no network-backed store ships yet."
-)
 async def test_taskstore_save_error_store_unavailable() -> None:
     """async_tasks.save.error.TASK_STORE_UNAVAILABLE
 
     Network-backed stores raise TaskStoreError(code=TASK_STORE_UNAVAILABLE)
-    when the backend is unreachable. Not implementable: the error type is
-    absent from this SDK.
+    when the backend is unreachable. The type is defined and exported as of
+    spec v1.50.0 (D-92); the bundled InMemoryTaskStore MUST NOT raise it.
     """
-    raise AssertionError("unreachable — skipped")
+    from apcore.errors import TaskStoreError
+
+    class _UnreachableStore:
+        async def save(self, info):
+            raise TaskStoreError(operation="save", reason="connection refused")
+
+    store = _UnreachableStore()
+    info = TaskInfo("t1", "test.echo", TaskStatus.PENDING, submitted_at=1.0)
+    with pytest.raises(TaskStoreError) as excinfo:
+        await store.save(info)
+    assert excinfo.value.code == "TASK_STORE_UNAVAILABLE"
+
+    # The bundled store cannot fail, so it never raises it.
+    await InMemoryTaskStore().save(info)
 
 
 # ---------------------------------------------------------------------------

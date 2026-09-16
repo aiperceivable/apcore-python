@@ -13,8 +13,15 @@ mapping is the `_MODE_*` split below, stated explicitly rather than guessed.
 Three case shapes:
 
 * `class_name` only            → `class_name_to_segment` (pure conversion)
-* `classes` + multi_class on   → `discover_multi_class` over a synthesized file
-* `classes` + multi_class off  → plain `Registry.discover()` (single-class mode)
+* `classes` with a marked class → `discover_multi_class` over a synthesized file
+* `classes` with none marked    → plain `Registry.discover()` (single-class mode)
+
+Opt-in is the PER-CLASS `multi_class` marker (D-107, spec v1.50.0). The fixture
+used to carry a file-level `multi_class_enabled` boolean, which was the toggle
+decision-log D-06 withdrew — pinning it kept all three SDKs green against a model
+the spec says does not exist, and left apcore-rust with no per-class marker at
+all. Reading the marker off each class is what makes this fixture discriminate
+between the two models instead of tolerating both.
 """
 
 from __future__ import annotations
@@ -71,11 +78,22 @@ _CLASS_TEMPLATE = textwrap.dedent(
 )
 
 
+def _is_marked(entry: dict[str, Any]) -> bool:
+    """Per-class opt-in marker (D-107). Absent means not participating."""
+    return bool(entry.get("multi_class", False))
+
+
+def _any_marked(case: dict[str, Any]) -> bool:
+    return any(_is_marked(e) for e in case["input"].get("classes", []))
+
+
 def _write_module_file(root: Path, case: dict[str, Any]) -> Path:
-    """Materialize the case's file, decorating classes only in multi-class mode."""
-    decorator = "@multi_class\n" if case["input"]["multi_class_enabled"] else ""
+    """Materialize the case's file, decorating each class by its own marker."""
     body = "\n\n".join(
-        _CLASS_TEMPLATE.format(decorator=decorator, name=entry["name"])
+        _CLASS_TEMPLATE.format(
+            decorator="@multi_class\n" if _is_marked(entry) else "",
+            name=entry["name"],
+        )
         for entry in case["input"]["classes"]
         if entry["implements_module"]
     )
@@ -90,11 +108,11 @@ def _segment_cases() -> list[dict[str, Any]]:
 
 
 def _multi_class_cases() -> list[dict[str, Any]]:
-    return [c for c in CASES if "classes" in c["input"] and c["input"]["multi_class_enabled"]]
+    return [c for c in CASES if "classes" in c["input"] and _any_marked(c)]
 
 
 def _single_class_cases() -> list[dict[str, Any]]:
-    return [c for c in CASES if "classes" in c["input"] and not c["input"]["multi_class_enabled"]]
+    return [c for c in CASES if "classes" in c["input"] and not _any_marked(c)]
 
 
 @pytest.mark.parametrize("case", _segment_cases(), ids=lambda c: c["id"])

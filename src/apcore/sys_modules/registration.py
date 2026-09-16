@@ -193,8 +193,8 @@ def reset_subscriber_registry() -> None:
 
 # ---------------------------------------------------------------------------
 # Public SubscriberFactory API — parity with apcore-typescript
-# (``createSubscriberFromConfig``) and apcore-rust (``create_subscriber`` /
-# ``register_factory``). Issue #36.
+# (``createSubscriberFromConfig`` / ``registerSubscriberType``) and apcore-rust
+# (``create_subscriber`` / ``register_subscriber_type``). Issue #36.
 # ---------------------------------------------------------------------------
 
 
@@ -205,7 +205,8 @@ def register_subscriber_factory(
     """Register a custom subscriber-type factory.
 
     Public, cross-language counterpart to TypeScript's
-    ``registerSubscriberFactory`` / Rust's ``register_factory``.
+    ``registerSubscriberType`` / Rust's ``register_subscriber_type`` — the
+    normative name in event-system.md, which all three SDKs export.
 
     Args:
         type_name: The ``type`` string used in subscriber config dicts.

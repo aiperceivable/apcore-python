@@ -184,7 +184,12 @@ class UpdateConfigModule:
     """Update a runtime configuration value by dot-path key."""
 
     description = "Update a runtime configuration value by dot-path key"
-    annotations = ModuleAnnotations(requires_approval=True, destructive=False)
+    # SYS-19: `idempotent` is declared per module by system-modules.md, and all
+    # three `system.control.*` modules took the `ModuleAnnotations` default
+    # (False) instead. Two happened to match; `toggle_feature` did not. Stated
+    # explicitly so the value is the spec's rather than the dataclass's.
+    # "repeated calls with different values produce different state".
+    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -358,7 +363,9 @@ class ReloadModule:
     """
 
     description = "Hot-reload a module by safe unregister and re-discover"
-    annotations = ModuleAnnotations(requires_approval=True, destructive=False)
+    # SYS-19: "each call unregisters and re-registers; invoking twice reloads
+    # twice" (system-modules.md).
+    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -509,7 +516,24 @@ class ReloadModule:
                 self._reload_one(mid, context)
                 reloaded.append(mid)
             except Exception as exc:
+                # SYS-17 — fatal, not swallowed.
+                #
+                # `_reload_one` unregisters the module BEFORE it re-discovers
+                # it, so a re-discovery failure leaves the module gone. Logging
+                # and continuing meant the method returned
+                # `{"success": true, "reloaded_modules": []}` for a bulk reload
+                # that unregistered every matched module and restored none —
+                # the worst possible pairing of an outcome with a report,
+                # because the caller has no reason to look further. Both
+                # apcore-typescript and apcore-rust make it fatal.
+                #
+                # Already-reloaded modules stay reloaded; the error names the
+                # one that stopped the run, and the partial list is not
+                # reported as a success.
                 logger.error("Bulk reload: failed to reload '%s': %s", mid, exc)
+                if isinstance(exc, ReloadFailedError):
+                    raise
+                raise ReloadFailedError(module_id=mid, reason=str(exc)) from exc
 
         elapsed_ms = (time.monotonic() - start) * 1000.0
         logger.info(
@@ -718,7 +742,10 @@ class ToggleFeatureModule:
     """Disable or enable a module without unloading it from the Registry (PRD F19)."""
 
     description = "Disable or enable a module without unloading it"
-    annotations = ModuleAnnotations(requires_approval=True, destructive=False)
+    # SYS-19: "toggling to the current state produces the same outcome"
+    # (system-modules.md) — the one of the three whose declared value differs
+    # from the dataclass default, and the one that was therefore wrong.
+    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=True)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {

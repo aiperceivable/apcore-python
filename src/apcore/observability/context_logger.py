@@ -13,8 +13,19 @@ from typing import Any
 
 from apcore.utils.pattern import match_glob
 from apcore.utils.redaction import PROTECTED_LOG_FIELDS as _PROTECTED_LOG_FIELDS
+
+# The §10.6.1 key rule is imported, never re-implemented: §10.6 requires it to
+# hold identically on the executor capture-point surface and on this
+# log-emission surface, so a second copy here is a second rule waiting to
+# drift. It already happened to the sibling value matcher — see
+# :func:`_value_matches_regex` below for the leak the two copies produced.
+# The local name is kept as an alias because it is the documented spelling on
+# this surface; the two separator-folding helpers it used to call are internal
+# to the canonical matcher and are no longer duplicated here at all.
 from apcore.utils.redaction import (
+    REDACTED_VALUE,
     ValuePattern,
+    _key_matches as _key_matches_sensitive,
     _value_matches,
     compile_value_regexes,
 )
@@ -31,8 +42,6 @@ _LEVELS = {
     "error": 40,
     "fatal": 50,
 }
-
-_REDACTED = "***REDACTED***"
 
 # Maximum recursion depth for nested redaction.  Matches the spec's schema
 # validation depth limit (32) so the redactor can never run away on
@@ -98,7 +107,7 @@ class RedactionConfig:
     value_patterns: list[str] = field(default_factory=list)
     sensitive_keys: list[str] = field(default_factory=list)
     regex_patterns: list[str] = field(default_factory=list)
-    replacement: str = "***REDACTED***"
+    replacement: str = REDACTED_VALUE
 
     compiled_regex_patterns: list[re.Pattern[str]] = field(init=False, repr=False, compare=False)
     invalid_regex_patterns: list[tuple[str, str]] = field(init=False, repr=False, compare=False)
@@ -141,7 +150,7 @@ class RedactionConfig:
         # silently disabling all key-based redaction.
         if sensitive_keys is None:
             sensitive_keys = list(_DEFAULT_OBS_REDACTION_SENSITIVE_KEYS)
-        replacement = config.get("obs.redaction.replacement", "***REDACTED***") or "***REDACTED***"
+        replacement = config.get("obs.redaction.replacement", REDACTED_VALUE) or REDACTED_VALUE
         return cls(
             sensitive_keys=list(sensitive_keys),
             regex_patterns=list(regex_patterns),
@@ -154,64 +163,6 @@ class RedactionConfig:
         from apcore.config import _DEFAULT_OBS_REDACTION_SENSITIVE_KEYS
 
         return cls(sensitive_keys=list(_DEFAULT_OBS_REDACTION_SENSITIVE_KEYS))
-
-
-def _normalize_key_for_match(s: str) -> str:
-    """Normalize a key/pattern for cross-separator substring matching.
-
-    Lower-cases and treats ``-`` / ``_`` / whitespace as equivalent so
-    ``"X-API-Key"`` matches the ``"api_key"`` substring (per the §5 spec
-    example).  Glob patterns are NOT normalized — they go through
-    :func:`apcore.utils.pattern.match_glob` instead, with the case fold
-    applied to the pattern and the key alike (PROTOCOL_SPEC §10.6.1).
-    """
-    return s.lower().replace("-", "_").replace(" ", "_")
-
-
-def _compact_key_for_match(s: str) -> str:
-    """Lower-case with ``-`` / ``_`` / space stripped entirely.
-
-    Allows camelCase keys like ``"AccessKey"`` to match the ``"access_key"``
-    substring (D-54 canonical default list expects this).
-    """
-    return s.lower().replace("-", "").replace("_", "").replace(" ", "")
-
-
-def _key_matches_sensitive(key: str, sensitive_keys: list[str]) -> bool:
-    """Return True if *key* matches any entry in ``sensitive_keys``.
-
-    Each pattern is interpreted as either:
-    - a glob-dialect pattern (Algorithm A25) when it contains ``*`` or ``?``,
-      matched case-insensitively and anchored to the whole name,
-    - or a plain case-insensitive substring match otherwise.  Hyphen,
-      underscore, and space are treated as equivalent on both sides so
-      ``"X-API-Key"`` matches ``"api_key"`` (Issue #43 §5).  The match also
-      collapses separators to allow camelCase keys (``AccessKey``) to match
-      snake_case patterns (``access_key``).
-    """
-    norm_key = _normalize_key_for_match(key)
-    compact_key = _compact_key_for_match(key)
-    lower_key = key.lower()
-    for pat in sensitive_keys:
-        if not pat:
-            continue
-        lower_pat = pat.lower()
-        # PROTOCOL_SPEC 10.6.1: an entry containing `*` or `?` is a glob-dialect
-        # pattern (A25, anchored); anything else is a substring. `[` is NOT a
-        # trigger — brackets are literals under A25, and reading them as a class
-        # is what let apcore-typescript invert `[!p]assword` into "redact
-        # password" (#117). The fold is applied to BOTH sides: folding the key
-        # alone left `"*Token*"` matching nothing in apcore-rust, silently.
-        if "*" in lower_pat or "?" in lower_pat:
-            if match_glob(lower_pat, lower_key):
-                return True
-        else:
-            norm_pat = _normalize_key_for_match(pat)
-            if norm_pat in norm_key:
-                return True
-            if _compact_key_for_match(pat) in compact_key:
-                return True
-    return False
 
 
 def _value_matches_regex(value: Any, regex_patterns: Sequence[ValuePattern]) -> bool:

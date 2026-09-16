@@ -138,6 +138,7 @@ from apcore.errors import (
     SchemaParseError,
     SchemaValidationError,
     TaskLimitExceededError,
+    TaskStoreError,
     VersionConstraintError,
 )
 
@@ -726,6 +727,7 @@ __all__ = [
     "SchemaParseError",
     "SchemaValidationError",
     "TaskLimitExceededError",
+    "TaskStoreError",
     "VersionConstraintError",
     # ACL
     "ACL",

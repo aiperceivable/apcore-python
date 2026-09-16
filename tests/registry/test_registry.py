@@ -488,7 +488,7 @@ class TestEventCallbacks:
 
     def test_callback_error_increments_metrics_when_collector_wired(self) -> None:
         """When a MetricsCollector is passed to Registry, callback errors
-        increment apcore.registry.callback_errors with event/module_id/error_type labels."""
+        increment apcore_registry_callback_errors_total with event/module_id/error_type labels."""
         from apcore.observability.metrics import MetricsCollector
 
         metrics = MetricsCollector()
@@ -505,7 +505,7 @@ class TestEventCallbacks:
         matched = [
             (name, dict(labels), count)
             for (name, labels), count in snap["counters"].items()
-            if name == "apcore.registry.callback_errors"
+            if name == "apcore_registry_callback_errors_total"
         ]
         assert len(matched) == 1
         _, labels, count = matched[0]
@@ -950,6 +950,31 @@ class _ModuleWithCustomDescribe:
         return "Custom description from the module itself."
 
 
+class _ModuleWithStructuredDescribe:
+    """Module whose describe() returns the §5.6 introspection MAPPING.
+
+    This is the declared shape of the optional ``Module.describe()``; per D-77
+    the registry must not pass it through a string-typed interface, nor
+    stringify it.
+    """
+
+    input_schema = _TestInput
+    output_schema = _TestOutput
+    description = "Module with a structured describe"
+    tags = ["structured"]
+
+    def execute(self, _inputs: dict[str, Any], _context: Any = None) -> dict[str, Any]:
+        return {"result": "ok"}
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "description": self.description,
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "annotations": {},
+        }
+
+
 class _ModuleWithDocumentation:
     """Module with documentation for auto-generated describe."""
 
@@ -998,6 +1023,43 @@ class TestDescribe:
         reg = Registry()
         with pytest.raises(ModuleNotFoundError):
             reg.describe("nonexistent.module")
+
+    def test_describe_string_override_returned_verbatim(self) -> None:
+        """D-77 rule 1: a string describe() override is the author's own text."""
+        reg = Registry()
+        reg.register("test.string_override", _ModuleWithCustomDescribe())
+        assert reg.describe("test.string_override") == "Custom description from the module itself."
+
+    def test_describe_structured_override_falls_through_to_envelope(self) -> None:
+        """D-77 rule 2: a mapping return is NOT the description.
+
+        Previously this returned ``str(dict)`` — a Python repr, which is
+        neither a description nor portable. The registry must fall through to
+        the generated envelope instead.
+        """
+        reg = Registry()
+        reg.register("test.structured_override", _ModuleWithStructuredDescribe())
+        result = reg.describe("test.structured_override")
+
+        assert isinstance(result, str)
+        # The generated envelope, not the override.
+        assert result.startswith("# test.structured_override")
+        assert "Module with a structured describe" in result
+        assert "**Tags:** structured" in result
+        # No Python repr of the mapping leaked into the description.
+        assert "{" not in result
+        assert "'input_schema'" not in result
+
+    def test_describe_without_override_uses_envelope(self) -> None:
+        """D-77 rule 2: no describe() at all also yields the generated envelope."""
+        mod = _ValidModule()
+        assert not hasattr(mod, "describe"), "this case is about a module that has no override"
+
+        reg = Registry()
+        reg.register("test.no_override", mod)
+        result = reg.describe("test.no_override")
+        assert result.startswith("# test.no_override")
+        assert "A valid test module" in result
 
 
 # ===== export_schema =====
@@ -1801,3 +1863,103 @@ class TestDescriptorCarriesTypedDependencies:
         raw = registry.get_module_metadata("a.d").get("dependencies") or []
         from_metadata = [d["module_id"] for d in raw]
         assert from_descriptor == from_metadata == ["a.dep"]
+
+
+# ===== D-86: register() validation order =====
+
+
+class TestRegisterValidationOrder:
+    """`register` reports validation failures in a fixed order (D-86, v1.49.0).
+
+    registry-system.md "Side Effects (ordered)" pins it as
+    ``module_id`` → structure/streaming → custom validator → duplicate:
+    intrinsic-then-extrinsic, because what is wrong with the module itself
+    must be fixed either way, whereas a duplicate ID may just mean the author
+    picked the wrong name.
+
+    Python previously ran the custom validator BEFORE the streaming check, so
+    a module that was both streaming-malformed and validator-rejected reported
+    a different error here than apcore-rust and apcore-typescript did.
+    """
+
+    class _StreamingLiar:
+        """Declares streaming=True and provides no stream()."""
+
+        input_schema = None
+        output_schema = None
+        description = "Claims to stream"
+
+        def __init__(self) -> None:
+            from apcore.module import ModuleAnnotations
+
+            self.annotations = ModuleAnnotations(streaming=True)
+
+        def execute(self, inputs: dict[str, Any], context: Any = None) -> dict[str, Any]:
+            return {}
+
+    def test_streaming_failure_is_reported_before_the_custom_validator(self) -> None:
+        from apcore.errors import StreamingInterfaceError
+
+        reg = Registry()
+        reg.set_validator(_RejectAllValidator())
+
+        with pytest.raises(StreamingInterfaceError):
+            reg.register("order.streaming_and_validator", self._StreamingLiar())
+
+    def test_streaming_failure_is_reported_before_the_duplicate_check(self) -> None:
+        """Malformed, validator-rejected AND duplicate at once: structure wins."""
+        from apcore.errors import StreamingInterfaceError
+
+        reg = Registry()
+        reg.register("order.all_three", _ValidModule())
+        reg.set_validator(_RejectAllValidator())
+
+        with pytest.raises(StreamingInterfaceError):
+            reg.register("order.all_three", self._StreamingLiar())
+
+        # The incumbent registration is untouched.
+        assert isinstance(reg.get("order.all_three"), _ValidModule)
+
+    def test_custom_validator_is_reported_before_the_duplicate_check(self) -> None:
+        reg = Registry()
+        reg.register("order.validator_and_dup", _ValidModule())
+        reg.set_validator(_RejectAllValidator())
+
+        with pytest.raises(InvalidInputError) as exc_info:
+            reg.register("order.validator_and_dup", _ValidModule())
+
+        assert "Custom validator rejected" in str(exc_info.value)
+        assert exc_info.value.code != ErrorCodes.DUPLICATE_MODULE_ID
+
+    def test_module_id_failure_is_reported_before_everything_else(self) -> None:
+        reg = Registry()
+        reg.set_validator(_RejectAllValidator())
+
+        with pytest.raises(InvalidInputError) as exc_info:
+            reg.register("Invalid-ID", self._StreamingLiar())
+
+        assert exc_info.value.code == ErrorCodes.INVALID_MODULE_ID
+
+    def test_a_stateful_validator_still_runs_for_a_later_duplicate_rejection(self) -> None:
+        """Stated side effect of the order: the validator runs, then the
+        duplicate check rejects. A stateful validator therefore sees the
+        registration that never landed."""
+
+        class _CountingValidator:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def validate(self, module: Any) -> list[str]:
+                self.calls += 1
+                return []
+
+        validator = _CountingValidator()
+        reg = Registry()
+        reg.register("order.counting", _ValidModule())
+        reg.set_validator(validator)
+
+        with pytest.raises(InvalidInputError) as exc_info:
+            reg.register("order.counting", _ValidModule())
+
+        assert exc_info.value.code == ErrorCodes.DUPLICATE_MODULE_ID
+        assert validator.calls == 1

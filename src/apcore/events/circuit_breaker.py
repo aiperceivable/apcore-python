@@ -53,6 +53,36 @@ class CircuitBreakerWrapper:
         self._last_failure_at: datetime | None = None
         self._lock = threading.Lock()
 
+    # EVT-001 — the wrapper stands in for the subscriber, so it must present
+    # the subscriber's identity to the emitter.
+    #
+    # `EventEmitter._get_event_pattern` falls back to `"*"` for an object that
+    # declares none, so wrapping a FILTERED subscriber in a circuit breaker
+    # silently widened it to catch-all: an event type the operator deliberately
+    # excluded was POSTed to the webhook. `subscriber_id` and `subscriber_type`
+    # had the same shape — the DLQ payload and every emitter log line named the
+    # wrapper's `repr()` (a heap address) instead of the subscriber the
+    # operator configured. apcore-rust forwards all three (circuit_breaker.rs).
+    #
+    # Properties rather than copied attributes so a subscriber that rewrites
+    # its own pattern after construction stays consistent with the wrapper.
+
+    @property
+    def event_pattern(self) -> str:
+        pattern = getattr(self._subscriber, "event_pattern", None)
+        return pattern if isinstance(pattern, str) else "*"
+
+    @property
+    def subscriber_id(self) -> Any:
+        return getattr(self._subscriber, "subscriber_id", None)
+
+    @property
+    def subscriber_type(self) -> Any:
+        stype = getattr(self._subscriber, "subscriber_type", None)
+        if isinstance(stype, str):
+            return stype
+        return type(self._subscriber).__name__.lower().replace("subscriber", "").lstrip("_")
+
     @property
     def state(self) -> CircuitState:
         with self._lock:

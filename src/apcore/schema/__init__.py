@@ -10,7 +10,12 @@ Example usage::
 
 from __future__ import annotations
 
-from apcore.schema.annotations import merge_annotations, merge_examples, merge_metadata
+from apcore.schema.annotations import (
+    governance_union,
+    merge_annotations,
+    merge_examples,
+    merge_metadata,
+)
 from apcore.schema.exporter import SchemaExporter
 from apcore.schema.loader import SchemaLoader
 from apcore.schema.openai_strict import (
@@ -45,6 +50,7 @@ __all__ = [
     "to_strict_schema",
     "assert_openai_strict_compatible",
     "detect_openai_strict_incompatibilities",
+    "governance_union",
     "merge_annotations",
     "merge_examples",
     "merge_metadata",

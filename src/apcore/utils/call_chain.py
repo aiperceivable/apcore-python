@@ -6,6 +6,8 @@ from apcore.errors import (
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
+    ErrorCodes,
+    InvalidInputError,
 )
 
 __all__ = ["guard_call_chain"]
@@ -38,14 +40,26 @@ def guard_call_chain(
         max_module_repeat: Maximum times a module may appear in the chain.
 
     Raises:
+        InvalidInputError: *max_call_depth* or *max_module_repeat* is below 1.
         CallDepthExceededError: Chain too deep.
         CircularCallError: Circular call detected.
         CallFrequencyExceededError: Module called too many times.
     """
+    # D-84: the limit floor raises the typed apcore error, not a builtin
+    # ``ValueError``. A builtin escapes every ``except ModuleError`` handler,
+    # and Executor.validate()'s error mapper reports it as
+    # ``error.code == "ValueError"`` — a string that is not an apcore error
+    # code — for a misconfigured ``executor.max_call_depth: 0``.
     if max_call_depth < 1:
-        raise ValueError(f"max_call_depth must be >= 1, got {max_call_depth}")
+        raise InvalidInputError(
+            message=f"max_call_depth must be >= 1, got {max_call_depth}",
+            code=ErrorCodes.GENERAL_INVALID_INPUT,
+        )
     if max_module_repeat < 1:
-        raise ValueError(f"max_module_repeat must be >= 1, got {max_module_repeat}")
+        raise InvalidInputError(
+            message=f"max_module_repeat must be >= 1, got {max_module_repeat}",
+            code=ErrorCodes.GENERAL_INVALID_INPUT,
+        )
 
     chain = list(call_chain)
 

@@ -42,6 +42,7 @@ from apcore.middleware.manager import (
     MiddlewareManager,
     RetrySignal,
 )
+from apcore.schema.annotations import governance_union
 from apcore.module import (
     Change,
     ModuleAnnotations,
@@ -49,7 +50,7 @@ from apcore.module import (
     PreflightResult,
     PreviewResult,
 )
-from apcore.policy import ExecutionPolicy
+from apcore.policy import ExecutionPolicy, strip_approval_token
 from apcore.pipeline import (
     AbortReason,
     ExecutionStrategy,
@@ -62,7 +63,7 @@ from apcore.pipeline import (
     StrategyInfo,
     StrategyNotFoundError,
 )
-from apcore.registry import MODULE_ID_PATTERN, Registry
+from apcore.registry import MAX_MODULE_ID_LENGTH, MODULE_ID_PATTERN, Registry
 
 
 __all__ = ["Executor"]
@@ -734,10 +735,22 @@ class Executor:
         if trace is not None:
             checks.extend(_trace_to_checks(trace))
 
-        # Detect requires_approval (preflight reports, does not enforce)
+        # Detect requires_approval (preflight reports, does not enforce).
+        #
+        # §7.9.5 binds this to the verdict the Step-5 gate will enforce, so it
+        # MUST read the same governance source: the D-96 union of the live
+        # instance and the registry's DECLARED annotations. Reading the instance
+        # alone reported "no approval needed" for a requirement an operator
+        # declared in a `*.binding.yaml` / `metadata=` source — and the gate,
+        # now reading the union, would stop the call the preflight waved
+        # through. That disagreement is the one thing this method exists to
+        # prevent.
         requires_approval = False
         if pipe_ctx.module is not None:
-            annotations = getattr(pipe_ctx.module, "annotations", None)
+            annotations = governance_union(
+                getattr(pipe_ctx.module, "annotations", None),
+                self._registry.get_declared_annotations(module_id),
+            )
             if isinstance(annotations, ModuleAnnotations):
                 requires_approval = annotations.requires_approval
             elif isinstance(annotations, dict):
@@ -748,10 +761,20 @@ class Executor:
                 # The call site travels here too (PROTOCOL_SPEC §7.9.6), so a
                 # host-supplied policy reports in preflight the same verdict it
                 # will enforce at the gate.
+                # §7.9.6 rule 5 — strip the framework-owned approval token
+                # before resolution. `ExecutionPolicy.resolve` strips it too,
+                # which covers every door into the built-in rules; it cannot
+                # cover this one, because the surface the rule protects is a
+                # host policy that OVERRIDES `resolve` (the method's own
+                # docstring names that as how a host consults the call site),
+                # and such an override is entered before any strip inside the
+                # base implementation runs. The approval gate strips at its
+                # call site for the same reason. `pipe_ctx.inputs` is left
+                # untouched — Step 5 owns the pipeline-side removal.
                 requires_approval = self._policy.resolve(
                     module_id,
                     annotations,
-                    arguments=pipe_ctx.inputs,
+                    arguments=strip_approval_token(pipe_ctx.inputs),
                     context=pipe_ctx.context,
                 ).needs_approval
 
@@ -849,10 +872,22 @@ class Executor:
 
     @staticmethod
     def _validate_module_id(module_id: str) -> None:
-        """Validate module_id format at public entry points."""
+        """Validate module_id format at public entry points.
+
+        The length bound is checked here and not only in the registry (D-75):
+        ``Contract: Executor.call`` requires empty, over-length and malformed
+        IDs alike to be rejected *before* the ``PipelineContext`` is built. A
+        well-formed but over-length ID otherwise reached the registry lookup
+        and came back as ``MODULE_NOT_FOUND`` instead of ``INVALID_MODULE_ID``.
+        """
         if not module_id or not MODULE_ID_PATTERN.match(module_id):
             raise InvalidInputError(
                 message=f"Invalid module ID: '{module_id}'. Must match pattern: {MODULE_ID_PATTERN.pattern}",
+                code=ErrorCodes.INVALID_MODULE_ID,
+            )
+        if len(module_id) > MAX_MODULE_ID_LENGTH:
+            raise InvalidInputError(
+                message=f"Module ID exceeds maximum length of {MAX_MODULE_ID_LENGTH}: {len(module_id)}",
                 code=ErrorCodes.INVALID_MODULE_ID,
             )
 
@@ -1222,7 +1257,8 @@ class Executor:
         global_deadline = getattr(pipe_ctx.context, "global_deadline", None)
         try:
             async for idx, chunk in _aenumerate(pipe_ctx.output_stream):
-                if global_deadline is not None and time.monotonic() > global_deadline:
+                # D-99: epoch seconds, so compared against `time.time()`.
+                if global_deadline is not None and time.time() > global_deadline:
                     raise ModuleTimeoutError(
                         module_id=module_id,
                         timeout_ms=self._global_timeout,
@@ -1582,7 +1618,7 @@ class Executor:
         from apcore.builtin_steps import (
             BuiltinACLCheck,
             BuiltinApprovalGate,
-            _module_requires_approval,
+            _requires_approval,
         )
 
         steps = self._strategy.steps
@@ -1604,11 +1640,20 @@ class Executor:
             mid.startswith(("system.health.", "system.usage.", "system.manifest.")) for mid in all_ids
         )
 
-        # Read the annotation through the SAME predicate the approval gate uses.
-        # A second reading of `requires_approval` here would be a second way for
-        # the accessor to disagree with the pipeline it describes.
+        # Read governance through the SAME union the approval gate uses (D-96).
+        # A second, narrower reading here would be a second way for the accessor
+        # to disagree with the pipeline it describes: a control module whose
+        # requirement is declared in a metadata source, not on the instance, is
+        # gated by the pipeline and was reported here as ungated — which a
+        # serve-time adapter may act on by refusing to start.
         all_control_require_approval = bool(control_ids) and all(
-            _module_requires_approval(self._registry.get(mid)) for mid in control_ids
+            _requires_approval(
+                governance_union(
+                    getattr(self._registry.get(mid), "annotations", None),
+                    self._registry.get_declared_annotations(mid),
+                )
+            )
+            for mid in control_ids
         )
 
         acl_configured = self._acl is not None

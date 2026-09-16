@@ -61,7 +61,6 @@ class APCore:
                 ``executor`` — wire the policy on that Executor directly
                 (parity with config-driven ACL discovery).
         """
-        self.registry = registry or Registry()
         self.config = config
 
         # Per-instance ToggleState (#71). Each APCore instance owns one
@@ -79,12 +78,38 @@ class APCore:
         # read path uses whatever toggle_state it was built with). The
         # auto-created Executor is wired to this instance's ToggleState.
         executor_supplied = executor is not None
-        self.executor = executor or Executor(
-            registry=self.registry,
-            config=config,
-            policy=policy,
-            toggle_state=self.toggle_state,
-        )
+        if executor_supplied:
+            self.executor = executor  # type: ignore[assignment]
+            # CLI-1. The client adopts the supplied Executor's Registry rather
+            # than building a second one beside it. `Contract: APCore.with_options`
+            # already states this — `registry` is "Ignored when executor is also
+            # provided (the executor's own registry is used instead)" — and
+            # apcore-rust (client.rs) implements it. Without it the client's
+            # write path (`register`, `module`, `discover`, `list_modules`) and
+            # the executor's read path address two different Registry objects,
+            # so a module registered through the client is not callable through
+            # it, `list_modules()` advertises modules that raise
+            # MODULE_NOT_FOUND, and `disable()` passes the sys-modules guard
+            # only to fail on `system.control.toggle_feature`.
+            self.registry = self.executor.registry
+        else:
+            # CLI-3. The auto-created Registry is given the client's Config.
+            # Built without one, `Registry._scan_params` returns hardcoded
+            # defaults and the extension roots fall back to the built-in
+            # `./extensions`, which makes `extensions.root`, `extensions.roots`,
+            # `extensions.max_depth`, `extensions.follow_symlinks`,
+            # `extensions.ignore_patterns` and `id_map.overrides` all inert
+            # through the client door — the "declared key reaches no mechanism"
+            # shape §9.1.3 forbids. `Contract: APCore.discover` says discovery
+            # roots come from `extensions.root` in the config supplied at
+            # construction.
+            self.registry = registry or Registry(config=config)
+            self.executor = Executor(
+                registry=self.registry,
+                config=config,
+                policy=policy,
+                toggle_state=self.toggle_state,
+            )
 
         # Config-driven ACL discovery (D-64, Recommendation A). Resolve
         # acl.root and attach an ACL only when the path exists; a missing path

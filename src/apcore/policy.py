@@ -25,12 +25,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from apcore.context import _APPROVAL_TOKEN_KEY
 from apcore.utils.pattern import calculate_specificity, match_pattern
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, types only
     from apcore.context import Context
 
-__all__ = ["PolicyRule", "PolicyDecision", "ExecutionPolicy"]
+__all__ = ["PolicyRule", "PolicyDecision", "ExecutionPolicy", "strip_approval_token"]
 
 _POLICY_KEYS = {"rules", "gate_destructive", "strict"}
 _RULE_KEYS = {"pattern", "requires_approval", "destructive", "reason"}
@@ -88,6 +89,27 @@ class PolicyDecision:
     needs_approval: bool
     rule: PolicyRule | None = None
     overridden: bool = False
+
+
+def strip_approval_token(arguments: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return *arguments* without the framework-owned ``_approval_token`` key.
+
+    PROTOCOL_SPEC §7.9.6 rule 5: the approval token **MUST** be stripped from
+    ``arguments`` *before* policy resolution. §7.4 already requires it to be
+    removed "before passing to subsequent steps", and that does not reach this
+    case — policy resolution happens *inside* Step 5, ahead of any subsequent
+    step, so an implementation can satisfy §7.4 literally and still hand the
+    token to the policy. It is a protocol-level key, not caller input; leaving
+    it in place puts a token into the audit trail and the
+    ``apcore.policy.override`` payload.
+
+    The caller's mapping is never mutated: the token is the one difference
+    between a call and its ``_approval_token`` resume, and the pipeline's own
+    copy is stripped separately by the gate.
+    """
+    if arguments is None or _APPROVAL_TOKEN_KEY not in arguments:
+        return arguments
+    return {k: v for k, v in arguments.items() if k != _APPROVAL_TOKEN_KEY}
 
 
 def _read_annotation_bool(annotations: Any, name: str) -> bool:
@@ -242,6 +264,13 @@ class ExecutionPolicy:
             A :class:`PolicyDecision` carrying the effective values, the
             final ``needs_approval`` verdict, and audit metadata.
         """
+        # §7.9.6 rule 5 — the framework-owned approval token never reaches a
+        # governance decision. Stripping here rather than at each call site
+        # covers every door into resolution: `Executor.validate` (§7.9.5
+        # preflight) and the approval gate both arrive through this method,
+        # and a future third caller is covered without being remembered.
+        arguments = strip_approval_token(arguments)
+
         # Read, deliberately unused by the built-in rules (§7.9.6 rule 2).
         # A host-supplied policy overriding resolve() receives them and may.
         _ = (arguments, context)

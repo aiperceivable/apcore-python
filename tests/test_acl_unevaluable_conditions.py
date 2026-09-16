@@ -1506,3 +1506,82 @@ class TestPendingApprovalRequirement:
         with caplog.at_level(logging.WARNING):
             acl.check_access("agent.planner", "cli.git_push", _ctx())
         assert "PENDING" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# D-88 (spec v1.49.0) — the §6.5 warning dedupe is keyed by rule INDEX, so any
+# operation that inserts, removes or reorders rules must clear it.
+# ---------------------------------------------------------------------------
+
+
+class TestSixFiveWarningDedupeClearedOnIndexShift:
+    """A stale marker suppresses the warning for a DIFFERENT rule.
+
+    ``_warned_missing_context`` is keyed by ``(rule_index, effect)``. Both
+    ``add_rule`` (inserts at index 0) and ``remove_rule`` (pops at index ``i``)
+    shift the rules after the mutation point, so a marker recorded for the old
+    occupant of an index would silence the new one — and specifically the rule
+    the operator just touched.
+    """
+
+    @staticmethod
+    def _rule(marker_role: str) -> ACLRule:
+        return ACLRule(
+            callers=["*"],
+            targets=["*"],
+            effect="deny",
+            conditions={"roles": [marker_role]},
+        )
+
+    @staticmethod
+    def _no_context_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.message for r in caplog.records if "no context" in r.message]
+
+    def test_the_warning_is_deduped_without_a_mutation(self, caplog: pytest.LogCaptureFixture) -> None:
+        acl = ACL(rules=[self._rule("admin")], default_effect="allow")
+        with caplog.at_level(logging.WARNING):
+            acl.check("caller", "target", None)
+            acl.check("caller", "target", None)
+        assert len(self._no_context_warnings(caplog)) == 1
+
+    def test_add_rule_clears_the_dedupe(self, caplog: pytest.LogCaptureFixture) -> None:
+        acl = ACL(rules=[self._rule("admin")], default_effect="allow")
+        with caplog.at_level(logging.WARNING):
+            acl.check("caller", "target", None)
+            assert len(self._no_context_warnings(caplog)) == 1
+
+            caplog.clear()
+            acl.add_rule(self._rule("operator"))
+            acl.check("caller", "target", None)
+
+        # Two rules, two indices, and neither is suppressed by the marker the
+        # pre-insertion rule left at index 0.
+        assert len(self._no_context_warnings(caplog)) == 2
+
+    def test_remove_rule_clears_the_dedupe(self, caplog: pytest.LogCaptureFixture) -> None:
+        acl = ACL(
+            rules=[self._rule("admin"), self._rule("operator")],
+            default_effect="allow",
+        )
+        with caplog.at_level(logging.WARNING):
+            acl.check("caller", "target", None)
+            assert len(self._no_context_warnings(caplog)) == 2
+
+            caplog.clear()
+            removed = acl.remove_rule(["*"], ["*"], conditions={"roles": ["admin"]})
+            assert removed is True
+            acl.check("caller", "target", None)
+
+        # The surviving rule moved from index 1 to index 0. Without the clear,
+        # the marker left by the REMOVED rule at index 0 would silence it.
+        assert len(self._no_context_warnings(caplog)) == 1
+
+    def test_a_failed_remove_does_not_have_to_clear(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No rule removed means no index shifted, so the dedupe still holds."""
+        acl = ACL(rules=[self._rule("admin")], default_effect="allow")
+        with caplog.at_level(logging.WARNING):
+            acl.check("caller", "target", None)
+            caplog.clear()
+            assert acl.remove_rule(["nobody"], ["*"]) is False
+            acl.check("caller", "target", None)
+        assert self._no_context_warnings(caplog) == []

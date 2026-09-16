@@ -45,13 +45,32 @@ def load_metadata(meta_path: Path) -> dict[str, Any]:
     return parsed
 
 
-def parse_dependencies(deps_raw: list[dict[str, Any]]) -> list[DependencyInfo]:
-    """Convert raw dependency dicts from YAML to typed DependencyInfo objects."""
+def parse_dependencies(deps_raw: Any) -> list[DependencyInfo]:
+    """Convert raw dependency dicts from YAML to typed DependencyInfo objects.
+
+    ``deps_raw`` arrives from hand-written filesystem YAML and is described by
+    no schema, so anything can appear there. A malformed value MUST degrade to
+    an empty dependency list rather than raise: a bare ``AttributeError`` here
+    aborts the whole ``discover()`` pass instead of skipping the one bad
+    module. Matches the TypeScript (``Array.isArray``) and Rust
+    (``.as_array()``) guards.
+    """
     if not deps_raw:
+        return []
+
+    if not isinstance(deps_raw, list):
+        logger.warning(
+            "Module 'dependencies' must be a list, got %s; ignoring: %r",
+            type(deps_raw).__name__,
+            deps_raw,
+        )
         return []
 
     result: list[DependencyInfo] = []
     for dep in deps_raw:
+        if not isinstance(dep, dict):
+            logger.warning("Dependency entry must be a mapping, skipping: %r", dep)
+            continue
         module_id = dep.get("module_id")
         if not module_id:
             logger.warning("Dependency entry missing 'module_id', skipping: %s", dep)
@@ -145,8 +164,8 @@ def merge_module_metadata(module: Any, meta: dict[str, Any]) -> dict[str, Any]:
         # `meta.get("dependencies", [])` and always got an empty list, so it
         # topologically sorted an empty graph. See apcore-typescript#35.
         "dependencies": (
-            meta.get("dependencies")
-            if meta.get("dependencies") is not None
+            meta["dependencies"]
+            if isinstance(meta.get("dependencies"), list)
             else (code_deps if isinstance(code_deps, list) else [])
         ),
     }

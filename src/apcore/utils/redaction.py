@@ -147,7 +147,10 @@ def _normalize_for_match(s: str) -> str:
     """Lower-case with ``-`` / ``_`` / spaces collapsed to ``_``.
 
     Lets ``"X-API-Key"`` match the ``"api_key"`` substring as required
-    by the Issue #43 §5 spec example.
+    by the Issue #43 §5 spec example.  Glob patterns are NOT normalized —
+    they go through :func:`apcore.utils.pattern.match_glob` instead, with the
+    case fold applied to the pattern and the key alike (PROTOCOL_SPEC
+    §10.6.1).
     """
     return s.lower().replace("-", "_").replace(" ", "_")
 
@@ -162,7 +165,26 @@ def _compact_for_match(s: str) -> str:
 
 
 def _key_matches(key: str, sensitive_keys: list[str]) -> bool:
-    """Case-insensitive substring + glob match against ``sensitive_keys``."""
+    """Return True if *key* matches any entry in ``sensitive_keys``.
+
+    Each pattern is interpreted as either:
+
+    - a glob-dialect pattern (Algorithm A25) when it contains ``*`` or ``?``,
+      matched case-insensitively and anchored to the whole name,
+    - or a plain case-insensitive substring match otherwise.  Hyphen,
+      underscore, and space are treated as equivalent on both sides so
+      ``"X-API-Key"`` matches ``"api_key"`` (Issue #43 §5).  The match also
+      collapses separators to allow camelCase keys (``AccessKey``) to match
+      snake_case patterns (``access_key``).
+
+    Canonical home for the §10.6.1 key rule, which MUST hold identically on
+    **both** mandated surfaces — the executor's input/output capture point
+    (:func:`redact_sensitive`) and log emission
+    (:mod:`apcore.observability.context_logger`, which imports this).  The two
+    surfaces used to carry separate copies; the sibling value matcher did too,
+    and the copies drifted into giving one SDK two answers for one value
+    (see :func:`_value_matches`).
+    """
     if not sensitive_keys:
         return False
     norm_key = _normalize_for_match(key)
@@ -172,9 +194,13 @@ def _key_matches(key: str, sensitive_keys: list[str]) -> bool:
         if not pat:
             continue
         lower_pat = pat.lower()
-        # PROTOCOL_SPEC 10.6.1: `[` is NOT a glob trigger — brackets are
-        # literals under A25 (9.2.3 requirement 4), so an entry containing
-        # only brackets is an ordinary substring.
+        # PROTOCOL_SPEC 10.6.1: an entry containing `*` or `?` is a glob-dialect
+        # pattern (A25, anchored); anything else is a substring. `[` is NOT a
+        # trigger — brackets are literals under A25 (9.2.3 requirement 4), and
+        # reading them as a class is what let apcore-typescript invert
+        # `[!p]assword` into "redact password" (#117). The fold is applied to
+        # BOTH sides: folding the key alone left `"*Token*"` matching nothing
+        # in apcore-rust, silently.
         if "*" in lower_pat or "?" in lower_pat:
             if match_glob(lower_pat, lower_key):
                 return True

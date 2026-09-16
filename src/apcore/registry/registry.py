@@ -24,6 +24,7 @@ from apcore.errors import (
 from apcore.registry.conflicts import ConflictSeverity, detect_id_conflicts
 from apcore.registry.dependencies import resolve_dependencies
 from apcore.registry.entry_point import resolve_entry_point
+from apcore.schema.annotations import governance_union
 from apcore.registry.metadata import (
     load_id_map,
     load_metadata,
@@ -437,7 +438,7 @@ class Registry:
             extensions_dirs: List of extension root configs (mutually exclusive with extensions_dir).
             id_map_path: Path to ID Map YAML file for overriding canonical IDs.
             metrics_collector: Optional MetricsCollector. When provided, the
-                registry increments ``apcore.registry.callback_errors`` with
+                registry increments ``apcore_registry_callback_errors_total`` with
                 labels ``{event, module_id, error_type}`` each time an event
                 callback raises, giving ops a per-event error signal beyond
                 the process-local counter exposed by ``get_callback_errors()``.
@@ -502,6 +503,16 @@ class Registry:
         self._pre_approval_hook = pre_approval_hook
         self._custom_discoverer: Discoverer | None = None
         self._custom_validator: ModuleValidator | None = None
+
+        # D-89: deprecation warnings are emitted at most once per
+        # ``(module_id, version)`` per registry instance. ``get_definition``
+        # is a read that hosts call in loops, so warning per read produces
+        # log spam proportional to traffic — which is how operators learn to
+        # filter the advisory out. Mirrors apcore-typescript's
+        # ``_deprecationWarned``. Entries for a module are dropped when it
+        # leaves the registry (``unregister`` / hot reload) so a genuinely
+        # new deprecation block on the replacement is not masked.
+        self._deprecation_warned: set[tuple[str, str]] = set()
 
         # Optional EventEmitter wired in by callers that want registry-level
         # audit events for ``ephemeral.*`` registrations (RFC pilot). When
@@ -1289,6 +1300,10 @@ class Registry:
         Validation order (PROTOCOL_SPEC §2.7, aligned with apcore-typescript
         and apcore-rust): empty → pattern → length → reserved (per-segment)
         → duplicate.
+
+        Step order across validation kinds (registry-system.md "Side Effects
+        (ordered)", D-86): module_id → structure/streaming → custom validator
+        → duplicate.
         """
         _validate_module_id(module_id, allow_reserved=False)
         # ``ephemeral.*`` registrations only land via this programmatic
@@ -1298,16 +1313,23 @@ class Registry:
         # human gates execution of agent-synthesized code.
         ephemeral = _is_ephemeral(module_id)
         if ephemeral:
-            self._warn_if_missing_approval(module_id, module)
+            self._warn_if_missing_approval(module_id, module, metadata)
 
         _ensure_schema_adapter(module)
+
+        # D-86: structure/streaming BEFORE the custom validator, and both
+        # before the duplicate check further down. Intrinsic-then-extrinsic —
+        # what is wrong with the module itself is reported before what is
+        # wrong about where it is being put. Matches apcore-rust and
+        # apcore-typescript; Python previously ran the validator first, so a
+        # module that was both streaming-malformed and validator-rejected
+        # reported a different error here than in the other two SDKs.
+        _validate_streaming_annotation(module_id, module)
 
         if not _skip_custom_validator and self._custom_validator is not None:
             errors = self._custom_validator.validate(module)
             if errors:
                 raise InvalidInputError(message=f"Custom validator rejected module '{module_id}': {'; '.join(errors)}")
-
-        _validate_streaming_annotation(module_id, module)
 
         effective_version = version or getattr(module, "version", None) or DEFAULT_MODULE_VERSION
 
@@ -1428,6 +1450,9 @@ class Registry:
             self._draining.discard(module_id)
             self._drain_events.pop(module_id, None)
             self._ref_counts.pop(module_id, None)
+            # D-89: drop the once-per-version dedupe entries so a later
+            # re-registration carrying a new deprecation block still warns.
+            self._forget_deprecation_warnings(module_id)
 
         # Call on_unload if available
         if hasattr(module, "on_unload") and callable(module.on_unload):
@@ -1728,7 +1753,17 @@ class Registry:
         )
 
     def _log_deprecation_warning(self, module_id: str, version: str, deprecation: dict[str, Any]) -> None:
-        """Log a deprecation warning for a module version."""
+        """Log a deprecation warning for a module version, once per registry.
+
+        At most one warning per ``(module_id, version)`` for the lifetime of
+        this registry instance (D-89).
+        """
+        key = (module_id, version)
+        with self._lock:
+            if key in self._deprecation_warned:
+                return
+            self._deprecation_warned.add(key)
+
         deprecated_since = deprecation.get("deprecated_since", "unknown")
         sunset_version = deprecation.get("sunset_version", "unknown")
         migration_guide = deprecation.get("migration_guide", "")
@@ -1801,9 +1836,16 @@ class Registry:
         if module is None:
             raise ModuleNotFoundError(module_id)
 
-        # Check for custom describe method
+        # Module-supplied override (D-77). ``Module.describe()`` is declared to
+        # return an introspection MAPPING, so only a string return is the
+        # author's deliberate description override and passed through verbatim.
+        # Anything else — a mapping, None, or another type — falls through to
+        # the generated envelope: ``str(dict)`` is a Python repr, not a
+        # description, and this method is declared to return a string.
         if hasattr(module, "describe") and callable(module.describe):
-            return str(module.describe())
+            override = module.describe()
+            if isinstance(override, str):
+                return override
 
         # Auto-generate from descriptor
         descriptor = self.get_definition(module_id)
@@ -1902,7 +1944,15 @@ class Registry:
                 )
                 if self._metrics_collector is not None:
                     self._metrics_collector.increment(
-                        "apcore.registry.callback_errors",
+                        # OBS-007: underscores, not dots. The Prometheus
+                        # exposition format admits `[a-zA-Z_:][a-zA-Z0-9_:]*`
+                        # only, and `export_prometheus` writes the name
+                        # verbatim — so one dotted sample made the WHOLE scrape
+                        # unparseable and every other apcore metric was lost
+                        # with it. `_total` per the counter convention. No
+                        # other SDK carries this metric, so nothing depends on
+                        # the old spelling.
+                        "apcore_registry_callback_errors_total",
                         {
                             "event": event,
                             "module_id": module_id,
@@ -1913,21 +1963,26 @@ class Registry:
     # ----- Ephemeral namespace pilot (apcore RFC: rfc-ephemeral-modules) -----
 
     @staticmethod
-    def _warn_if_missing_approval(module_id: str, module: Any) -> None:
+    def _warn_if_missing_approval(module_id: str, module: Any, metadata: dict[str, Any] | None = None) -> None:
         """Soft-warn when an ephemeral.* module is registered without ``requires_approval=True``.
 
         Per the ephemeral-modules RFC pilot, agent-synthesized modules SHOULD
         declare ``requires_approval: true`` so a human gates execution. The
-        registry only warns; it does not refuse the registration. The check
-        inspects both a code-level ``ModuleAnnotations`` instance and a
-        dict-style annotations attribute so all common shapes are caught.
+        registry only warns; it does not refuse the registration.
+
+        The two sources are unioned (PROTOCOL_SPEC §7.4, D-96) because that is
+        what the approval gate reads: a requirement declared in the ``metadata``
+        / ``*.binding.yaml`` source gates the module just as a code-level one
+        does. Reading the instance alone advised an author to set something they
+        had already set, in the one place the registry itself records it — an
+        advisory that fires against correct configuration is one operators learn
+        to ignore.
         """
-        annotations = getattr(module, "annotations", None)
-        requires_approval = False
-        if isinstance(annotations, dict):
-            requires_approval = bool(annotations.get("requires_approval", False))
-        elif annotations is not None:
-            requires_approval = bool(getattr(annotations, "requires_approval", False))
+        effective = governance_union(
+            getattr(module, "annotations", None),
+            (metadata or {}).get("annotations"),
+        )
+        requires_approval = bool(effective is not None and effective.requires_approval)
         if not requires_approval:
             logger.warning(
                 "ephemeral.* module '%s' registered without requires_approval=True. "
@@ -2210,7 +2265,18 @@ class Registry:
         self._module_meta.pop(mid, None)
         self._schema_cache.pop(mid, None)
         self._lowercase_map.pop(mid.lower(), None)
+        # D-89: the replacement instance installed by hot reload may carry a
+        # different (or newly added) ``x-deprecation`` block; a stale dedupe
+        # entry would silence it.
+        self._forget_deprecation_warnings(mid)
         return module
+
+    def _forget_deprecation_warnings(self, module_id: str) -> None:
+        """Drop the D-89 deprecation-warning dedupe entries for *module_id*.
+
+        Caller must hold ``self._lock``.
+        """
+        self._deprecation_warned = {key for key in self._deprecation_warned if key[0] != module_id}
 
     def _handle_file_change(self, path: str) -> None:
         """Handle a file modification or creation event.
@@ -2221,8 +2287,8 @@ class Registry:
         registry queries or deadlock a callback that calls back into the
         registry. Lock is acquired only for the two short atomic sections:
         capturing the old module's snapshot + state maps, and inserting the
-        new instance into all internal maps (``_modules``, ``_lowercase_map``,
-        ``_versioned_modules``, ``_versioned_meta``).
+        new instance into all internal maps (``_modules``, ``_module_meta``,
+        ``_lowercase_map``, ``_versioned_modules``, ``_versioned_meta``).
         """
         # Phase 1 (outside lock): compile + instantiate + validate new module.
         try:
@@ -2275,8 +2341,33 @@ class Registry:
 
         # Phase 4 (under lock): insert the new instance into every store.
         effective_version = getattr(instance, "version", None) or "1.0.0"
+        # `_module_meta` is rebuilt from the new instance here because Phase 2's
+        # `_inline_unregister` popped the old entry. Omitting it left every
+        # reloaded module with an empty descriptor: `get_definition()` fell back
+        # to description="" / version="1.0.0" / tags=[] and
+        # `get_module_metadata()` returned {} — which also silently degraded
+        # `ReloadModule._topo_sort_modules` (it reads the stored
+        # `dependencies`) to alphabetical order.
+        merged_meta = merge_module_metadata(instance, {})
+
+        # Phase 4a (outside lock): D-123 — the new instance MUST run `on_load()`
+        # before it becomes visible, the same precondition `Contract:
+        # Registry.register` Side Effects step 8 places on every other
+        # registration. That step is scoped to `register`, and this path writes
+        # the internal maps directly, so it violated no stated rule while
+        # publishing a module that was visible but never initialised — harder to
+        # diagnose than one that is simply absent.
+        if not self._invoke_on_load(new_id, instance, effective_version):
+            # D-112 rules 2-4, applied here via D-123: restore the previous
+            # instance rather than leaving the module gone. A failed hot reload
+            # must not make a working module disappear.
+            self._restore_after_failed_hot_reload(new_id, old_module, suspended_state)
+            return
+
+        # Phase 4b (under lock): insert the new instance into every store.
         with self._lock:
             self._modules[new_id] = instance
+            self._module_meta[new_id] = merged_meta
             self._lowercase_map[new_id.lower()] = new_id
             self._versioned_modules.add(new_id, effective_version, instance)
             self._versioned_meta.add(new_id, effective_version, {"version": effective_version})
@@ -2292,6 +2383,67 @@ class Registry:
                     new_id,
                     e,
                 )
+
+    def _restore_after_failed_hot_reload(
+        self,
+        module_id: str,
+        old_module: Any | None,
+        suspended_state: dict[str, Any] | None,
+    ) -> None:
+        """Republish the previous instance after a hot reload failed to load.
+
+        D-123, applying D-112 rules 2-4 to the watch-driven path. Phase 2 has
+        already unregistered the old instance and Phase 3 has already run its
+        ``on_unload``, so restoring it means re-running ``on_load`` — a module
+        republished without it would be visible but torn down, which D-112 rule
+        2 names as the state this whole decision exists to avoid.
+
+        When the restoring load ALSO fails the module stays unavailable
+        (D-112 rule 3): there is no good state left to return to, and publishing
+        a module whose load hook failed is the defect the deferred-publish rule
+        exists to prevent. Nothing is restored when the reload created a module
+        that did not previously exist — there is no previous instance to return
+        to, and the file simply failed to load.
+        """
+        if old_module is None:
+            logger.error(
+                "Hot reload of '%s' failed its on_load() and there was no previous "
+                "instance to restore; the module is not registered.",
+                module_id,
+            )
+            return
+
+        old_version = getattr(old_module, "version", None) or "1.0.0"
+        if not self._invoke_on_load(module_id, old_module, old_version):
+            logger.error(
+                "Hot reload of '%s' failed its on_load(), and re-loading the previous "
+                "instance failed as well; the module stays unavailable (D-112 rule 3).",
+                module_id,
+            )
+            return
+
+        merged_meta = merge_module_metadata(old_module, {})
+        with self._lock:
+            self._modules[module_id] = old_module
+            self._module_meta[module_id] = merged_meta
+            self._lowercase_map[module_id.lower()] = module_id
+            self._versioned_modules.add(module_id, old_version, old_module)
+            self._versioned_meta.add(module_id, old_version, {"version": old_version})
+
+        self._trigger_event("register", module_id, old_module)
+        if suspended_state is not None and hasattr(old_module, "on_resume") and callable(old_module.on_resume):
+            try:
+                old_module.on_resume(suspended_state)
+            except Exception as e:
+                logger.error(
+                    "on_resume() failed for restored module '%s' after a failed hot reload: %s",
+                    module_id,
+                    e,
+                )
+        logger.warning(
+            "Hot reload of '%s' failed its on_load(); the previous instance was restored.",
+            module_id,
+        )
 
     def _call_on_suspend(self, module_id: str, module: Any) -> dict[str, Any] | None:
         """Call on_suspend on ``module`` outside the registry lock; return state dict or None."""
@@ -2361,6 +2513,31 @@ class Registry:
         """Return metadata dict for a module, or empty dict if not found."""
         with self._lock:
             return dict(self._module_meta.get(module_id, {}))
+
+    def get_declared_annotations(self, module_id: str) -> Any | None:
+        """Return the merged (descriptor) annotations for a module, or ``None``.
+
+        This is the SECOND governance source PROTOCOL_SPEC §7.4 (D-96) unions
+        with the live module instance. It is not a duplicate of the instance's
+        own ``annotations``: :func:`merge_module_metadata` folds a
+        ``*.binding.yaml`` / ``metadata=`` declaration into this slot with
+        YAML > code precedence, so an operator can declare governance HERE that
+        the instance never carries.
+
+        Reading it is what closes a bypass: before this existed, a metadata
+        source declaring ``requires_approval: true`` reached ``get_definition``
+        and the manifest, and reached no gate — the module executed ungated with
+        an approval handler configured.
+
+        Cheap by design: one dict read under the lock, because the approval
+        gate consults it on every call. Callers union it with the instance's
+        annotations via :func:`apcore.schema.governance_union`; they MUST NOT
+        use it alone, since the merge's YAML > code precedence would let a
+        metadata ``false`` cancel a module that asks to be gated.
+        """
+        with self._lock:
+            meta = self._module_meta.get(module_id)
+            return meta.get("annotations") if meta is not None else None
 
     def register_internal(self, module_id: str, module: Any) -> None:
         """Register a sys/internal module that bypasses **only** the reserved

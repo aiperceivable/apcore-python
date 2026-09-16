@@ -57,9 +57,42 @@ def _next_subscriber_id(type_name: str) -> str:
     return f"{type_name}-{count}"
 
 
+def _ensure_subscriber_id(subscriber: Any) -> str:
+    """Give *subscriber* a generated ``subscriber_id`` if it declares none.
+
+    EVT-004. ``event-system.md`` requires the emitter to "MUST generate a
+    stable identifier" for a subscriber that supplies no id. It did not: the
+    fallback was ``repr(subscriber)``, which for an ordinary object embeds a
+    heap address — so the DLQ payload, every retry log line and every
+    circuit-breaker event named a value that is neither stable across runs nor
+    matchable to anything an operator can see. ``_next_subscriber_id`` already
+    existed for exactly this and was called only by the built-in subscriber
+    classes.
+
+    Assigned once, at ``subscribe()`` time, and never overwritten: a declared
+    id is the operator's and a generated one must not change between two reads
+    of the same subscriber. A subscriber whose attribute cannot be set (e.g. a
+    ``__slots__`` class) keeps working — the generated id is simply not cached,
+    which is the pre-existing behaviour and not worse than it.
+    """
+    sid = getattr(subscriber, "subscriber_id", None)
+    if isinstance(sid, str) and sid:
+        return sid
+    generated = _next_subscriber_id(_get_subscriber_type(subscriber) or "subscriber")
+    try:
+        subscriber.subscriber_id = generated
+    except Exception:  # pragma: no cover - exotic subscriber objects
+        logger.debug("Could not cache generated subscriber_id on %s", type(subscriber).__name__)
+    return generated
+
+
 def _get_subscriber_id(subscriber: Any) -> str:
     sid = getattr(subscriber, "subscriber_id", None)
-    return sid if isinstance(sid, str) else repr(subscriber)
+    if isinstance(sid, str) and sid:
+        return sid
+    # A subscriber that never went through `subscribe()` (or could not carry
+    # the attribute) still gets a stable, address-free identifier.
+    return _ensure_subscriber_id(subscriber)
 
 
 def _get_subscriber_type(subscriber: Any) -> str:
@@ -175,6 +208,7 @@ class EventEmitter:
                 f"Subscriber {subscriber!r} must define an async on_event(event) "
                 "method; synchronous on_event is not supported."
             )
+        _ensure_subscriber_id(subscriber)
         with self._lock:
             self._subscribers.append(subscriber)
 

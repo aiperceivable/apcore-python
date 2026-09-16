@@ -67,6 +67,37 @@ _handler_error_var: contextvars.ContextVar[dict[str, str] | None] = contextvars.
 )
 
 
+# CTX-2 — the governance projection of the call CURRENTLY being checked.
+#
+# §6.1.8 rule 4 leaves the delivery mechanism idiomatic, but rules 1 and 3 make
+# the projection a property of the call, not of an object that outlives it. It
+# used to be written onto the execution Context at Step 3 and left there, so a
+# module or middleware holding that Context and calling `check_access` again
+# later evaluated an `arguments` condition against the PREVIOUS call's argument
+# key set. apcore-typescript and apcore-rust scope it to one ACL evaluation.
+#
+# Set for the duration of one check_access / async_check_access call and reset
+# in `finally`, exactly like `_handler_error_var` above. Unlike that one this
+# variable is re-``set`` rather than mutated in place, because it is only ever
+# READ downstream — the handler does not write back through it.
+_projection_var: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "_apcore_acl_governance_projection", default=None
+)
+
+
+def current_governance_projection(context: Any = None) -> Any | None:
+    """The projection in force for the ACL evaluation now running, or None.
+
+    Falls back to ``context.governance_projection`` so that an ACL constructed
+    by a host that carries the projection on its own Context — the other shape
+    §6.1.8 rule 4 blesses — keeps working.
+    """
+    projection = _projection_var.get()
+    if projection is not None:
+        return projection
+    return getattr(context, "governance_projection", None)
+
+
 # Condition paths for the rule's pattern fields (PROTOCOL_SPEC §6.1.4).
 _CALLERS_PATH = "callers"
 _TARGETS_PATH = "targets"
@@ -1826,6 +1857,8 @@ class ACL:
         caller_id: str | None,
         target_id: str,
         context: Context | None = None,
+        *,
+        projection: Any | None = None,
     ) -> bool:
         """Check if a call from caller_id to target_id is allowed.
 
@@ -1855,13 +1888,15 @@ class ACL:
             True if the call is allowed, False if denied **or if it is allowed
             but requires approval** — see :meth:`check_access`.
         """
-        return self._as_legacy_boolean(self.check_access(caller_id, target_id, context))
+        return self._as_legacy_boolean(self.check_access(caller_id, target_id, context, projection=projection))
 
     def check_access(
         self,
         caller_id: str | None,
         target_id: str,
         context: Context | None = None,
+        *,
+        projection: Any | None = None,
     ) -> AccessDecision:
         """Resolve a call to a structured :class:`AccessDecision` (PROTOCOL_SPEC §6.8.1).
 
@@ -1889,6 +1924,7 @@ class ACL:
         effective_caller, rules, default_effect, audit_sink = self._snapshot(caller_id)
 
         token = _handler_error_var.set({})
+        projection_token = _projection_var.set(projection)
         try:
             matched: tuple[int, ACLRule] | None = None
             pending_approval = False
@@ -1919,6 +1955,7 @@ class ACL:
                 context=context,
             )
         finally:
+            _projection_var.reset(projection_token)
             _handler_error_var.reset(token)
 
     @staticmethod
@@ -1950,6 +1987,8 @@ class ACL:
         caller_id: str | None,
         target_id: str,
         context: Context | None = None,
+        *,
+        projection: Any | None = None,
     ) -> bool:
         """Async ACL check. Supports both sync and async condition handlers.
 
@@ -1967,13 +2006,17 @@ class ACL:
             True if the call is allowed, False if denied **or if it is allowed
             but requires approval** — see :meth:`async_check_access`.
         """
-        return self._as_legacy_boolean(await self.async_check_access(caller_id, target_id, context))
+        return self._as_legacy_boolean(
+            await self.async_check_access(caller_id, target_id, context, projection=projection)
+        )
 
     async def async_check_access(
         self,
         caller_id: str | None,
         target_id: str,
         context: Context | None = None,
+        *,
+        projection: Any | None = None,
     ) -> AccessDecision:
         """Async :meth:`check_access` (PROTOCOL_SPEC §6.8.1).
 
@@ -1984,6 +2027,7 @@ class ACL:
         effective_caller, rules, default_effect, audit_sink = self._snapshot(caller_id)
 
         token = _handler_error_var.set({})
+        projection_token = _projection_var.set(projection)
         try:
             matched: tuple[int, ACLRule] | None = None
             pending_approval = False
@@ -2014,6 +2058,7 @@ class ACL:
                 context=context,
             )
         finally:
+            _projection_var.reset(projection_token)
             _handler_error_var.reset(token)
 
     def _snapshot(self, caller_id: str | None) -> tuple[str, list[ACLRule], str, "_AuditSink"]:
@@ -2543,6 +2588,12 @@ class ACL:
 
         with self._lock:
             self._rules.insert(0, rule)
+            # The §6.5 once-per-rule warning is keyed by rule INDEX, and this
+            # insertion at index 0 shifts every existing rule down by one — so
+            # a stale marker would suppress the warning for a different rule
+            # than the one it was recorded for. Start fresh, as
+            # :meth:`reload` does and as apcore-typescript's ``addRule`` does.
+            self._warned_missing_context.clear()
 
         # PROTOCOL_SPEC §6.1.2 rule 4: runtime insertion is an entry point that
         # MUST be covered, not just file loading. The rule lands at index 0, so
@@ -2577,6 +2628,13 @@ class ACL:
                 if conditions is not None and rule.conditions != conditions:
                     continue
                 self._rules.pop(i)
+                # D-88: the §6.5 once-per-rule warning is keyed by rule INDEX,
+                # and removing rule `i` shifts every rule after it up by one —
+                # so a stale marker would suppress the warning for a different
+                # rule than the one it was recorded for. Any operation that
+                # inserts, removes or reorders rules clears the set, as
+                # :meth:`add_rule` and :meth:`reload` do.
+                self._warned_missing_context.clear()
                 return True
             return False
 

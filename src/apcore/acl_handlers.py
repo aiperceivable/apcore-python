@@ -271,7 +271,14 @@ class _ArgumentsHandler:
         if validate_arguments_condition(value):
             return ConditionOutcome.UNEVALUABLE
 
-        projection = getattr(context, "governance_projection", None)
+        # CTX-2 — the projection in force for THIS evaluation, not whatever a
+        # previous call happened to leave on the Context. §6.1.8 rule 1 makes it
+        # a property of the call being checked; `current_governance_projection`
+        # still falls back to the Context field for a host that carries it
+        # there, the other shape rule 4 blesses.
+        from apcore.acl import current_governance_projection
+
+        projection = current_governance_projection(context)
         if projection is None:
             return ConditionOutcome.UNEVALUABLE
         present = projection.keys

@@ -128,6 +128,40 @@ class TestExecutorCallContract:
             ex.call("   ", {})
         assert exc_info.value.code == "INVALID_MODULE_ID"
 
+    def test_call_input_module_id_over_length(self) -> None:
+        """core_executor.call.input.module_id.over_length
+
+        D-75: "Empty / over-length / malformed IDs MUST be rejected before the
+        pipeline context is constructed." A well-formed but over-length ID used
+        to pass the entry guard, build a PipelineContext and come back as
+        MODULE_NOT_FOUND from the registry lookup one step later.
+        """
+        from apcore.registry.registry import MAX_MODULE_ID_LENGTH
+
+        ex = _make_executor()
+        over_length = "a" * (MAX_MODULE_ID_LENGTH + 1)
+        assert len(over_length) > MAX_MODULE_ID_LENGTH
+
+        with pytest.raises(InvalidInputError) as exc_info:
+            ex.call(over_length, {"name": "x"})
+        assert exc_info.value.code == ErrorCodes.INVALID_MODULE_ID
+        # The entry guard, not the registry lookup.
+        assert not isinstance(exc_info.value, ModuleNotFoundError)
+
+    def test_call_input_module_id_at_the_length_bound_is_accepted(self) -> None:
+        """core_executor.call.input.module_id.at_bound
+
+        The bound is inclusive: exactly MAX_MODULE_ID_LENGTH characters passes
+        the guard and reaches the registry lookup (MODULE_NOT_FOUND).
+        """
+        from apcore.registry.registry import MAX_MODULE_ID_LENGTH
+
+        ex = _make_executor()
+        at_bound = "a" * MAX_MODULE_ID_LENGTH
+
+        with pytest.raises(ModuleNotFoundError):
+            ex.call(at_bound, {"name": "x"})
+
     def test_call_error_module_not_found(self) -> None:
         """core_executor.call.error.MODULE_NOT_FOUND
 

@@ -8,6 +8,7 @@ from typing import Any
 from apcore.config import Config
 from apcore.errors import InvalidInputError, ModuleNotFoundError
 from apcore.module import ModuleAnnotations
+from apcore.schema.annotations import governance_union
 from apcore.registry.registry import Registry
 
 __all__ = ["ManifestFullModule", "ManifestModule", "ManifestModuleModule"]
@@ -31,6 +32,35 @@ def _serialize_annotations(
     if annotations is None:
         return None
     return asdict(annotations)
+
+
+def _governance_view(
+    registry: Any,
+    module_id: str,
+    descriptor_annotations: ModuleAnnotations | None,
+) -> dict[str, Any] | None:
+    """Project the annotations an agent will actually be held to.
+
+    The two governance flags come from the D-96 union of the live module
+    instance and the registry's declared annotations — the same source the
+    approval gate reads. Everything else is the descriptor's, unchanged.
+
+    The manifest is what an agent reads to decide whether to call a module, so
+    advertising a governance value the gate does not enforce is worse than
+    advertising none: the descriptor alone could say `requires_approval: false`
+    for a module whose instance declares it, and `true` for one the gate lets
+    straight through.
+    """
+    if descriptor_annotations is None:
+        return None
+    module = registry.get(module_id) if hasattr(registry, "get") else None
+    declared = registry.get_declared_annotations(module_id) if hasattr(registry, "get_declared_annotations") else None
+    effective = governance_union(getattr(module, "annotations", None), declared)
+    view = asdict(descriptor_annotations)
+    if effective is not None:
+        view["requires_approval"] = effective.requires_approval
+        view["destructive"] = effective.destructive
+    return view
 
 
 class ManifestModule:
@@ -105,7 +135,7 @@ class ManifestModule:
             raise ModuleNotFoundError(module_id=module_id)
 
         source_path = _compute_source_path(self._config, module_id)
-        annotations_dict = _serialize_annotations(descriptor.annotations)
+        annotations_dict = _governance_view(self._registry, module_id, descriptor.annotations)
         dependencies = self._get_dependencies(module_id)
         metadata = self._get_metadata(module_id)
 
@@ -244,7 +274,7 @@ class ManifestFullModule:
             return None
 
         source_path = _compute_source_path(self._config, module_id) if include_source_paths else None
-        annotations_dict = _serialize_annotations(descriptor.annotations)
+        annotations_dict = _governance_view(self._registry, module_id, descriptor.annotations)
         dependencies = self._get_dependencies(module_id)
         metadata = descriptor.metadata or {}
 

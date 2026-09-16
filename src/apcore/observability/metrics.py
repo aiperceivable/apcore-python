@@ -65,6 +65,74 @@ def estimate_p99_latency_ms(
     return 0.0
 
 
+def module_call_counts(metrics: MetricsCollector, module_id: str) -> tuple[int, int]:
+    """Return ``(total_calls, error_calls)`` recorded for ``module_id``.
+
+    Scans the ``apcore_module_calls_total`` counters and filters on the
+    ``module_id`` label, so a call recorded with a ``status`` other than
+    ``success``/``error`` still counts toward the total. Canonical extractor:
+    the health sys module and :class:`~apcore.middleware.platform_notify.PlatformNotifyMiddleware`
+    both read the same snapshot shape, and the same split in apcore-rust — a
+    second copy reading the wrong label key — left its error rate permanently
+    0. Mirrors apcore-typescript ``computeModuleErrorRate``.
+    """
+    counters = metrics.snapshot().get("counters", {})
+    total = 0
+    errors = 0
+    for (name, labels_tuple), count in counters.items():
+        if name != METRIC_CALLS_TOTAL:
+            continue
+        labels = dict(labels_tuple)
+        if labels.get("module_id") != module_id:
+            continue
+        total += count
+        if labels.get("status") == "error":
+            errors += count
+    return total, errors
+
+
+def module_error_rate(metrics: MetricsCollector, module_id: str) -> float:
+    """Return the error rate (0.0-1.0) for ``module_id``; 0.0 when it has no calls."""
+    total, errors = module_call_counts(metrics, module_id)
+    if total == 0:
+        return 0.0
+    return errors / total
+
+
+def module_latency_ms(metrics: MetricsCollector, module_id: str) -> tuple[float, float]:
+    """Return ``(avg_latency_ms, p99_latency_ms)`` for ``module_id``.
+
+    Locates the ``apcore_module_duration_seconds`` histogram entry whose
+    ``module_id`` label matches and feeds its bucket counts to
+    :func:`estimate_p99_latency_ms`. The "find ``labels_key`` + ``total_count``
+    for this module" preamble lived in two places; it is here so both call
+    sites agree on which histogram entry they are reading. Mirrors
+    apcore-typescript ``estimateP99FromHistogram``.
+    """
+    histograms = metrics.snapshot().get("histograms", {})
+    sums = histograms.get("sums", {})
+    counts = histograms.get("counts", {})
+    buckets = histograms.get("buckets", {})
+
+    labels_key: tuple[tuple[str, str], ...] | None = None
+    total_count = 0
+    for (name, labels_tuple), count in counts.items():
+        if name != METRIC_DURATION_SECONDS:
+            continue
+        if dict(labels_tuple).get("module_id") == module_id:
+            labels_key = labels_tuple
+            total_count = count
+            break
+
+    if labels_key is None or total_count == 0:
+        return 0.0, 0.0
+
+    total_sum: float = sums.get((METRIC_DURATION_SECONDS, labels_key), 0.0)
+    avg_ms = (total_sum / total_count * 1000.0) if total_count > 0 else 0.0
+    p99_ms = estimate_p99_latency_ms(METRIC_DURATION_SECONDS, labels_key, buckets, total_count)
+    return avg_ms, p99_ms
+
+
 class MetricsCollector:
     """Thread-safe in-memory metrics store for counters and histograms."""
 
@@ -269,4 +337,11 @@ class MetricsMiddleware(Middleware):
         return None
 
 
-__all__ = ["MetricsCollector", "MetricsMiddleware", "estimate_p99_latency_ms"]
+__all__ = [
+    "MetricsCollector",
+    "MetricsMiddleware",
+    "estimate_p99_latency_ms",
+    "module_call_counts",
+    "module_error_rate",
+    "module_latency_ms",
+]

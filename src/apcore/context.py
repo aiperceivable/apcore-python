@@ -37,6 +37,18 @@ class Identity:
         else:
             object.__setattr__(self, "attrs", dict(self.attrs))
 
+        # IDN-2. identity-system.md declares `roles` an IMMUTABLE sequence, and
+        # the annotation says `tuple[str, ...]`, but the dataclass stored
+        # whatever it was handed: `roles = ["admin"]; Identity(id="u",
+        # roles=roles); roles.append("root")` left the identity holding
+        # `['admin', 'root']` — a list, not a tuple — so a later ACL `roles`
+        # condition granted a role nobody assigned. Copying beside `attrs`,
+        # which has been copied for the same reason since the field existed.
+        if self.roles is None:
+            object.__setattr__(self, "roles", ())
+        elif not isinstance(self.roles, tuple):
+            object.__setattr__(self, "roles", tuple(self.roles))
+
     def get_attr(self, key: str, default: Any = None) -> Any:
         """Get an attribute value by key.
 
@@ -306,12 +318,40 @@ class Context(Generic[T]):
 
         identity = None
         if data.get("identity") is not None:
+            # CTX-1. This used to index `id_data["id"]` unguarded, so a
+            # malformed wire identity left a bare `KeyError: 'id'` or
+            # `TypeError: string indices must be integers` escaping a method
+            # documented to "best-effort proceed" — neither is an apcore error,
+            # neither carries a registry code, and neither is what a caller
+            # catching ModuleError around a deserialize is prepared for.
+            # apcore-typescript coerces every field and apcore-rust drops the
+            # identity; both report rather than crash on a builtin.
+            from apcore.errors import InvalidInputError
+
             id_data = data["identity"]
+            if not isinstance(id_data, dict):
+                raise InvalidInputError(
+                    message=f"Context.deserialize: 'identity' must be an object, got {type(id_data).__name__}",
+                )
+            if not isinstance(id_data.get("id"), str) or not id_data["id"]:
+                raise InvalidInputError(
+                    message="Context.deserialize: 'identity.id' is required and must be a non-empty string",
+                )
+            roles = id_data.get("roles") or ()
+            if isinstance(roles, (str, bytes)) or not isinstance(roles, (list, tuple)):
+                raise InvalidInputError(
+                    message="Context.deserialize: 'identity.roles' must be a list of strings",
+                )
+            attrs = id_data.get("attrs") or {}
+            if not isinstance(attrs, dict):
+                raise InvalidInputError(
+                    message="Context.deserialize: 'identity.attrs' must be an object",
+                )
             identity = Identity(
                 id=id_data["id"],
                 type=id_data.get("type", "user"),
-                roles=tuple(id_data.get("roles", ())),
-                attrs=id_data.get("attrs", {}),
+                roles=tuple(roles),
+                attrs=attrs,
             )
 
         return cls(

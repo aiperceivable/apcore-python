@@ -96,7 +96,12 @@ class TestGlobalDeadlineSetOnRootCall:
         assert len(captured_ctx) == 1
         ctx = captured_ctx[0]
         assert ctx.global_deadline is not None
-        remaining = ctx.global_deadline - time.monotonic()
+        # D-99: `global_deadline` is EPOCH SECONDS, so it is measured against
+        # `time.time()`. This assertion read `time.monotonic()` while the
+        # executor wrote a monotonic value; both sides were internally
+        # consistent and the public `Context.create(global_deadline=...)`
+        # parameter was unusable.
+        remaining = ctx.global_deadline - time.time()
         assert 0 < remaining <= 5.0
 
 
