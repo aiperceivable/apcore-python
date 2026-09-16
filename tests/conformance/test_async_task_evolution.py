@@ -146,12 +146,20 @@ async def test_task_store_list_by_status() -> None:
     store = await _seeded_store(case["stored_tasks"])
 
     listed = await store.list(TaskStatus(case["status_filter"]))
-    ids = sorted(info.task_id for info in listed)
+    ids = [info.task_id for info in listed]
     assert len(listed) == expected["count"], (
         f"[{case['id']}] list(status={case['status_filter']!r}) returned {len(listed)} tasks "
         f"({ids}), expected {expected['count']}"
     )
-    assert ids == sorted(expected["task_ids"]), f"[{case['id']}] task_ids mismatch: {ids}"
+    # D-82: insertion order is normative, so compare the lists AS ORDERED.
+    # This used to be `sorted(ids) == sorted(expected["task_ids"])`, which
+    # asserts the order away by construction — the case could not have caught a
+    # reordering no matter how many tasks it seeded, and apcore-rust was the only
+    # driver of the three actually enforcing the decision.
+    assert ids == expected["task_ids"], (
+        f"[{case['id']}] task_ids mismatch: got {ids}, expected {expected['task_ids']} "
+        f"(D-82 — insertion order, not lexicographic and not submitted_at)"
+    )
 
 
 # ---------------------------------------------------------------------------
