@@ -771,6 +771,167 @@ class TestTaskStoreErrorIsDefinedAndExported:
 
 
 # ---------------------------------------------------------------------------
+# D-81 — store errors reach the caller (ALL manager methods)
+# ---------------------------------------------------------------------------
+
+
+class _UnavailableStore:
+    """A network-backed store in an outage: every method raises the canonical type.
+
+    Each flag is independent so a test can fail exactly the store call the
+    method under test makes, and no other.
+    """
+
+    def __init__(self):
+        from apcore.async_task import InMemoryTaskStore
+
+        self._inner = InMemoryTaskStore()
+        self.fail_save = False
+        self.fail_get = False
+        self.fail_list = False
+        self.fail_delete = False
+        self.fail_list_expired = False
+
+    @staticmethod
+    def _down(operation):
+        from apcore.errors import TaskStoreError
+
+        raise TaskStoreError(operation=operation, reason="backing store is unreachable")
+
+    async def save(self, info):
+        if self.fail_save:
+            self._down("save")
+        return await self._inner.save(info)
+
+    async def get(self, task_id):
+        if self.fail_get:
+            self._down("get")
+        return await self._inner.get(task_id)
+
+    async def list(self, status=None):
+        if self.fail_list:
+            self._down("list")
+        return await self._inner.list(status)
+
+    async def delete(self, task_id):
+        if self.fail_delete:
+            self._down("delete")
+        return await self._inner.delete(task_id)
+
+    async def list_expired(self, before_timestamp):
+        if self.fail_list_expired:
+            self._down("list_expired")
+        return await self._inner.list_expired(before_timestamp)
+
+
+class _EchoExecutor:
+    async def call_async(self, module_id, inputs=None, context=None, **kwargs):
+        return {"ok": True}
+
+    def call(self, module_id, inputs=None, context=None, **kwargs):
+        return {"ok": True}
+
+
+class TestStoreErrorsReachTheCaller:
+    """D-81 — a manager that absorbs a store outage reports "no such task".
+
+    apcore-python had one assertion for this, on `get_status`, filed under
+    D-92; six of the seven manager methods the decision names were unpinned.
+    The store raises the CANONICAL ``TaskStoreError`` D-92 defines rather than
+    a stand-in, which is the part that matters: against a plain ``Exception``
+    every assertion here stays green for a manager that swallows
+    ``TaskStoreError`` specifically and re-raises everything else — the exact
+    failure the decision forbids.
+    """
+
+    @staticmethod
+    def _manager(store):
+        from apcore.async_task import AsyncTaskManager
+
+        return AsyncTaskManager(executor=_EchoExecutor(), store=store)
+
+    @staticmethod
+    def _assert_unavailable(what, call):
+        from apcore.errors import TaskStoreError
+
+        try:
+            result = call()
+        except TaskStoreError as err:
+            assert err.code == "TASK_STORE_UNAVAILABLE", f"{what}: {err.code}"
+            return
+        raise AssertionError(f"{what} absorbed a store outage into {result!r}")
+
+    def test_submit_does_not_report_a_task_id_that_never_persisted(self):
+        store = _UnavailableStore()
+        store.fail_save = True
+        manager = self._manager(store)
+        self._assert_unavailable("submit", lambda: asyncio.run(manager.submit("test.echo", {})))
+
+    def test_get_status_does_not_report_not_found(self):
+        store = _UnavailableStore()
+        store.fail_get = True
+        manager = self._manager(store)
+        self._assert_unavailable("get_status", lambda: manager.get_status("any"))
+        self._assert_unavailable("get_status_async", lambda: asyncio.run(manager.get_status_async("any")))
+
+    def test_get_result_does_not_report_not_found(self):
+        store = _UnavailableStore()
+        store.fail_get = True
+        manager = self._manager(store)
+        self._assert_unavailable("get_result", lambda: manager.get_result("any"))
+
+    def test_cancel_does_not_report_success_for_a_save_that_never_landed(self):
+        store = _UnavailableStore()
+        store.fail_get = True
+        manager = self._manager(store)
+        self._assert_unavailable("cancel", lambda: asyncio.run(manager.cancel("any")))
+
+    def test_list_tasks_does_not_report_no_tasks(self):
+        store = _UnavailableStore()
+        store.fail_list = True
+        manager = self._manager(store)
+        self._assert_unavailable("list_tasks", lambda: manager.list_tasks())
+        self._assert_unavailable("list_tasks_async", lambda: asyncio.run(manager.list_tasks_async()))
+
+    def test_cleanup_does_not_report_zero_removals(self):
+        store = _UnavailableStore()
+        store.fail_list = True
+        store.fail_list_expired = True
+        manager = self._manager(store)
+        self._assert_unavailable("cleanup", lambda: asyncio.run(manager.cleanup(0.0)))
+
+    def test_shutdown_does_not_resolve_on_a_cancellation_write_that_failed(self):
+        """The worst of the set: shutdown() asserts its own postcondition.
+
+        Every PENDING/RUNNING task is now CANCELLED — for a record that never
+        landed.
+        """
+        from apcore.async_task import TaskInfo, TaskStatus
+
+        store = _UnavailableStore()
+        manager = self._manager(store)
+        asyncio.run(store.save(TaskInfo("t1", "test.echo", TaskStatus.PENDING, submitted_at=1.0)))
+        # `list` still answers, so shutdown() gets past its own store read and
+        # fails on the CANCELLED write.
+        store.fail_save = True
+        self._assert_unavailable("shutdown", lambda: asyncio.run(manager.shutdown()))
+
+    def test_control_every_method_succeeds_against_a_healthy_store(self):
+        """Without this, "they all raised" is also satisfied by a broken manager."""
+        store = _UnavailableStore()
+        manager = self._manager(store)
+        task_id = asyncio.run(manager.submit("test.echo", {}))
+
+        assert manager.get_status(task_id) is not None
+        assert asyncio.run(manager.get_status_async(task_id)) is not None
+        assert isinstance(manager.list_tasks(), list)
+        assert isinstance(asyncio.run(manager.list_tasks_async()), list)
+        assert isinstance(asyncio.run(manager.cleanup(0.0)), int)
+        assert isinstance(asyncio.run(manager.cancel(task_id)), bool)
+        asyncio.run(manager.shutdown())
+
+
+# ---------------------------------------------------------------------------
 # IDN-2 — `Identity.roles` is an immutable sequence
 # ---------------------------------------------------------------------------
 
