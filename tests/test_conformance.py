@@ -2060,6 +2060,16 @@ def test_contextual_audit(case: dict[str, Any]) -> None:
     for forbidden in expected.get("data_must_not_contain_keys", []):
         assert forbidden not in data, f"[{case['id']}] data must not contain key {forbidden!r}; got={data!r}"
 
+    # D-118 needs key ABSENCE inside the identity snapshot, which
+    # `data_contains` cannot express: it is a SUBSET match, so an extra
+    # `roles: []` passes it, and asserting `roles: []` is exactly what the
+    # diverging SDK emits.
+    for forbidden in expected.get("identity_must_not_contain_keys", []):
+        identity = data.get("identity") or {}
+        assert (
+            forbidden not in identity
+        ), f"[{case['id']}] identity snapshot must not contain key {forbidden!r}; got={identity!r}"
+
 
 # ---------------------------------------------------------------------------
 # Context.create unified-signature contract (PROTOCOL_SPEC §"Contract: Context.create",
