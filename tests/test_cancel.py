@@ -175,3 +175,84 @@ class TestCancellationShortCircuitsOnError:
         with pytest.raises(ExecutionCancelledError):
             await executor.call_async_with_trace("test.cancel", {}, context=ctx)
         assert mw.on_error_called is False
+
+
+# ---------------------------------------------------------------------------
+# D-90 (spec v1.49.0) — `reset()` must not substitute the cancellation handle
+# ---------------------------------------------------------------------------
+
+
+class TestResetKeepsOneHandle:
+    """apcore-python is one of the decision's two AUTHORITIES and had no test.
+
+    The defect the decision is about is apcore-typescript's: ``reset()``
+    installed a fresh ``AbortController``, so a consumer holding the pre-reset
+    ``signal`` was permanently detached and a later ``cancel()`` could not reach
+    it — invisible to cooperative checkers, which read the current handle and
+    report exactly what the caller expects.
+
+    **That failure is not representable here, and these tests cannot catch it.**
+    This SDK's token is a single object with one ``_cancelled`` bool and exposes
+    no separate handle, so "a consumer holding the pre-reset handle" has no
+    referent: every holder holds the token itself and reads whatever the token
+    reads now.
+
+    That limit was measured, not assumed. Adding a handle to ``CancelToken``
+    (a list cell), swapping it in ``reset()`` and routing ``check()`` through it
+    leaves all three tests below GREEN — because the holder is the same object
+    and follows the swap. Catching a detachment would require the test to
+    capture the handle itself, which is private and does not exist.
+
+    What these tests DO pin is the contract D-90 makes normative and the other
+    two SDKs had to be changed or verified against: the cooperative flag is
+    authoritative, a reset clears it for every holder, and every cooperative
+    reader answers from that one flag. If a handle is ever added here, this
+    class is where the detachment test belongs, and it will have to reach for
+    the handle explicitly.
+    """
+
+    def test_a_holder_taken_before_reset_still_observes_a_later_cancel(self) -> None:
+        token = CancelToken()
+        held_by_a_module = token
+
+        token.reset()
+        token.cancel()
+
+        assert held_by_a_module.is_cancelled is True
+        with pytest.raises(ExecutionCancelledError):
+            held_by_a_module.check()
+
+    def test_reset_clears_the_flag_for_every_holder(self) -> None:
+        token = CancelToken()
+        held_by_a_module = token
+
+        token.cancel()
+        assert held_by_a_module.is_cancelled is True
+
+        token.reset()
+        assert held_by_a_module.is_cancelled is False
+        held_by_a_module.check()
+        held_by_a_module.raise_if_cancelled()
+
+    def test_the_cooperative_reads_agree_across_the_whole_cycle(self) -> None:
+        """``is_cancelled``, ``check`` and ``raise_if_cancelled`` are one state.
+
+        D-90 makes the cooperative flag authoritative, which is only meaningful
+        if every cooperative reader answers from it. A reset that cleared the
+        flag while ``check()`` kept raising would satisfy the two tests above.
+        """
+        token = CancelToken()
+
+        for _ in range(3):
+            assert token.is_cancelled is False
+            token.check()
+            token.raise_if_cancelled()
+
+            token.cancel()
+            assert token.is_cancelled is True
+            with pytest.raises(ExecutionCancelledError):
+                token.check()
+            with pytest.raises(ExecutionCancelledError):
+                token.raise_if_cancelled()
+
+            token.reset()
