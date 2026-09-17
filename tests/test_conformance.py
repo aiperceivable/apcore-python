@@ -1918,6 +1918,21 @@ def test_error_fingerprinting(case: dict[str, Any]) -> None:
             top.count == expected["first_entry_count"]
         ), f"[{case['id']}] first_entry_count: got {top.count}, expected {expected['first_entry_count']}"
 
+    if "timestamp_pattern" in expected:
+        # D-120. Asserted on the record the PRODUCER writes, not on a health
+        # summary: a reader that reformats on the way out leaves the stored
+        # record and every other consumer on the old form, which is how one SDK
+        # ended up with two forms inside itself.
+        import re as _re
+
+        pattern = _re.compile(expected["timestamp_pattern"])
+        for entry in all_entries:
+            for field in expected["timestamp_fields"]:
+                value = getattr(entry, field)
+                assert pattern.match(value), (
+                    f"[{case['id']}] {field}: {value!r} does not match " f"{expected['timestamp_pattern']}"
+                )
+
 
 # ---------------------------------------------------------------------------
 # 25. Contextual Audit (Issue #45.2 — caller_id/identity in audit events)

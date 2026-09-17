@@ -17,6 +17,25 @@ from apcore.observability.storage import StorageBackend
 from apcore.observability.store import ObservabilityStore
 
 
+def utc_millis_z() -> str:
+    """Now, as ``2026-09-16T10:30:00.123Z`` (D-120).
+
+    Exactly three fractional digits and a ``Z`` suffix. ``datetime.isoformat()``
+    gives microseconds and ``+00:00``, so a consumer diffing two SDKs' error
+    records saw three precisions behind two suffixes. Specifying the suffix
+    alone would have left the precisions diverging behind one ``Z`` — the same
+    divergence, harder to see — which is why the decision fixes both.
+
+    Produced HERE, at the writer, rather than at a reader: a health summary that
+    reformats on the way out leaves every other consumer of the record, and the
+    storage backend, on the old form.
+    """
+    # ONE reading. Two `datetime.now()` calls can straddle a millisecond
+    # boundary and splice the seconds from one with the fraction of another.
+    now = datetime.now(timezone.utc)
+    return f"{now.strftime('%Y-%m-%dT%H:%M:%S')}.{now.microsecond // 1000:03d}Z"
+
+
 def normalize_message(msg: str) -> str:
     """Replace ephemeral values with placeholders before fingerprint hashing.
 
@@ -162,6 +181,16 @@ class ErrorHistory:
         self._storage: StorageBackend | None = storage
         self._lock = threading.Lock()
         self._fp_index: dict[str, ErrorEntry] = {}
+        # Insertion order per fingerprint, for `get_all`'s tie-break.
+        #
+        # D-120 cut the recorded precision to milliseconds, and sorting on
+        # the recorded string alone then leaves same-millisecond entries in
+        # an order a stable sort preserves rather than reverses — three
+        # errors logged in one millisecond came back oldest-first. The
+        # WIRE precision and the ORDERING key are different concerns, and
+        # this was fragile before the change too: microsecond stamps are
+        # not guaranteed distinct either.
+        self._order: dict[str, int] = {}
         self._module_index: dict[str, deque[ErrorEntry]] = {}
         # min-heap: (last_occurred_str, seq, entry)
         self._heap: list[tuple[str, int, ErrorEntry]] = []
@@ -183,7 +212,7 @@ class ErrorHistory:
         stack frame is captured into ``ErrorEntry.top_frame`` purely as a
         local diagnostic and does NOT influence dedup.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_millis_z()
         fp = compute_error_fingerprint(error, module_id)
         with self._lock:
             existing = self._fp_index.get(fp)
@@ -191,6 +220,7 @@ class ErrorHistory:
                 existing.count += 1
                 existing.last_occurred = now
                 self._seq += 1
+                self._order[fp] = self._seq
                 heapq.heappush(self._heap, (now, self._seq, existing))
                 entry_to_notify = existing
             else:
@@ -209,6 +239,7 @@ class ErrorHistory:
                 self._fp_index[fp] = entry
                 self._module_index.setdefault(module_id, deque()).append(entry)
                 self._seq += 1
+                self._order[fp] = self._seq
                 heapq.heappush(self._heap, (now, self._seq, entry))
                 self._evict_module(module_id)
                 self._evict_total()
@@ -245,7 +276,7 @@ class ErrorHistory:
         """Return all entries sorted by last_occurred, newest first."""
         with self._lock:
             all_entries = list(self._fp_index.values())
-        all_entries.sort(key=lambda e: e.last_occurred, reverse=True)
+        all_entries.sort(key=lambda e: (e.last_occurred, self._order.get(e.fingerprint, 0)), reverse=True)
         if limit is not None:
             all_entries = all_entries[:limit]
         return all_entries
@@ -258,6 +289,7 @@ class ErrorHistory:
         while len(module_entries) > self._max_entries_per_module:
             evicted = module_entries.popleft()
             self._fp_index.pop(evicted.fingerprint, None)
+            self._order.pop(evicted.fingerprint, None)
 
     def _evict_total(self) -> None:
         """Evict the oldest entry (by last_occurred) until total is within limit."""
@@ -271,6 +303,7 @@ class ErrorHistory:
             # Skip stale heap entries: fingerprint evicted already, or refreshed by dedup.
             if entry.fingerprint in self._fp_index and entry.last_occurred == ts:
                 self._fp_index.pop(entry.fingerprint, None)
+                self._order.pop(entry.fingerprint, None)
                 module_entries = self._module_index.get(entry.module_id)
                 if module_entries is not None:
                     try:
