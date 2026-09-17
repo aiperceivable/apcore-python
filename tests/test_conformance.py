@@ -37,6 +37,7 @@ from apcore.config import (
 )
 from apcore.context import Context, Identity
 from apcore.errors import (
+    VersionConstraintError,
     CallDepthExceededError,
     CallFrequencyExceededError,
     CircularCallError,
@@ -1500,6 +1501,9 @@ _dep_version_data = _load("dependency_version_constraints")
 #: the fixture actually ran.
 _DEPENDENCY_ERROR_MAP: dict[str, type[Exception]] = {
     "DEPENDENCY_VERSION_MISMATCH": DependencyVersionMismatchError,
+    # D-85: a malformed constraint is a DIFFERENT failure from a version
+    # mismatch, and the fixture distinguishes them by wire code.
+    "VERSION_CONSTRAINT_INVALID": VersionConstraintError,
 }
 
 
@@ -1557,7 +1561,14 @@ def test_dependency_version_constraints(case: dict[str, Any]) -> None:
         # actually raised — `required` and `actual` in particular, because they
         # are what distinguishes "the checker rejected the right pair" from "the
         # checker rejected something".
-        for field in ("module_id", "dependency_id", "required", "actual"):
+        # Which detail fields matter depends on WHAT was wrong. A version
+        # mismatch is about a pair (required vs actual); a malformed constraint
+        # is about the constraint alone, and has no meaningful "actual" to
+        # compare against — asserting the mismatch fields there would force the
+        # SDKs to fabricate them. Driven off the fixture so a case declaring a
+        # field always has it checked and a case omitting one never invents it.
+        for field in [f for f in ("module_id", "dependency_id", "required", "actual", "constraint")
+                      if f in expected]:
             assert err.details.get(field) == expected[field], (
                 f"[dependency_version_constraints :: {case['id']}] error {field}: "
                 f"{err.details.get(field)!r} != {expected[field]!r}"
