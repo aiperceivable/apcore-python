@@ -1166,6 +1166,16 @@ def test_annotations_extra_round_trip(case: dict[str, Any]) -> None:
                 f"expected {case['expected_deserialized_extra']!r}"
             )
 
+        # D-115: the malformed-value cases assert that the REST survives, which
+        # `expected_deserialized_extra` alone cannot say — an SDK that rejected
+        # the whole descriptor never reaches the assertion, and one that dropped
+        # everything would satisfy it.
+        for field, want in case.get("expected_survivors", {}).items():
+            assert getattr(ann, field) == want, (
+                f"[annotations_extra_round_trip :: {case_id}] {field}: "
+                f"got {getattr(ann, field)!r}, expected {want!r}"
+            )
+
         if "expected_reserialized" in case:
             serialized = _dataclasses_asdict(ann)
             # Normalize cache_key_fields from tuple to list for comparison

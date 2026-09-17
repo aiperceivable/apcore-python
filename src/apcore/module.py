@@ -133,10 +133,33 @@ class ModuleAnnotations:
         # Convert list to tuple for cache_key_fields
         if isinstance(self.cache_key_fields, list):
             object.__setattr__(self, "cache_key_fields", tuple(self.cache_key_fields))
-        # Shallow copy extra to detach from caller's mutable dict
-        object.__setattr__(self, "extra", dict(self.extra))
+        # D-115: a malformed value is TOLERATED and dropped, the rest survives,
+        # and it warns. `extra` is declared an object; a string there is neither
+        # an object nor a reason to discard the module.
+        #
+        # `from_dict` already coerced a non-dict `extra` to `{}` — and
+        # `merge_annotations` builds this dataclass directly, where
+        # `dict("oops")` raised a bare ValueError that escapes every
+        # `except ModuleError` handler and took the whole registration with it.
+        # The tolerance belongs HERE, the one point every construction path goes
+        # through, rather than in one door of two.
+        if not isinstance(self.extra, dict):
+            _logger.warning(
+                "ModuleAnnotations.extra must be an object, got %s; dropping it (D-115)",
+                type(self.extra).__name__,
+            )
+            object.__setattr__(self, "extra", {})
+        else:
+            # Shallow copy to detach from the caller's mutable dict.
+            object.__setattr__(self, "extra", dict(self.extra))
         # Validate cache_ttl >= 0
-        if self.cache_ttl < 0:
+        if not isinstance(self.cache_ttl, int) or isinstance(self.cache_ttl, bool):
+            _logger.warning(
+                "cache_ttl must be an integer, got %s; dropping it (D-115)",
+                type(self.cache_ttl).__name__,
+            )
+            object.__setattr__(self, "cache_ttl", 0)
+        elif self.cache_ttl < 0:
             _logger.warning("cache_ttl %d is negative, clamping to 0", self.cache_ttl)
             object.__setattr__(self, "cache_ttl", 0)
 

@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A malformed annotation value no longer takes the whole registration with it (spec v1.51.0,
+  D-115).** `ModuleAnnotations.from_dict` coerced a non-object `extra` to `{}` — and the
+  registration path does not use it. `merge_annotations` builds the dataclass directly, where
+  `__post_init__`'s `dict(self.extra)` raised a bare `ValueError`: not a `ModuleError`, so it
+  escaped every `except ModuleError` handler, and it rejected a module over one malformed
+  annotation. The tolerance now lives in `__post_init__`, the one point every construction path goes
+  through, rather than in one door of two. `cache_ttl` gains the same treatment for a non-integer
+  value; the existing negative-clamp is unchanged.
+
 - **`Executor.remove()` clears the middleware duplicate-identity entry (spec v1.51.0, D-114).**
   The registry records the FIRST registration so a later duplicate can be traced back to it, and
   `remove` left the entry behind — so `use` / `remove` / `use`, a legitimate swap, warned about a
