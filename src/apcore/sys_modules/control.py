@@ -189,7 +189,10 @@ class UpdateConfigModule:
     # (False) instead. Two happened to match; `toggle_feature` did not. Stated
     # explicitly so the value is the spec's rather than the dataclass's.
     # "repeated calls with different values produce different state".
-    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=False)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=False, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -365,7 +368,10 @@ class ReloadModule:
     description = "Hot-reload a module by safe unregister and re-discover"
     # SYS-19: "each call unregisters and re-registers; invoking twice reloads
     # twice" (system-modules.md).
-    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=False)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=False, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -745,7 +751,10 @@ class ToggleFeatureModule:
     # SYS-19: "toggling to the current state produces the same outcome"
     # (system-modules.md) — the one of the three whose declared value differs
     # from the dataclass default, and the one that was therefore wrong.
-    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(requires_approval=True, destructive=False, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {

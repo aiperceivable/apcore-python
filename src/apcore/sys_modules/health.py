@@ -53,7 +53,10 @@ class HealthSummaryModule:
     """Aggregated health overview of all registered modules."""
 
     description = "Aggregated health overview of all registered modules"
-    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(readonly=True, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -180,7 +183,10 @@ class HealthModule:
     """Detailed health information for a single module."""
 
     description = "Detailed health information for a single module"
-    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(readonly=True, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {

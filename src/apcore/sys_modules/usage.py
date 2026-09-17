@@ -64,7 +64,10 @@ class UsageSummaryModule:
     """Aggregated usage overview of all registered modules with trend detection."""
 
     description = "All modules usage overview with trend detection"
-    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(readonly=True, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -233,7 +236,10 @@ class UsageModule:
     """Detailed usage statistics for a single module with per-caller breakdown."""
 
     description = "Detailed usage statistics for a single module"
-    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(readonly=True, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {

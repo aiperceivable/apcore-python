@@ -34,9 +34,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from apcore import APCore
 from apcore.config import Config
 from apcore.errors import ModuleReloadConflictError, SysModuleRegistrationError
 from apcore.events.emitter import EventEmitter
+from apcore.observability.metrics import MetricsCollector
 from apcore.observability.usage import UsageCollector
 from apcore.registry.registry import Registry
 from apcore.sys_modules.audit import InMemoryAuditStore
@@ -46,6 +48,8 @@ from apcore.sys_modules.control import (
     ToggleState,
     UpdateConfigModule,
 )
+from apcore.sys_modules.health import HealthSummaryModule
+from apcore.sys_modules.manifest import ManifestFullModule
 from apcore.sys_modules.registration import register_sys_modules
 
 from conformance.canonical_fixtures import case_ids, load_fixture
@@ -1072,6 +1076,9 @@ class TestFixtureCoverage:
         # language=rust — asserted here only as a documented cross-language note.
         "rust_register_returns_result": "TestRustRegisterReturnsResult",
         "reload_order_is_topological_not_alphabetical": ("TestReloadOrderIsTopologicalNotAlphabetical"),
+        "manifest_full_project_name_defaults_to_apcore": ("TestProjectNameAndOpenWorldDeclarations"),
+        "health_summary_project_name_agrees_with_manifest_full": ("TestProjectNameAndOpenWorldDeclarations"),
+        "system_modules_declare_open_world_false": ("TestProjectNameAndOpenWorldDeclarations"),
     }
 
     def test_every_canonical_case_is_claimed(self) -> None:
@@ -1142,3 +1149,70 @@ class TestBulkReloadCarriesCallerIdentity:
         m.output_schema = {"type": "object", "properties": {}}
         m.version = "1.0.0"
         return m
+
+
+class TestProjectNameAndOpenWorldDeclarations:
+    """D-110 and D-119, driven from `system_modules_hardening.json`.
+
+    Both are v1.51.0 policy decisions: the spec was silent and each SDK had
+    answered reasonably. Neither is a bug report against any one implementation,
+    which is why the cases are written from the fixture rather than from what any
+    SDK happens to do.
+    """
+
+    def test_manifest_full_project_name_defaults_to_apcore(self) -> None:
+        case = _CASES["manifest_full_project_name_defaults_to_apcore"]
+        module = ManifestFullModule(Registry(), Config({}))
+
+        result = module.execute(dict(case["action"]["input"]), _make_context())
+
+        assert result["project_name"] == case["expected"]["project_name"], (
+            f"[{case['id']}] project_name: got {result['project_name']!r}, "
+            f"expected {case['expected']['project_name']!r}"
+        )
+
+    def test_health_summary_project_name_agrees_with_manifest_full(self) -> None:
+        # The pairing is the decision. `manifest.full` alone could be satisfied
+        # while the two system modules still disagreed, which is the state D-110
+        # exists to remove.
+        case = _CASES["health_summary_project_name_agrees_with_manifest_full"]
+        registry, config = Registry(), Config({})
+
+        summary = HealthSummaryModule(registry, config, MetricsCollector()).execute({}, _make_context())
+        manifest = ManifestFullModule(registry, config).execute({}, _make_context())
+
+        assert summary["project"]["name"] == case["expected"]["project_name"]
+        assert summary["project"]["name"] == manifest["project_name"], (
+            f"[{case['id']}] health.summary and manifest.full disagree: "
+            f"{summary['project']['name']!r} vs {manifest['project_name']!r}"
+        )
+
+    def test_system_modules_declare_open_world_false(self) -> None:
+        case = _CASES["system_modules_declare_open_world_false"]
+        client = APCore(
+            config=Config(
+                {
+                    "version": "1.0",
+                    "project": {"name": "p"},
+                    "sys_modules": {"enabled": True, "control": {"enabled": True}},
+                }
+            )
+        )
+        system_ids = [m for m in client.registry.module_ids if m.startswith("system.")]
+
+        assert (
+            len(system_ids) >= case["expected"]["at_least"]
+        ), f"[{case['id']}] no system modules registered; the case would pass vacuously"
+        # Read the DECLARED annotation, not an effective value computed with
+        # defaults applied: the language default is True, which means the
+        # opposite of the intended value, and inheriting it is how the
+        # divergence arose.
+        # get_definition().annotations, not a class attribute: that is the
+        # surface system.manifest.* publishes, so it is what a consumer sees,
+        # and it is the one shape all three SDKs share.
+        wrong = {
+            mid: getattr(getattr(client.registry.get_definition(mid), "annotations", None), "open_world", None)
+            for mid in system_ids
+        }
+        wrong = {m: v for m, v in wrong.items() if v is not case["expected"]["every_value"]}
+        assert not wrong, f"[{case['id']}] these system modules do not declare open_world=False: {wrong}"

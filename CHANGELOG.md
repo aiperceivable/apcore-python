@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`system.manifest.full` reports `project_name: "apcore"` when unconfigured, and every `system.*`
+  module declares `open_world: false` (spec v1.51.0, D-110 / D-119).** `manifest.full` returned
+  `""` while `system.health.summary` already returned `"apcore"` in the same process — two system
+  modules disagreeing about the same fact, which is what D-110 was settled on rather than an SDK
+  majority. And all nine system modules inherited `ModuleAnnotations`' `open_world=True` default,
+  which means the OPPOSITE of the intended value: no system module reaches an external system.
+  Both are now written out explicitly; relying on a default that means the opposite is how the
+  divergence arose.
+
 - **SECURITY: a governance requirement declared in a metadata document gated nothing (spec v1.54.0,
   §7.4, D-125).** `merge_module_metadata` folds a `*.binding.yaml` / `metadata=` declaration into the
   descriptor with §4.13's YAML > code precedence — a second place an operator declares governance. Every governance reader consulted the live module instance alone, so a

@@ -67,7 +67,10 @@ class ManifestModule:
     """Return the full manifest (metadata, schemas, annotations, source path) for a single registered module."""
 
     description = "Full manifest for a registered module including source path"
-    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(readonly=True, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -171,7 +174,10 @@ class ManifestFullModule:
     """Return a complete system manifest with all registered modules, supporting filtering."""
 
     description = "Complete system manifest with filtering by prefix and tags"
-    annotations = ModuleAnnotations(readonly=True, idempotent=True)
+    # D-119: written out rather than inherited — the ModuleAnnotations default is
+    # `open_world=True`, which means the opposite of the intended value, and relying
+    # on it is how the divergence arose. No system module reaches an external system.
+    annotations = ModuleAnnotations(readonly=True, idempotent=True, open_world=False)
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -291,11 +297,18 @@ class ManifestFullModule:
             "metadata": metadata,
         }
 
+    #: D-110. `system.health.summary` already reported ``"apcore"`` here while
+    #: this module reported ``""``, so the two system modules disagreed about the
+    #: same fact in the same process. The decision was taken on that internal
+    #: consistency rather than an SDK majority — ``""`` would have meant changing
+    #: two system modules per SDK and leaving the contradiction in place.
+    DEFAULT_PROJECT_NAME = "apcore"
+
     def _get_project_name(self) -> str:
-        """Get project name from config or return default."""
+        """Get project name from config, or the D-110 default."""
         if self._config is None:
-            return ""
-        return self._config.get("project.name", "") or ""
+            return self.DEFAULT_PROJECT_NAME
+        return self._config.get("project.name", "") or self.DEFAULT_PROJECT_NAME
 
     def _get_dependencies(self, module_id: str) -> list[dict[str, Any]]:
         """Retrieve dependencies from registry metadata."""
