@@ -37,6 +37,7 @@ from apcore.config import (
 )
 from apcore.context import Context, Identity
 from apcore.errors import (
+    ModuleLoadError,
     VersionConstraintError,
     CallDepthExceededError,
     CallFrequencyExceededError,
@@ -1504,6 +1505,8 @@ _DEPENDENCY_ERROR_MAP: dict[str, type[Exception]] = {
     # D-85: a malformed constraint is a DIFFERENT failure from a version
     # mismatch, and the fixture distinguishes them by wire code.
     "VERSION_CONSTRAINT_INVALID": VersionConstraintError,
+    # D-79: a stall with no cycle is a LOAD error, not a circular dependency.
+    "MODULE_LOAD_ERROR": ModuleLoadError,
 }
 
 
@@ -1554,7 +1557,14 @@ def test_dependency_version_constraints(case: dict[str, Any]) -> None:
         error_code = expected["error_code"]
         exc_class = _exc_class_for("dependency_version_constraints", case["id"], error_code, _DEPENDENCY_ERROR_MAP)
         with pytest.raises(exc_class) as exc_info:
-            resolve_dependencies(modules_input, module_versions=module_versions)
+            resolve_dependencies(
+                modules_input,
+                # D-79 needs a dependency that is a KNOWN id and absent from the
+                # batch — the only way to stall Kahn's algorithm without a cycle.
+                # Cases that do not declare  keep the default.
+                set(case["known_ids"]) if "known_ids" in case else None,
+                module_versions=module_versions,
+            )
         err = exc_info.value
         _assert_wire_code(err, error_code, "dependency_version_constraints", case["id"])
         # Every field the fixture declares is compared against the error the SDK
@@ -1567,8 +1577,7 @@ def test_dependency_version_constraints(case: dict[str, Any]) -> None:
         # compare against — asserting the mismatch fields there would force the
         # SDKs to fabricate them. Driven off the fixture so a case declaring a
         # field always has it checked and a case omitting one never invents it.
-        for field in [f for f in ("module_id", "dependency_id", "required", "actual", "constraint")
-                      if f in expected]:
+        for field in [f for f in ("module_id", "dependency_id", "required", "actual", "constraint") if f in expected]:
             assert err.details.get(field) == expected[field], (
                 f"[dependency_version_constraints :: {case['id']}] error {field}: "
                 f"{err.details.get(field)!r} != {expected[field]!r}"
