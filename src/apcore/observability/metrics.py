@@ -27,6 +27,7 @@ def estimate_p99_latency_ms(
     labels_key: tuple[tuple[str, str], ...],
     buckets: dict[tuple[str, tuple[tuple[str, str], ...], float], int],
     total_count: int,
+    bucket_ladder: list[float] | None = None,
 ) -> float:
     """Estimate p99 latency in milliseconds from histogram buckets.
 
@@ -49,17 +50,30 @@ def estimate_p99_latency_ms(
 
     target = total_count * 0.99
 
-    # Collect finite bucket boundaries and sort them
-    bucket_bounds: list[float] = sorted(
-        b for (name, lk, b) in buckets if name == hist_name and lk == labels_key and b != float("inf")
-    )
+    # D-106: the boundaries come from the CONFIGURED LADDER,
+    # not from the keys present in ``buckets``.
+    #
+    # This function used to collect its finite boundaries out of the recorded
+    # map. ``observe`` only records the buckets an observation lands in, so when
+    # every observation overflows the largest finite bound the map holds nothing
+    # but the ``inf`` key — the list is empty, the "fall back to the last finite
+    # boundary" branch has nothing to fall back to, and the estimate was 0.0.
+    #
+    # That is exactly what D-106 forbids: 0.0 reports the FASTEST possible
+    # latency for the SLOWEST modules, so a latency alert can never fire for a
+    # module slower than the top bucket. The decision named this SDK as one of
+    # its two authorities; apcore-typescript iterates its collector's ladder
+    # (``metrics-utils.ts``) and apcore-rust emits the whole ladder in its
+    # snapshot, so both were right and the attribution was not.
+    ladder = bucket_ladder if bucket_ladder is not None else MetricsCollector.DEFAULT_BUCKETS
+    bucket_bounds: list[float] = sorted(b for b in ladder if b != float("inf"))
 
     for bound in bucket_bounds:
         count = buckets.get((hist_name, labels_key, bound), 0)
         if count >= target:
             return bound * 1000.0
 
-    # Fall back to last finite bucket or 0
+    # Every observation overflowed the largest finite bound.
     if bucket_bounds:
         return bucket_bounds[-1] * 1000.0
     return 0.0
@@ -129,7 +143,7 @@ def module_latency_ms(metrics: MetricsCollector, module_id: str) -> tuple[float,
 
     total_sum: float = sums.get((METRIC_DURATION_SECONDS, labels_key), 0.0)
     avg_ms = (total_sum / total_count * 1000.0) if total_count > 0 else 0.0
-    p99_ms = estimate_p99_latency_ms(METRIC_DURATION_SECONDS, labels_key, buckets, total_count)
+    p99_ms = estimate_p99_latency_ms(METRIC_DURATION_SECONDS, labels_key, buckets, total_count, metrics._buckets)
     return avg_ms, p99_ms
 
 
