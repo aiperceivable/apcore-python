@@ -30,6 +30,7 @@ from apcore.acl_handlers import (
     _NotHandlerAsync,
     _OrHandler,
     _OrHandlerAsync,
+    _projection_var,
     _RolesHandler,
     join_condition_path,
     validate_arguments_condition,
@@ -66,37 +67,9 @@ _handler_error_var: contextvars.ContextVar[dict[str, str] | None] = contextvars.
     "_apcore_acl_handler_error", default=None
 )
 
-
-# CTX-2 — the governance projection of the call CURRENTLY being checked.
-#
-# §6.1.8 rule 4 leaves the delivery mechanism idiomatic, but rules 1 and 3 make
-# the projection a property of the call, not of an object that outlives it. It
-# used to be written onto the execution Context at Step 3 and left there, so a
-# module or middleware holding that Context and calling `check_access` again
-# later evaluated an `arguments` condition against the PREVIOUS call's argument
-# key set. apcore-typescript and apcore-rust scope it to one ACL evaluation.
-#
-# Set for the duration of one check_access / async_check_access call and reset
-# in `finally`, exactly like `_handler_error_var` above. Unlike that one this
-# variable is re-``set`` rather than mutated in place, because it is only ever
-# READ downstream — the handler does not write back through it.
-_projection_var: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
-    "_apcore_acl_governance_projection", default=None
-)
-
-
-def current_governance_projection(context: Any = None) -> Any | None:
-    """The projection in force for the ACL evaluation now running, or None.
-
-    Falls back to ``context.governance_projection`` so that an ACL constructed
-    by a host that carries the projection on its own Context — the other shape
-    §6.1.8 rule 4 blesses — keeps working.
-    """
-    projection = _projection_var.get()
-    if projection is not None:
-        return projection
-    return getattr(context, "governance_projection", None)
-
+# `_projection_var` and `current_governance_projection` live in apcore.acl_handlers
+# now — next to `_ArgumentsHandler`, their only reader — so that
+# apcore.acl -> apcore.acl_handlers stays a one-way dependency (imported above).
 
 # Condition paths for the rule's pattern fields (PROTOCOL_SPEC §6.1.4).
 _CALLERS_PATH = "callers"

@@ -14,6 +14,7 @@ key.
 
 from __future__ import annotations
 
+import contextvars
 from enum import Enum
 from typing import Any, Awaitable, Callable, ClassVar, Mapping, Protocol, Union, runtime_checkable
 
@@ -25,6 +26,37 @@ __all__ = [
     "AsyncACLConditionHandler",
     "ACLConditionHandler",
 ]
+
+
+# CTX-2 — the governance projection of the call CURRENTLY being checked.
+#
+# §6.1.8 rule 4 leaves the delivery mechanism idiomatic, but rules 1 and 3 make
+# the projection a property of the call, not of an object that outlives it. It
+# used to be written onto the execution Context at Step 3 and left there, so a
+# module or middleware holding that Context and calling `check_access` again
+# later evaluated an `arguments` condition against the PREVIOUS call's argument
+# key set. apcore-typescript and apcore-rust scope it to one ACL evaluation.
+#
+# Set for the duration of one check_access / async_check_access call and reset
+# in `finally` by apcore.acl.ACL (the only writer); this module only reads it.
+# Lives here, next to `_ArgumentsHandler` which is its only reader, so that
+# apcore.acl -> apcore.acl_handlers stays a one-way dependency.
+_projection_var: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "_apcore_acl_governance_projection", default=None
+)
+
+
+def current_governance_projection(context: Any = None) -> Any | None:
+    """The projection in force for the ACL evaluation now running, or None.
+
+    Falls back to ``context.governance_projection`` so that an ACL constructed
+    by a host that carries the projection on its own Context — the other shape
+    §6.1.8 rule 4 blesses — keeps working.
+    """
+    projection = _projection_var.get()
+    if projection is not None:
+        return projection
+    return getattr(context, "governance_projection", None)
 
 
 class ConditionOutcome(Enum):
@@ -276,8 +308,6 @@ class _ArgumentsHandler:
         # a property of the call being checked; `current_governance_projection`
         # still falls back to the Context field for a host that carries it
         # there, the other shape rule 4 blesses.
-        from apcore.acl import current_governance_projection
-
         projection = current_governance_projection(context)
         if projection is None:
             return ConditionOutcome.UNEVALUABLE
