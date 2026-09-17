@@ -159,6 +159,15 @@ class ExtensionManager:
     def unregister(self, point_name: str, extension: Any) -> bool:
         """Remove a specific extension from an extension point.
 
+        Removal is by IDENTITY (``is``), not equality (D-128). ``list.remove``
+        compares with ``==``, so an extension type that defines ``__eq__`` —
+        any dataclass middleware, for one — made this remove the FIRST equal
+        registration rather than the object the caller handed back: a host
+        removing the second of two identically-configured middlewares kept the
+        one it wanted gone and lost the one it wanted kept, silently.
+        apcore-typescript compares with ``===`` and apcore-rust by pointer
+        address; this contract's own Inputs row says "identity comparison".
+
         Args:
             point_name: Name of the extension point.
             extension: The extension instance to remove.
@@ -173,11 +182,11 @@ class ExtensionManager:
             raise KeyError(f"Unknown extension point: '{point_name}'")
 
         exts = self._extensions[point_name]
-        try:
-            exts.remove(extension)
-            return True
-        except ValueError:
-            return False
+        for index, candidate in enumerate(exts):
+            if candidate is extension:
+                del exts[index]
+                return True
+        return False
 
     def list_points(self) -> list[ExtensionPoint]:
         """Return all registered extension points."""

@@ -353,6 +353,10 @@ def test_extension_system_unregister_removes_extension() -> None:
 
     Spec ### Inputs: removes the exact extension object (identity). After
     unregister the extension is no longer returned by get_all().
+
+    ``StubMiddleware`` defines no ``__eq__``, so ``==`` on these instances IS
+    identity and this scenario cannot tell the two apart. See
+    ``test_..._removes_by_identity_not_equality`` below for the one that can.
     """
     mgr = ExtensionManager()
     mw1 = StubMiddleware()
@@ -360,7 +364,82 @@ def test_extension_system_unregister_removes_extension() -> None:
     mgr.register("middleware", mw1)
     mgr.register("middleware", mw2)
     mgr.unregister("middleware", mw1)
-    assert mgr.get_all("middleware") == [mw2]
+    survivors = mgr.get_all("middleware")
+    assert len(survivors) == 1
+    assert survivors[0] is mw2
+
+
+def test_extension_system_unregister_removes_by_identity_not_equality() -> None:
+    """D-128 — removal is by ``is``, not ``==``.
+
+    This used ``list.remove``, which compares with ``__eq__``. Any extension
+    type that defines equality — a dataclass middleware, for one — made
+    ``unregister(b)`` delete ``a``: a host removing the second of two
+    identically-configured middlewares kept the one it wanted gone and lost the
+    one it wanted kept, and nothing said so. apcore-typescript compares with
+    ``===`` and apcore-rust by pointer address; this contract's own Inputs row
+    says "identity comparison".
+
+    The two registrations MUST be ``==`` and MUST NOT be ``is``, or the test
+    cannot distinguish the two semantics — which is exactly why the test above
+    could not.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class EqualMiddleware(Middleware):
+        label: str = "same"
+
+        async def before(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def after(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    first = EqualMiddleware()
+    second = EqualMiddleware()
+    assert first == second, "precondition: the two registrations compare equal"
+    assert first is not second, "precondition: they are distinct objects"
+
+    mgr = ExtensionManager()
+    mgr.register("middleware", first)
+    mgr.register("middleware", second)
+
+    assert mgr.unregister("middleware", second) is True
+    survivors = mgr.get_all("middleware")
+    assert len(survivors) == 1
+    assert survivors[0] is first, "unregister removed the wrong object"
+
+
+def test_extension_system_unregister_an_equal_but_unregistered_object_is_a_no_op() -> None:
+    """Control for D-128: equality alone must not authorise a removal.
+
+    Without this, "removal is by identity" would also be satisfied by an
+    implementation that removed the LAST equal entry rather than the first —
+    still wrong, and still passing the test above by accident when only one
+    registration exists.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class EqualMiddleware(Middleware):
+        label: str = "same"
+
+        async def before(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def after(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    registered = EqualMiddleware()
+    never_registered = EqualMiddleware()
+    assert registered == never_registered
+
+    mgr = ExtensionManager()
+    mgr.register("middleware", registered)
+
+    assert mgr.unregister("middleware", never_registered) is False
+    assert mgr.get_all("middleware")[0] is registered
 
 
 def test_extension_system_unregister_missing_is_silent_no_op() -> None:
