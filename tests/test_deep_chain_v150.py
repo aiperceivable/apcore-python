@@ -136,7 +136,8 @@ class TestClientPassesConfigToRegistry:
 
 
 # ---------------------------------------------------------------------------
-# D-99 / D-101 / D-102 — `global_deadline` clock, lifetime and recomputation
+# D-99 / D-100 / D-101 / D-102 — `global_deadline` clock, storage, lifetime
+# and recomputation
 # ---------------------------------------------------------------------------
 
 
@@ -214,6 +215,38 @@ class TestGlobalDeadline:
 
         with pytest.raises(ModuleTimeoutError):
             asyncio.run(executor.call_async("slow.op", {}, ctx))
+
+    def test_caller_supplied_deadline_wins_over_the_config_default(self):
+        """D-100 — the first-class ``global_deadline`` field IS the storage.
+
+        Goes RED if the set site stops guarding on ``global_deadline is None``
+        (so the config default overwrites the caller's value), or if the
+        budget is read from anywhere other than the field the caller wrote.
+        """
+        from apcore.context import Context
+        from apcore.errors import ModuleTimeoutError
+
+        registry = Registry()
+        registry.register("slow.op", _SlowModule())
+        # A 10 s config budget would let the 0.5 s module finish easily.
+        executor = Executor(registry=registry, config=Config({"executor": {"global_timeout": 10000}}))
+
+        ctx = Context.create(global_deadline=time.time() + 0.05)
+
+        with pytest.raises(ModuleTimeoutError):
+            asyncio.run(executor.call_async("slow.op", {}, ctx))
+
+    def test_control_the_same_module_completes_under_the_config_default(self):
+        """Control for D-100 — without a caller deadline the 10 s budget applies.
+
+        Without this, a blanket "everything times out" regression would pass
+        the assertion above for the wrong reason.
+        """
+        registry = Registry()
+        registry.register("slow.op", _SlowModule())
+        executor = Executor(registry=registry, config=Config({"executor": {"global_timeout": 10000}}))
+
+        assert asyncio.run(executor.call_async("slow.op", {})) == {"ok": True}
 
 
 # ---------------------------------------------------------------------------
