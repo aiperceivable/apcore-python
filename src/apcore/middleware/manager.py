@@ -58,6 +58,11 @@ class MiddlewareManager:
         self._lock = threading.Lock()
         # identity → (first_call_site, allow_duplicate)
         self._identity_registry: dict[str, str] = {}
+        #: id(middleware) -> the identity string `use()` computed for it, so
+        #: `remove()` can clear the right entry (D-114). The identity depends on
+        #: an optional `identity_key` override that is a parameter of `use` and
+        #: is not otherwise recoverable from the instance.
+        self._identity_of: dict[int, str] = {}
 
     def use(
         self,
@@ -95,6 +100,7 @@ class MiddlewareManager:
                 )
             if first_site is None:
                 self._identity_registry[identity] = site
+            self._identity_of[id(middleware)] = identity
 
         self.add(middleware)
 
@@ -122,11 +128,30 @@ class MiddlewareManager:
             self._middlewares.insert(insert_idx, middleware)
 
     def remove(self, middleware: Middleware) -> bool:
-        """Remove a middleware by identity (is). Returns True if found and removed."""
+        """Remove a middleware by identity (is). Returns True if found and removed.
+
+        Clears the duplicate-identity entry too (D-114). The registry records the
+        FIRST registration so a later duplicate can be traced back to it; leaving
+        the entry behind corrupts that record in both directions. It names a
+        registration that no longer exists, and ``use`` / ``remove`` / ``use`` —
+        a legitimate swap — warns about a duplicate that is not one, which is how
+        an operator learns to ignore the warning that will next fire for a real
+        one.
+
+        Only cleared when no OTHER registration still holds the same identity:
+        duplicate registration warns but succeeds, so two instances sharing an
+        identity is a reachable state, and removing one of them must not make the
+        survivor invisible to duplicate detection.
+        """
         with self._lock:
             for i, entry in enumerate(self._middlewares):
                 if entry is middleware:
                     self._middlewares.pop(i)
+                    identity = self._identity_of.pop(id(entry), None)
+                    if identity is not None and not any(
+                        self._identity_of.get(id(other)) == identity for other in self._middlewares
+                    ):
+                        self._identity_registry.pop(identity, None)
                     return True
             return False
 

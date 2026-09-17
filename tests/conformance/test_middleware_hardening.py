@@ -25,7 +25,10 @@ from typing import Any
 
 import pytest
 
+from apcore.config import Config
 from apcore.context import Context
+from apcore.executor import Executor
+from apcore.registry import Registry
 from apcore.errors import CircuitBreakerOpenError
 from apcore.middleware.circuit_breaker import CircuitBreakerMiddleware, CircuitBreakerState
 
@@ -375,8 +378,66 @@ def test_every_fixture_case_has_a_driver() -> None:
         "circuit_breaker_closes_on_success",
         "tracing_noop_without_otel",
         "async_detection_coroutine_function",
+        "remove_clears_the_duplicate_identity_entry",
+        "use_twice_still_warns_about_the_duplicate",
     }
     assert set(CASES) == driven, (
         f"middleware_hardening.json cases without a driver: {sorted(set(CASES) - driven)}; "
         f"drivers with no matching case: {sorted(driven - set(CASES))}"
     )
+
+
+class TestRemoveClearsTheDuplicateIdentityEntry:
+    """D-114, driven from `middleware_hardening.json`.
+
+    The registry records the FIRST registration so a duplicate can be traced back
+    to it. A stale entry corrupts that record in both directions: it names a
+    registration that no longer exists, and it teaches the operator to ignore a
+    warning that will next fire for a genuine duplicate.
+    """
+
+    class _MW:
+        name = "audit"
+        priority = 0
+
+        async def before(self, ctx: Any) -> None:  # pragma: no cover - never invoked
+            return None
+
+    @staticmethod
+    def _duplicate_warnings(caplog: pytest.LogCaptureFixture) -> int:
+        return sum(1 for r in caplog.records if "uplicate" in r.getMessage())
+
+    def _run(self, sequence: list[str], caplog: pytest.LogCaptureFixture) -> int:
+        executor = Executor(registry=Registry(), config=Config({}))
+        middleware = self._MW()
+        # Only the steps AFTER the first `use` are observed: the first
+        # registration never warns, and counting it would make both cases 1.
+        executor.use(middleware)
+        caplog.clear()
+        for step in sequence[1:]:
+            if step == "use":
+                executor.use(middleware)
+            elif step == "remove":
+                executor.remove(middleware)
+            else:  # pragma: no cover - the fixture declares only these two
+                raise AssertionError(f"unknown step {step!r}")
+        return self._duplicate_warnings(caplog)
+
+    def test_remove_clears_the_duplicate_identity_entry(self, caplog: pytest.LogCaptureFixture) -> None:
+        case = CASES["remove_clears_the_duplicate_identity_entry"]
+        with caplog.at_level("WARNING"):
+            count = self._run(case["input"]["sequence"], caplog)
+        assert count == case["expected"]["duplicate_warnings"], (
+            f"[{case['id']}] a removed registration must not be reported as the duplicate "
+            f"a later `use` collides with; got {count} warning(s)"
+        )
+
+    def test_use_twice_still_warns_about_the_duplicate(self, caplog: pytest.LogCaptureFixture) -> None:
+        # The control. Without it an SDK that simply stopped warning passes, and
+        # the decision is about CLEARING the entry, not dropping the warning.
+        case = CASES["use_twice_still_warns_about_the_duplicate"]
+        with caplog.at_level("WARNING"):
+            count = self._run(case["input"]["sequence"], caplog)
+        assert (
+            count == case["expected"]["duplicate_warnings"]
+        ), f"[{case['id']}] a genuine duplicate must still warn; got {count} warning(s)"

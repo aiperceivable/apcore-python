@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Executor.remove()` clears the middleware duplicate-identity entry (spec v1.51.0, D-114).**
+  The registry records the FIRST registration so a later duplicate can be traced back to it, and
+  `remove` left the entry behind — so `use` / `remove` / `use`, a legitimate swap, warned about a
+  duplicate that was not one, naming a registration that no longer existed. That is how an operator
+  learns to ignore the warning that will next fire for a real duplicate. The entry is cleared only
+  when no OTHER registration still holds the same identity: duplicate registration warns but
+  succeeds, so two instances sharing an identity is a reachable state and removing one must not make
+  the survivor invisible to duplicate detection. The identity computed at `use` is remembered per
+  registration, because it depends on an optional `identity_key` override that is a parameter of
+  `use` and is not recoverable from the instance.
+
 - **`system.manifest.full` reports `project_name: "apcore"` when unconfigured, and every `system.*`
   module declares `open_world: false` (spec v1.51.0, D-110 / D-119).** `manifest.full` returned
   `""` while `system.health.summary` already returned `"apcore"` in the same process — two system
