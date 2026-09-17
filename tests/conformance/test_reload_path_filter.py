@@ -31,6 +31,7 @@ import pytest
 from apcore.errors import ModuleReloadConflictError
 from apcore.events import EventEmitter
 from apcore.registry import Registry
+from apcore.sys_modules.audit import InMemoryAuditStore
 from apcore.sys_modules.control import ReloadModule
 
 from .canonical_fixtures import load_fixture
@@ -39,7 +40,14 @@ FIXTURE = load_fixture("reload_path_filter.json")
 CASES: list[dict[str, Any]] = FIXTURE["test_cases"]
 
 # `expected` keys this driver checks. `_`-prefixed entries are fixture prose.
-_KNOWN_EXPECTATIONS = {"success", "reloaded_modules_set", "error", "error_code"}
+_KNOWN_EXPECTATIONS = {
+    "success",
+    "reloaded_modules_set",
+    "error",
+    "error_code",
+    "audit_target_module_ids_set",
+    "audit_correlation_ids_are_equal_and_non_empty",
+}
 
 
 class _DummyModule:
@@ -72,7 +80,8 @@ def test_reload_path_filter_case(case: dict[str, Any]) -> None:
     )
 
     registry = _registry_with(case["registered_modules"])
-    reload_module = ReloadModule(registry=registry, event_emitter=EventEmitter())
+    audit_store = InMemoryAuditStore()
+    reload_module = ReloadModule(registry=registry, event_emitter=EventEmitter(), audit_store=audit_store)
 
     rediscovered: list[str] = []
 
@@ -119,6 +128,29 @@ def test_reload_path_filter_case(case: dict[str, Any]) -> None:
         reported = [result["module_id"]]
     else:
         reported = []
+
+    if "audit_target_module_ids_set" in expected:
+        # D-111. Asserted as a SET of concrete ids rather than a count: an
+        # aggregate entry keyed on the glob has count 1, which a count
+        # assertion accepts whenever the glob matches one module, and its
+        # target is one `AuditStore.query(module_id=...)` can never find.
+        entries = audit_store.query()
+        assert sorted(e.target_module_id for e in entries) == sorted(
+            expected["audit_target_module_ids_set"]
+        ), f"[{cid}] audit targets: got {[e.target_module_id for e in entries]!r}"
+        for module_id in expected["audit_target_module_ids_set"]:
+            found = audit_store.query(module_id=module_id)
+            assert [e.target_module_id for e in found] == [
+                module_id
+            ], f"[{cid}] {module_id!r} is not findable by the accessor the store exists for"
+
+    if expected.get("audit_correlation_ids_are_equal_and_non_empty"):
+        # A property, not a value: the id is generated per call. All equal
+        # rejects a fresh id per entry, which groups nothing; non-empty rejects
+        # leaving the field unset.
+        ids = {e.correlation_id for e in audit_store.query()}
+        assert len(ids) == 1, f"[{cid}] entries from one bulk reload must share one id: {ids!r}"
+        assert ids != {""}, f"[{cid}] the correlation id must be set"
 
     assert reported == sorted(expected["reloaded_modules_set"]), (
         f"[{cid}] reload set mismatch: got {reported}, expected {sorted(expected['reloaded_modules_set'])} "

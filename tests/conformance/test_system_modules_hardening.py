@@ -653,8 +653,17 @@ class TestReloadModuleAuditEntry:
         assert entry.change["before"] == "1.0.0"
         assert entry.change["after"] == "1.1.0"
 
-    def test_bulk_reload_records_audit_entry(self) -> None:
-        """A bulk path_filter reload produces an audit entry listing reloaded modules."""
+    def test_bulk_reload_records_one_audit_entry_per_module(self) -> None:
+        """D-111: one entry PER MODULE, sharing one correlation id.
+
+        This test used to assert ``len(entries) == 1`` — it pinned the aggregate
+        entry the decision forbids, whose ``target_module_id`` was the glob. An
+        entry keyed on ``executor.*`` is unfindable by
+        ``AuditStore.query(module_id=...)``, which filters on a concrete id: the
+        operation was audited and could not be looked up. A test asserting the
+        old shape is how that survived, the same way apcore-rust's unit test
+        kept D-106's wrong p99 green.
+        """
         audit_store = InMemoryAuditStore()
         registry = Registry()
         for mid in ["executor.a", "executor.b"]:
@@ -672,10 +681,68 @@ class TestReloadModuleAuditEntry:
             )
 
         entries = audit_store.query()
+        assert len(entries) == 2
+        assert {e.target_module_id for e in entries} == {"executor.a", "executor.b"}
+        assert all(e.action == "reload_module" for e in entries)
+        assert all(e.actor_id == "ci-agent" for e in entries)
+
+        # Each entry is reachable by the accessor the store exists for.
+        for mid in ("executor.a", "executor.b"):
+            found = audit_store.query(module_id=mid)
+            assert [e.target_module_id for e in found] == [mid]
+
+        # Per-module entries alone lose the fact that they were ONE deploy.
+        correlation_ids = {e.correlation_id for e in entries}
+        assert len(correlation_ids) == 1
+        assert correlation_ids != {""}
+
+    def test_a_single_module_reload_needs_no_correlation_id(self) -> None:
+        """Control: the id groups a MULTI-target operation, so a single reload
+        leaves it empty rather than minting one nothing else shares."""
+        audit_store = InMemoryAuditStore()
+        registry = Registry()
+        dummy = MagicMock()
+        dummy.input_schema = {"type": "object", "properties": {}}
+        dummy.output_schema = {"type": "object", "properties": {}}
+        registry.register_internal("executor.only", dummy)
+
+        mod = _make_reload_module(registry, audit_store=audit_store)
+        with (
+            patch.object(mod, "_rediscover_module", return_value=MagicMock()),
+            patch.object(mod, "_reregister_module"),
+        ):
+            mod.execute(
+                {"module_id": "executor.only", "reason": "single deploy"},
+                _make_context(identity_id="ci-agent", identity_type="service"),
+            )
+
+        entries = audit_store.query()
         assert len(entries) == 1
-        entry = entries[0]
-        assert entry.action == "reload_module"
-        assert entry.actor_id == "ci-agent"
+        assert entries[0].correlation_id == ""
+
+    def test_two_bulk_reloads_get_different_correlation_ids(self) -> None:
+        """Control: the id must group ONE operation, not all of them.
+
+        A constant — or an id minted once per process — would satisfy the
+        sharing assertion above while making "what did this deploy touch"
+        return every deploy.
+        """
+        audit_store = InMemoryAuditStore()
+        registry = Registry()
+        for mid in ["executor.a", "executor.b"]:
+            dummy = MagicMock()
+            dummy.input_schema = {"type": "object", "properties": {}}
+            dummy.output_schema = {"type": "object", "properties": {}}
+            registry.register_internal(mid, dummy)
+
+        mod = _make_reload_module(registry, audit_store=audit_store)
+        ctx = _make_context(identity_id="ci-agent", identity_type="service")
+        with patch.object(mod, "_reload_one"):
+            mod.execute({"path_filter": "executor.*", "reason": "deploy 1"}, ctx)
+            mod.execute({"path_filter": "executor.*", "reason": "deploy 2"}, ctx)
+
+        ids = {e.correlation_id for e in audit_store.query()}
+        assert len(ids) == 2, ids
 
 
 # ---------------------------------------------------------------------------

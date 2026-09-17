@@ -21,6 +21,18 @@ class AuditEntry:
     actor_type: str
     trace_id: str
     change: dict[str, Any] = field(default_factory=dict)
+    correlation_id: str = ""
+    """Groups the entries a single multi-module operation produced (D-111).
+
+    A bulk reload writes one entry PER MODULE, because
+    ``AuditStore.query(module_id=...)`` filters on a concrete id and cannot find
+    an entry keyed on the glob. Per-module entries alone lose the fact that they
+    were one deploy, so every entry from one bulk reload carries the same
+    correlation id and "what did this deploy touch" stays a single query.
+
+    Empty for single-target operations, which need no grouping. Optional so an
+    existing ``AuditStore`` implementation keeps working unchanged.
+    """
 
 
 @runtime_checkable

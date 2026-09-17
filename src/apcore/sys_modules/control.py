@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -163,8 +164,13 @@ def _build_audit_entry(
     target_module_id: str,
     context: Any,
     change: dict[str, Any],
+    correlation_id: str = "",
 ) -> AuditEntry:
-    """Build an AuditEntry from context identity."""
+    """Build an AuditEntry from context identity.
+
+    ``correlation_id`` groups the entries one multi-module operation produced
+    (D-111); it is empty for single-target operations, which need no grouping.
+    """
     identity = getattr(context, "identity", None) if context is not None else None
     actor_id = getattr(identity, "id", "unknown") if identity is not None else "unknown"
     actor_type = getattr(identity, "type", "unknown") if identity is not None else "unknown"
@@ -177,6 +183,7 @@ def _build_audit_entry(
         actor_type=actor_type,
         trace_id=trace_id or "",
         change=change,
+        correlation_id=correlation_id,
     )
 
 
@@ -591,13 +598,27 @@ class ReloadModule:
         )
 
         if self._audit_store is not None:
-            entry = _build_audit_entry(
-                action="reload_module",
-                target_module_id=path_filter,
-                context=context,
-                change={"before": None, "after": reloaded},
-            )
-            self._audit_store.append(entry)
+            # D-111: one entry PER MODULE, not one keyed on the glob.
+            #
+            # `AuditStore.query(module_id=...)` filters on a concrete id, so an
+            # entry whose `target_module_id` was `executor.*` is unfindable by
+            # the accessor the store exists for — the operation was audited and
+            # could not be looked up.
+            #
+            # Per-module entries alone lose the fact that they were ONE deploy,
+            # so they share a correlation id and "what did this deploy touch"
+            # stays a single query. Generated once, here, rather than per entry.
+            correlation_id = str(uuid.uuid4())
+            for mid in reloaded:
+                self._audit_store.append(
+                    _build_audit_entry(
+                        action="reload_module",
+                        target_module_id=mid,
+                        context=context,
+                        change={"before": None, "after": mid},
+                        correlation_id=correlation_id,
+                    )
+                )
 
         return {
             "success": True,
