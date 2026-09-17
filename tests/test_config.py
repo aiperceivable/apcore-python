@@ -862,3 +862,46 @@ class TestEmptyPathTypedValueIsDiscarded:
         """
         scalar = {key for key in Config.path_typed_keys() if not key.endswith("[]")}
         assert scalar == set(self.SCALAR_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# D-74 (spec v1.49.0) — `Config.get("")` is not an error
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyKeyIsNotAnError:
+    """The `Config.get` Inputs row said an empty key "is rejected with
+    ``ValueError``/``ConfigInvalidError``". The same block's Errors row said
+    "No errors raised under normal operation", and no SDK had ever rejected it
+    — apcore-rust's ``get`` has no error channel at all. The clause described
+    behaviour that never existed, and a conformance case written from it would
+    have failed on all three. It was deleted; an empty key resolves no value
+    and returns the default, like any other absent key.
+
+    Two assertions, because "does not raise" alone is satisfied by a
+    short-circuit ``if not key: return None`` — which would ignore a
+    caller-supplied default and is NOT "like any other absent key". The second
+    is what pins the decision's actual wording.
+    """
+
+    def test_an_empty_key_does_not_raise(self) -> None:
+        config = Config({"a": {"b": 1}})
+        assert config.get("") is None
+
+    def test_an_empty_key_takes_the_ordinary_absent_key_path(self) -> None:
+        config = Config({"a": {"b": 1}})
+        assert config.get("", "SENTINEL") == "SENTINEL"
+
+    def test_control_a_present_key_is_unaffected(self) -> None:
+        """Without this, an implementation returning the default for EVERY key
+        would satisfy both assertions above."""
+        config = Config({"a": {"b": 1}})
+        assert config.get("a.b") == 1
+        assert config.get("a.b", "SENTINEL") == 1
+
+    def test_control_an_absent_non_empty_key_behaves_identically(self) -> None:
+        """ "Like any other absent key" is the decision's own wording, so the
+        two paths are asserted to agree rather than each being checked alone."""
+        config = Config({"a": {"b": 1}})
+        assert config.get("") == config.get("no.such.key")
+        assert config.get("", "SENTINEL") == config.get("no.such.key", "SENTINEL")
