@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A symlinked module is discovered once, under its real path (spec v1.56.0, D-127).** An aliased
+  file produced `alias` AND `real.target`; an aliased directory produced `aliasdir.…` AND `real.…`.
+  One file reached by two paths became two modules with different IDs — which `detect_id_conflicts`
+  cannot catch precisely because they differ — so the same module registered and executed under two
+  names. File identity, the module ID and visited-directory tracking are now all keyed on the
+  canonical real path, and `file_path` is the target rather than the alias: an alias is a name, not
+  the module. Two scanner tests asserted the old duplicate and are updated in place.
+
 - **A malformed annotation value no longer takes the whole registration with it (spec v1.51.0,
   D-115).** `ModuleAnnotations.from_dict` coerced a non-object `extra` to `{}` — and the
   registration path does not use it. `merge_annotations` builds the dataclass directly, where

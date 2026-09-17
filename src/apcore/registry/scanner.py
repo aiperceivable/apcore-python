@@ -135,7 +135,25 @@ def scan_extensions(
                 if suffix != ".py":
                     continue
 
-                rel = entry_path.relative_to(root)
+                # D-127: identity and the module ID are keyed on the CANONICAL
+                # REAL PATH, never on whichever alias the traversal reached
+                # first. Deriving the ID from the alias makes the registered ID
+                # depend on directory iteration order, which is not stable
+                # across filesystems or platforms — and recording both paths
+                # made one file two modules with different IDs, which the
+                # duplicate check below cannot catch precisely because they
+                # differ.
+                real_file = entry_path.resolve()
+                if real_file in visited_real_paths:
+                    continue
+                try:
+                    rel = real_file.relative_to(root)
+                except ValueError:
+                    # Containment already ran before the dir/file split (D-94);
+                    # a target outside the root never reaches here. Defensive.
+                    logger.warning("Resolved path escapes the extensions root, skipping: %s", entry_path)
+                    continue
+                visited_real_paths.add(real_file)
                 canonical_id = str(rel.with_suffix("")).replace(os.sep, ".")
 
                 if canonical_id in seen_ids:
@@ -160,12 +178,12 @@ def scan_extensions(
                     meta_path = None
 
                 dm = DiscoveredModule(
-                    file_path=entry_path,
+                    file_path=real_file,
                     canonical_id=canonical_id,
                     meta_path=meta_path,
                     namespace=None,
                 )
-                seen_ids[canonical_id] = entry_path
+                seen_ids[canonical_id] = real_file
                 seen_ids_lower[lower_id] = canonical_id
                 results.append(dm)
 

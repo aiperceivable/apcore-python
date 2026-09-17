@@ -169,8 +169,17 @@ class TestScanExtensionsSymlinks:
         assert "real.mod" in ids
         assert "link.mod" not in ids
 
-    def test_follow_symlinks_true_follows(self, tmp_path: Path) -> None:
-        """follow_symlinks=True follows symlinks."""
+    def test_follow_symlinks_true_records_the_target_once(self, tmp_path: Path) -> None:
+        """follow_symlinks=True follows an aliased directory WITHOUT duplicating it.
+
+        This asserted ``"link.mod" in ids`` until spec v1.56.0 — it was pinning a
+        duplicate. One directory reached by two paths produced two modules with
+        different IDs, and step 4's ``detect_id_conflicts`` cannot catch that
+        precisely because the IDs differ, so the same module was registered and
+        executed under two names. D-127 keys visited-directory tracking on the
+        canonical real path, which both removes the duplicate and terminates a
+        cycle.
+        """
         real_dir = tmp_path / "real"
         real_dir.mkdir()
         (real_dir / "mod.py").write_text("")
@@ -178,8 +187,7 @@ class TestScanExtensionsSymlinks:
         link_dir.symlink_to(real_dir)
         result = scan_extensions(tmp_path, follow_symlinks=True)
         ids = {m.canonical_id for m in result}
-        assert "real.mod" in ids
-        assert "link.mod" in ids
+        assert ids == {"real.mod"}, f"the target is recorded once, under its real path; got {ids}"
 
     def test_symlink_cycle_detected(self, tmp_path: Path) -> None:
         """Symlink cycle detected and skipped without infinite recursion."""
@@ -255,8 +263,15 @@ class TestScanExtensionsSymlinks:
 
         result = scan_extensions(root, follow_symlinks=True)
         ids = {m.canonical_id for m in result}
-        assert "sub.real" in ids
-        assert "alias" in ids, "an in-root symlinked file must still be discovered"
+        # D-127: the target is recorded ONCE, under the ID derived from its
+        # canonical real path. This asserted `"alias" in ids` until spec
+        # v1.56.0, which pinned one file becoming two modules — and made the
+        # registered ID depend on which path the traversal reached first, i.e.
+        # on directory iteration order.
+        assert ids == {"sub.real"}, f"the alias resolves to the target, it is not a second module; got {ids}"
+        assert all(
+            m.file_path.name == "real.py" for m in result
+        ), "the loader must open the target, not the alias — the alias is a name, not the module"
 
     def test_symlinked_file_not_followed_when_disabled(self, tmp_path: Path) -> None:
         """follow_symlinks=False skips symlinked files, as it does directories."""
