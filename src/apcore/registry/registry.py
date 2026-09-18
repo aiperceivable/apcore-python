@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -40,6 +41,21 @@ if TYPE_CHECKING:
     from apcore.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_deprecation(deprecation: dict[str, Any]) -> str:
+    """Canonical rendering of an ``x-deprecation`` block, for the D-89 key.
+
+    Part of the deprecation-warning dedupe key (spec v1.59.0), so that two
+    structurally equal notices dedupe regardless of how they were built and a
+    CHANGED notice on a re-registered module warns again. Falls back to ``repr``
+    for a value JSON cannot render, which is stable enough for an equality key
+    and never raises on the read path.
+    """
+    try:
+        return json.dumps(deprecation, sort_keys=True, separators=(",", ":"), default=repr)
+    except (TypeError, ValueError):
+        return repr(sorted(deprecation.items(), key=lambda kv: kv[0]))
 
 
 class _DictSchemaAdapter:
@@ -512,7 +528,7 @@ class Registry:
         # ``_deprecationWarned``. Entries for a module are dropped when it
         # leaves the registry (``unregister`` / hot reload) so a genuinely
         # new deprecation block on the replacement is not masked.
-        self._deprecation_warned: set[tuple[str, str]] = set()
+        self._deprecation_warned: set[tuple[str, str, str]] = set()
 
         # Optional EventEmitter wired in by callers that want registry-level
         # audit events for ``ephemeral.*`` registrations (RFC pilot). When
@@ -1450,9 +1466,6 @@ class Registry:
             self._draining.discard(module_id)
             self._drain_events.pop(module_id, None)
             self._ref_counts.pop(module_id, None)
-            # D-89: drop the once-per-version dedupe entries so a later
-            # re-registration carrying a new deprecation block still warns.
-            self._forget_deprecation_warnings(module_id)
 
         # Call on_unload if available
         if hasattr(module, "on_unload") and callable(module.on_unload):
@@ -1755,10 +1768,23 @@ class Registry:
     def _log_deprecation_warning(self, module_id: str, version: str, deprecation: dict[str, Any]) -> None:
         """Log a deprecation warning for a module version, once per registry.
 
-        At most one warning per ``(module_id, version)`` for the lifetime of
-        this registry instance (D-89).
+        At most one warning per ``(module_id, version, x-deprecation block)``
+        for the lifetime of this registry instance (D-89, spec v1.59.0).
+
+        The BLOCK is part of the key, and the key is never cleared on
+        ``unregister``. Forgetting on unregister used to be how a re-registered
+        module carrying a NEW notice still warned — but ``watch()`` re-runs
+        discovery as an unregister + re-register, so it also re-warned for every
+        deprecated module on every hot reload: the traffic-proportional spam
+        D-89 exists to prevent, arriving through the door its wording did not
+        close. Keying on the block gives both halves — a re-registration with a
+        CHANGED or newly added notice warns, one with the same notice does not.
+
+        Blocks are compared by canonical value (sorted keys, no incidental
+        whitespace), so two structurally equal notices dedupe regardless of how
+        they were built.
         """
-        key = (module_id, version)
+        key = (module_id, version, _canonical_deprecation(deprecation))
         with self._lock:
             if key in self._deprecation_warned:
                 return
@@ -2265,18 +2291,7 @@ class Registry:
         self._module_meta.pop(mid, None)
         self._schema_cache.pop(mid, None)
         self._lowercase_map.pop(mid.lower(), None)
-        # D-89: the replacement instance installed by hot reload may carry a
-        # different (or newly added) ``x-deprecation`` block; a stale dedupe
-        # entry would silence it.
-        self._forget_deprecation_warnings(mid)
         return module
-
-    def _forget_deprecation_warnings(self, module_id: str) -> None:
-        """Drop the D-89 deprecation-warning dedupe entries for *module_id*.
-
-        Caller must hold ``self._lock``.
-        """
-        self._deprecation_warned = {key for key in self._deprecation_warned if key[0] != module_id}
 
     def _handle_file_change(self, path: str) -> None:
         """Handle a file modification or creation event.

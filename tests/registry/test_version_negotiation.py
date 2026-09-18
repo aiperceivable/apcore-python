@@ -462,12 +462,19 @@ class TestDeprecationWarningCadence:
     def _deprecation_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
         return [r.message for r in caplog.records if "deprecated" in r.message.lower()]
 
-    def _register(self, reg: Registry, module_id: str, version: str = "1.0.0") -> None:
+    def _register(
+        self,
+        reg: Registry,
+        module_id: str,
+        version: str = "1.0.0",
+        deprecation: dict[str, str] | None = None,
+    ) -> None:
+        metadata = {} if deprecation == {} else {"x-deprecation": dict(deprecation or self._DEPRECATION)}
         reg.register(
             module_id,
             _VersionedModule(version=version),
             version=version,
-            metadata={"x-deprecation": dict(self._DEPRECATION)},
+            metadata=metadata,
         )
 
     def test_repeated_reads_warn_once(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -521,15 +528,89 @@ class TestDeprecationWarningCadence:
 
         assert len(self._deprecation_warnings(caplog)) == 2
 
-    def test_unregister_clears_the_dedupe(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A stale entry must not mask a genuinely new deprecation."""
+    def test_the_warning_fires_on_the_read_not_on_registration(self, caplog: pytest.LogCaptureFixture) -> None:
+        """D-89 / spec v1.59.0: `get_definition` is the emission point.
+
+        Registration runs at startup, frequently before the host has installed
+        a log subscriber — `discover()` at import time is the ordinary case —
+        and a registration-time warning is then lost with no later chance to
+        re-emit, because the dedupe entry has already been written.
+        apcore-rust emitted at registration; this is the assertion that pins
+        the adjudicated answer rather than merely the SDK that had it.
+        """
         reg = Registry(extensions_dir="/tmp/fake_ext")
-        self._register(reg, "cadence.cleared")
 
         with caplog.at_level(logging.WARNING):
-            reg.get_definition("cadence.cleared", version_hint="1.0.0")
-            reg.unregister("cadence.cleared")
-            self._register(reg, "cadence.cleared")
-            reg.get_definition("cadence.cleared", version_hint="1.0.0")
+            self._register(reg, "cadence.read_path")
+            assert self._deprecation_warnings(caplog) == [], (
+                "registration must not warn; an operator who configures logging " "after discovery would never see it"
+            )
 
-        assert len(self._deprecation_warnings(caplog)) == 2
+            reg.get_definition("cadence.read_path", version_hint="1.0.0")
+
+        assert len(self._deprecation_warnings(caplog)) == 1
+
+    def test_re_registration_with_the_SAME_notice_stays_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        """D-89 / spec v1.59.0: the dedupe key survives unregister.
+
+        This SDK used to drop the marker on `unregister` and warn again. But
+        `watch()` re-runs discovery as an unregister + re-register, so that
+        re-warned for every deprecated module on every hot reload — the
+        traffic-proportional spam D-89 exists to prevent, arriving through the
+        door its wording did not close.
+        """
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.same_notice")
+
+        with caplog.at_level(logging.WARNING):
+            reg.get_definition("cadence.same_notice", version_hint="1.0.0")
+            reg.unregister("cadence.same_notice")
+            self._register(reg, "cadence.same_notice")
+            reg.get_definition("cadence.same_notice", version_hint="1.0.0")
+
+        assert len(self._deprecation_warnings(caplog)) == 1
+
+    def test_re_registration_with_a_CHANGED_notice_warns_again(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The other half, and the control for the test above.
+
+        Without it, "stays silent" is equally satisfied by an implementation
+        that never warns for a re-registered module at all — which is what
+        apcore-typescript and apcore-rust did, swallowing a genuinely new
+        notice. The block is in the key, so a changed notice is a new key.
+        """
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.changed_notice")
+
+        with caplog.at_level(logging.WARNING):
+            reg.get_definition("cadence.changed_notice", version_hint="1.0.0")
+            reg.unregister("cadence.changed_notice")
+            self._register(
+                reg,
+                "cadence.changed_notice",
+                deprecation={
+                    "deprecated_since": "1.0.0",
+                    "sunset_version": "2.0.0",  # brought forward
+                    "migration_guide": "Use mod.new instead.",
+                },
+            )
+            reg.get_definition("cadence.changed_notice", version_hint="1.0.0")
+
+        warnings = self._deprecation_warnings(caplog)
+        assert len(warnings) == 2
+        assert "sunset in 3.0.0" in warnings[0]
+        assert "sunset in 2.0.0" in warnings[1]
+
+    def test_a_notice_ADDED_on_re_registration_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A module that was not deprecated and now is must be announced."""
+        reg = Registry(extensions_dir="/tmp/fake_ext")
+        self._register(reg, "cadence.added_notice", deprecation={})
+
+        with caplog.at_level(logging.WARNING):
+            reg.get_definition("cadence.added_notice", version_hint="1.0.0")
+            assert self._deprecation_warnings(caplog) == []
+
+            reg.unregister("cadence.added_notice")
+            self._register(reg, "cadence.added_notice")
+            reg.get_definition("cadence.added_notice", version_hint="1.0.0")
+
+        assert len(self._deprecation_warnings(caplog)) == 1
