@@ -64,15 +64,59 @@ class TestInMemoryStorageBackend:
 
 
 class TestErrorHistoryAcceptsStorageBackend:
-    def test_error_history_uses_injected_backend(self) -> None:
+    def test_error_history_writes_the_canonical_namespace(self) -> None:
+        """D-113: the namespace is `error_history`, not `errors`.
+
+        This test used to assert `backend.list("errors")` — it pinned the name
+        the decision renames. apcore-rust wrote `error_history`, so the same
+        records were unqueryable across the two SDKs: a namespace IS the key a
+        caller reads by.
+        """
+        from apcore.observability.storage import (
+            STORAGE_NAMESPACE_ERROR_HISTORY,
+            STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY,
+        )
+
         backend = InMemoryStorageBackend()
         hist = ErrorHistory(storage=backend)
         hist.record("mod.x", ModuleError(code="E1", message="boom"))
 
-        # The error should be reachable through both the in-memory index and
-        # the injected backend (under a stable namespace).
         entries = hist.get("mod.x")
         assert len(entries) == 1
-        # Backend has an "errors" namespace populated.
-        backend_items = backend.list("errors")
-        assert len(backend_items) >= 1
+        assert len(backend.list(STORAGE_NAMESPACE_ERROR_HISTORY)) >= 1
+        assert backend.list(STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY) == [], (
+            "writes go only to the canonical namespace; the legacy one is read-only " "for the migration window"
+        )
+
+    def test_the_migration_window_reads_both_namespaces(self) -> None:
+        """A rename is invisible until someone queries old data and finds nothing.
+
+        Records written under the legacy name before the rename stay readable,
+        and a fingerprint present in both is returned once.
+        """
+        from apcore.observability.storage import (
+            STORAGE_NAMESPACE_ERROR_HISTORY,
+            STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY,
+        )
+
+        backend = InMemoryStorageBackend()
+        hist = ErrorHistory(storage=backend)
+        hist.record("mod.x", ModuleError(code="E1", message="boom"))
+        new_keys = [key for key, _ in backend.list(STORAGE_NAMESPACE_ERROR_HISTORY)]
+
+        backend.save(STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY, "pre-rename-fp", {"module_id": "mod.old"})
+        # The same fingerprint in BOTH namespaces must be returned once.
+        backend.save(STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY, new_keys[0], {"module_id": "stale"})
+
+        keys = [key for key, _ in hist.stored_entries()]
+        assert "pre-rename-fp" in keys, "legacy records must stay readable"
+        assert keys.count(new_keys[0]) == 1, "a fingerprint in both namespaces is returned once"
+
+    def test_an_omitted_backend_means_the_in_memory_one(self) -> None:
+        """D-113: omitted is not "no storage".
+
+        Only apcore-typescript honoured this, so the same omission produced a
+        working store there and a silent no-op here — and a caller reading
+        records back got an empty list rather than an error.
+        """
+        assert isinstance(ErrorHistory()._storage, InMemoryStorageBackend)

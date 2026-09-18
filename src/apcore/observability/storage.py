@@ -16,7 +16,37 @@ from __future__ import annotations
 import threading
 from typing import Protocol, runtime_checkable
 
-__all__ = ["StorageBackend", "InMemoryStorageBackend"]
+__all__ = [
+    "StorageBackend",
+    "InMemoryStorageBackend",
+    "STORAGE_NAMESPACE_METRICS",
+    "STORAGE_NAMESPACE_USAGE",
+    "STORAGE_NAMESPACE_ERROR_HISTORY",
+    "STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY",
+]
+
+
+# ---------------------------------------------------------------------------
+# Canonical namespaces (D-113)
+# ---------------------------------------------------------------------------
+
+#: The namespace each bundled collector writes under.
+#:
+#: §1.1 made the `StorageBackend` argument a MUST and never named these, so of
+#: nine collector/SDK combinations only four wrote anything and the two that
+#: wrote ErrorHistory records used different names. A namespace is the key a
+#: caller queries by, so an unnamed one is an argument that cannot be read back.
+STORAGE_NAMESPACE_METRICS = "metrics"
+STORAGE_NAMESPACE_USAGE = "usage"
+STORAGE_NAMESPACE_ERROR_HISTORY = "error_history"
+
+#: The namespace this SDK wrote error records under before D-113.
+#:
+#: Kept for the DUAL-READ migration window: a rename is invisible until someone
+#: queries old data and finds nothing, so readers check the legacy namespace
+#: after the canonical one. Writes go only to the canonical name. Removed once
+#: the window closes — see the migration note in `observability.md`.
+STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY = "errors"
 
 
 @runtime_checkable

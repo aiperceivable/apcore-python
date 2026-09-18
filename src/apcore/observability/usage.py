@@ -11,7 +11,11 @@ from typing import Any
 
 from apcore.context_keys import USAGE_STARTS
 from apcore.middleware import Middleware
-from apcore.observability.storage import StorageBackend
+from apcore.observability.storage import (
+    STORAGE_NAMESPACE_USAGE,
+    InMemoryStorageBackend,
+    StorageBackend,
+)
 
 __all__ = [
     "CallerUsageSummary",
@@ -138,7 +142,11 @@ class UsageCollector:
     ) -> None:
         self.retention_hours = retention_hours
         self._max_records_per_bucket = max_records_per_bucket
-        self._storage: StorageBackend | None = storage
+        # D-113: an OMITTED backend means the bundled in-memory one, not "no
+        # storage". Only apcore-typescript honoured that, so the same omission
+        # produced a working store there and a silent no-op here — and a caller
+        # reading records back got an empty list rather than an error.
+        self._storage: StorageBackend = storage if storage is not None else InMemoryStorageBackend()
         self._lock = threading.Lock()
         # module_id -> bucket_key -> list[UsageRecord]
         self._data: dict[str, dict[str, list[UsageRecord]]] = {}
@@ -170,6 +178,21 @@ class UsageCollector:
             if len(bucket) < self._max_records_per_bucket:
                 bucket.append(rec)
             self._cleanup_expired(module_id)
+
+        # D-113: persist under the canonical `usage` namespace, outside the lock
+        # so a user-supplied backend's I/O does not serialise every record.
+        if self._storage is not None:
+            self._storage.save(
+                STORAGE_NAMESPACE_USAGE,
+                f"{module_id}:{timestamp}",
+                {
+                    "module_id": module_id,
+                    "timestamp": timestamp,
+                    "caller_id": caller_id,
+                    "latency_ms": latency_ms,
+                    "success": success,
+                },
+            )
 
     def get_summary(self, period: str = "24h") -> list[ModuleUsageSummary]:
         """Return aggregated usage summaries for all modules within the period."""

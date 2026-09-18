@@ -145,6 +145,47 @@ def _assert_case(case: dict[str, Any], run: _Run) -> None:
         )
 
 
+def _drive_collector_case(case: dict[str, Any]) -> None:
+    """D-113: which namespace each bundled collector writes, and the default.
+
+    Drives all named collectors through ONE backend so the assertion is the SET
+    of namespaces the surface produces, not three independent behaviours — an
+    SDK writing two of three would otherwise read as a partial gap rather than
+    a wrong surface.
+    """
+    from apcore.errors import ModuleError
+    from apcore.observability.error_history import ErrorHistory
+    from apcore.observability.metrics import MetricsCollector
+    from apcore.observability.usage import UsageCollector
+
+    if case.get("omit_backend"):
+        # The observable is READABILITY: a record written with no backend
+        # supplied is still there to read. Asserting a class name would pin this
+        # SDK's spelling, which the decision does not.
+        history = ErrorHistory()
+        history.record("mod.x", ModuleError(code="E1", message="boom"))
+        readable = len(history.stored_entries()) > 0
+        assert (
+            readable is case["expected"]["records_readable"]
+        ), f"[{case['id']}] an omitted backend must be the in-memory one, not 'no storage'"
+        return
+
+    backend = InMemoryStorageBackend()
+    for collector in case["collectors"]:
+        if collector == "metrics":
+            MetricsCollector(storage=backend).observe_duration("mod.x", 0.01)
+        elif collector == "usage":
+            UsageCollector(storage=backend).record("mod.x", "caller", 12.0, True)
+        elif collector == "error_history":
+            ErrorHistory(storage=backend).record("mod.x", ModuleError(code="E1", message="boom"))
+        else:  # pragma: no cover - the fixture names only these three
+            raise AssertionError(f"[{case['id']}] unknown collector {collector!r}")
+
+    assert sorted(backend._data.keys()) == sorted(
+        case["expected"]["namespaces_written"]
+    ), f"[{case['id']}] namespaces written: {sorted(backend._data.keys())}"
+
+
 class TestStorageBackendFixture:
     """storage_backend.json replayed against InMemoryStorageBackend."""
 
@@ -156,6 +197,9 @@ class TestStorageBackendFixture:
 
     @pytest.mark.parametrize("case", CASES, ids=lambda c: c["id"])
     def test_case(self, case: dict[str, Any]) -> None:
+        if "collectors" in case:
+            _drive_collector_case(case)
+            return
         backend = InMemoryStorageBackend()
         run = _replay(backend, case["input"]["operations"], wrap=True)
         _assert_case(case, run)
@@ -179,8 +223,10 @@ class TestStorageBackendScalarValues:
             "Spec must decide which value width is normative."
         ),
     )
-    @pytest.mark.parametrize("case", CASES, ids=lambda c: c["id"])
+    @pytest.mark.parametrize("case", [c for c in CASES if "collectors" not in c], ids=lambda c: c["id"])
     def test_case_verbatim(self, case: dict[str, Any]) -> None:
+        # The D-113 collector cases carry no `input.operations` — they exercise
+        # the collectors, not the backend's value width this class is about.
         backend = InMemoryStorageBackend()
         run = _replay(backend, case["input"]["operations"], wrap=False)
         _assert_case(case, run)

@@ -9,7 +9,11 @@ from typing import Any
 from apcore.context_keys import METRICS_STARTS
 from apcore.errors import ModuleError
 from apcore.middleware.base import Middleware
-from apcore.observability.storage import StorageBackend
+from apcore.observability.storage import (
+    STORAGE_NAMESPACE_METRICS,
+    InMemoryStorageBackend,
+    StorageBackend,
+)
 from apcore.observability.store import ObservabilityStore
 
 METRIC_CALLS_TOTAL = "apcore_module_calls_total"
@@ -176,7 +180,11 @@ class MetricsCollector:
 
         self._buckets = sorted(buckets) if buckets is not None else list(self.DEFAULT_BUCKETS)
         self._store: ObservabilityStore = store if store is not None else InMemoryObservabilityStore()
-        self._storage: StorageBackend | None = storage
+        # D-113: an OMITTED backend means the bundled in-memory one, not "no
+        # storage". Only apcore-typescript honoured that, so the same omission
+        # produced a working store there and a silent no-op here — and a caller
+        # reading records back got an empty list rather than an error.
+        self._storage: StorageBackend = storage if storage is not None else InMemoryStorageBackend()
         self._lock = threading.Lock()
         self._counters: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
         self._histogram_sums: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
@@ -205,6 +213,21 @@ class MetricsCollector:
             # Always increment +Inf
             inf_key = (name, labels_key, float("inf"))
             self._histogram_buckets[inf_key] = self._histogram_buckets.get(inf_key, 0) + 1
+
+        # D-113: persist under the canonical `metrics` namespace.
+        #
+        # The `storage` argument was accepted here and read by nothing — one of
+        # the five collector/SDK combinations of nine where the MUST reached no
+        # mechanism. Written OUTSIDE the lock: a user-supplied backend may do
+        # I/O, and holding the collector's lock across it would make every
+        # observation wait on backend latency (the same placement apcore-rust
+        # uses by spawning).
+        if self._storage is not None:
+            self._storage.save(
+                STORAGE_NAMESPACE_METRICS,
+                f"{name}:{labels_key}",
+                {"name": name, "labels": dict(labels), "value": value},
+            )
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

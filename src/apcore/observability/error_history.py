@@ -7,13 +7,19 @@ import heapq
 import os
 import re
 import threading
+from typing import Any
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from apcore.errors import ModuleError
-from apcore.observability.storage import StorageBackend
+from apcore.observability.storage import (
+    STORAGE_NAMESPACE_ERROR_HISTORY,
+    STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY,
+    InMemoryStorageBackend,
+    StorageBackend,
+)
 from apcore.observability.store import ObservabilityStore
 
 
@@ -178,7 +184,11 @@ class ErrorHistory:
         # Optional generic storage backend (Issue #43 §1).  When supplied,
         # error entries are mirrored to the ``"errors"`` namespace using the
         # fingerprint as the key, enabling cross-process persistence.
-        self._storage: StorageBackend | None = storage
+        # D-113: an OMITTED backend means the bundled in-memory one, not "no
+        # storage". Only apcore-typescript honoured that, so the same omission
+        # produced a working store there and a silent no-op here — and a caller
+        # reading records back got an empty list rather than an error.
+        self._storage: StorageBackend = storage if storage is not None else InMemoryStorageBackend()
         self._lock = threading.Lock()
         self._fp_index: dict[str, ErrorEntry] = {}
         # Insertion order per fingerprint, for `get_all`'s tie-break.
@@ -247,8 +257,12 @@ class ErrorHistory:
         # Notify store outside the internal lock to avoid lock-ordering issues.
         self._store.record_error(entry_to_notify)
         if self._storage is not None:
+            # D-113: the canonical namespace. This SDK wrote `errors` and
+            # apcore-rust wrote `error_history`, so the same records were
+            # unqueryable across the two — a namespace IS the key a caller reads
+            # by, and an unnamed one made the argument write-only.
             self._storage.save(
-                "errors",
+                STORAGE_NAMESPACE_ERROR_HISTORY,
                 entry_to_notify.fingerprint,
                 {
                     "module_id": entry_to_notify.module_id,
@@ -262,6 +276,27 @@ class ErrorHistory:
                     "fingerprint": entry_to_notify.fingerprint,
                 },
             )
+
+    def stored_entries(self) -> list[tuple[str, dict[str, Any]]]:
+        """Every persisted error record, newest namespace first (D-113).
+
+        DUAL-READ MIGRATION WINDOW. Writes go only to
+        ``error_history``; reads also check the legacy ``errors`` namespace
+        this SDK used before the decision, because a rename is invisible until
+        someone queries old data and finds nothing. A fingerprint present in
+        both is returned once, from the canonical namespace.
+
+        Remove the legacy half when the window closes — the migration note in
+        `observability.md` names the release.
+        """
+        if self._storage is None:
+            return []
+        canonical = self._storage.list(STORAGE_NAMESPACE_ERROR_HISTORY)
+        seen = {key for key, _ in canonical}
+        legacy = [
+            (key, value) for key, value in self._storage.list(STORAGE_NAMESPACE_ERROR_HISTORY_LEGACY) if key not in seen
+        ]
+        return canonical + legacy
 
     def get(self, module_id: str, limit: int | None = None) -> list[ErrorEntry]:
         """Return entries for a module, newest first (by insertion order)."""
