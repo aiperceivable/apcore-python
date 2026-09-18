@@ -78,10 +78,14 @@ class CircuitBreakerWrapper:
 
     @property
     def subscriber_type(self) -> Any:
-        stype = getattr(self._subscriber, "subscriber_type", None)
-        if isinstance(stype, str):
-            return stype
-        return type(self._subscriber).__name__.lower().replace("subscriber", "").lstrip("_")
+        """The wrapped subscriber's declared kind.
+
+        Delegates to the emitter's resolver rather than repeating its
+        derivation: this property and `_get_subscriber_type` used to carry two
+        copies of the same expression, and two copies of a default are how a
+        surface drifts from the one it is supposed to agree with (D-116).
+        """
+        return self._declared_subscriber_type()
 
     @property
     def state(self) -> CircuitState:
@@ -145,7 +149,7 @@ class CircuitBreakerWrapper:
                     "apcore.subscriber.circuit_closed",
                     "info",
                     {
-                        "subscriber_type": type(self._subscriber).__name__,
+                        "subscriber_type": self._declared_subscriber_type(),
                         "recovery_attempt": True,
                     },
                 )
@@ -162,9 +166,10 @@ class CircuitBreakerWrapper:
             )
             if opens:
                 self._state = CircuitState.OPEN
+                subscriber_type = self._declared_subscriber_type()
                 logger.warning(
                     "Circuit opened for subscriber %s after %d consecutive failures: %s",
-                    type(self._subscriber).__name__,
+                    subscriber_type,
                     self._consecutive_failures,
                     error,
                 )
@@ -172,11 +177,29 @@ class CircuitBreakerWrapper:
                     "apcore.subscriber.circuit_opened",
                     "warn",
                     {
-                        "subscriber_type": type(self._subscriber).__name__,
+                        "subscriber_type": subscriber_type,
                         "consecutive_failures": self._consecutive_failures,
                     },
                 )
             return None
+
+    def _declared_subscriber_type(self) -> str:
+        """The DECLARED kind, the same value the DLQ path reports (D-116).
+
+        This used to report ``type(subscriber).__name__`` — a class name, which
+        is neither the declared kind nor what the same SDK puts in its own
+        `apcore.event.delivery_failed` payload. A consumer routing on
+        ``subscriber_type`` therefore saw one value for a delivery failure and a
+        different one for the circuit opening on the SAME subscriber.
+
+        Resolved through the emitter's own accessor rather than re-deriving it,
+        so an undeclared subscriber takes the DLQ path's EXISTING default and no
+        second default is invented for this surface — which the decision
+        forbids, and which is how the three SDKs came to disagree three ways.
+        """
+        from apcore.events.emitter import _get_subscriber_type
+
+        return _get_subscriber_type(self._subscriber)
 
     def _make_event(self, event_type: str, severity: str, data: dict[str, Any]) -> ApCoreEvent:
         return ApCoreEvent(

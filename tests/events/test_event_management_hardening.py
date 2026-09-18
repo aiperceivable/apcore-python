@@ -840,6 +840,90 @@ class TestEventNamingCanonical:
 
 
 # ---------------------------------------------------------------------------
+# D-116: the circuit event reports the DECLARED subscriber type
+# ---------------------------------------------------------------------------
+
+
+class _DeclaredSubscriber:
+    """A subscriber whose declared kind is NOT a prefix of its id."""
+
+    event_pattern = "*"
+
+    def __init__(self, subscriber_id: str, subscriber_type: str | None) -> None:
+        self.subscriber_id = subscriber_id
+        if subscriber_type is not None:
+            self.subscriber_type = subscriber_type
+
+    async def on_event(self, event: ApCoreEvent) -> None:
+        raise RuntimeError("downstream error")
+
+
+async def _trip_open(case: dict[str, Any]) -> ApCoreEvent:
+    """Drive the breaker to OPEN and return the emitted circuit event."""
+    params = case["input"]
+    cfg = params["circuit_breaker_config"]
+    sub_spec = params["subscriber"]
+
+    emitted: list[ApCoreEvent] = []
+    mock_emitter = _make_mock_emitter()
+    mock_emitter.emit.side_effect = emitted.append
+
+    cb = CircuitBreakerWrapper(
+        subscriber=_DeclaredSubscriber(sub_spec["subscriber_id"], sub_spec.get("subscriber_type")),
+        emitter=mock_emitter,
+        timeout_ms=cfg["timeout_ms"],
+        open_threshold=cfg["open_threshold"],
+        recovery_window_ms=cfg["recovery_window_ms"],
+    )
+    for _ in params["failure_sequence"]:
+        await cb.on_event(_make_event())
+
+    opened = [e for e in emitted if e.event_type == case["expected"]["event_emitted"]]
+    assert len(opened) == 1, f"[{case['id']}] expected one circuit event, got {[e.event_type for e in emitted]}"
+    return opened[0]
+
+
+class TestCircuitEventReportsTheDeclaredSubscriberType:
+    """D-116. The id contains a hyphen and the declared kind is not its prefix.
+
+    That is the whole discriminator: this SDK reported the wrapped subscriber's
+    CLASS NAME, and apcore-rust split the id on the first hyphen so
+    ``health-alert`` became ``health``. An id without a hyphen, or one whose
+    prefix happens to equal the declared kind, is answered identically by every
+    wrong implementation and by the right one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_declared_kind_is_reported(self) -> None:
+        case = _case("circuit_event_reports_the_declared_subscriber_type")
+        event = await _trip_open(case)
+        assert event.data["subscriber_type"] == case["expected"]["event_subscriber_type"]
+
+
+class TestCircuitEventUsesTheDlqDefaultForAnUndeclaredSubscriber:
+    """D-116 control: no second default is invented for this surface.
+
+    Asserted as EQUAL TO what the DLQ path reports for the same subscriber
+    rather than as a literal — the default is a language-shaped derivation, and
+    what is normative is that the two surfaces AGREE. All three SDKs disagreed
+    with their own DLQ value, which is the finding.
+    """
+
+    @pytest.mark.asyncio
+    async def test_it_matches_what_the_dlq_path_reports(self) -> None:
+        from apcore.events.emitter import _get_subscriber_type
+
+        case = _case("circuit_event_uses_the_dlq_default_for_an_undeclared_subscriber")
+        assert case["expected"]["event_subscriber_type_equals_dlq_subscriber_type"] is True
+
+        sub_spec = case["input"]["subscriber"]
+        subscriber = _DeclaredSubscriber(sub_spec["subscriber_id"], sub_spec.get("subscriber_type"))
+        event = await _trip_open(case)
+
+        assert event.data["subscriber_type"] == _get_subscriber_type(subscriber)
+
+
+# ---------------------------------------------------------------------------
 # Fixture coverage guard
 # ---------------------------------------------------------------------------
 
@@ -866,6 +950,8 @@ class TestFixtureCoverage:
         "filter_exclude_character_class_does_not_expand": "TestFilterPatternDialect",
         "filter_include_question_mark_is_a_wildcard": "TestFilterPatternDialect",
         "circuit_open_after_threshold": "TestCircuitOpenAfterThreshold",
+        "circuit_event_reports_the_declared_subscriber_type": "TestCircuitEventReportsTheDeclaredSubscriberType",
+        "circuit_event_uses_the_dlq_default_for_an_undeclared_subscriber": "TestCircuitEventUsesTheDlqDefaultForAnUndeclaredSubscriber",
         "circuit_discards_in_open_state": "TestCircuitDiscardsInOpenState",
         "circuit_half_open_after_window": "TestCircuitHalfOpenAfterWindow",
         "circuit_closes_on_success": "TestCircuitClosesOnSuccess",
