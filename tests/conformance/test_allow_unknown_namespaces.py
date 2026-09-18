@@ -31,17 +31,57 @@ _BASE = {"version": "1.0", "project": {"name": "allow-unknown-probe"}}
 
 def _document(spec: dict[str, Any]) -> dict[str, Any]:
     doc: dict[str, Any] = {"apcore": dict(_BASE)} if spec["mode"] == "namespace" else dict(_BASE)
-    if spec["config"] is not None:
+    if spec.get("config") is not None:
         doc["_config"] = dict(spec["config"])
-    if spec["namespace"] is not None:
+    # A D-117 case declares a REGISTERED namespace rather than a document one:
+    # the whole point is that the key is absent from the file and can only come
+    # from the registration.
+    if spec.get("namespace") is not None:
         doc[spec["namespace"]] = {"x": 1}
     return doc
+
+
+def _drive_registered_namespace_default(case_id: str, spec: dict[str, Any], expected: dict[str, Any]) -> None:
+    """D-117: a registered namespace's defaults answer only in namespace mode.
+
+    A legacy document has no namespaces, so a declaration ABOUT a namespace has
+    nothing to say about one. The key is absent from the file by construction —
+    if it were present, the document would be answering, not the registration.
+    """
+    registration = spec["registered_namespace"]
+    # Namespace registration is process-wide and permanent (§9.6.3 point 5), so
+    # each case registers under its own name rather than racing the other.
+    name = f"{registration['name']}_{case_id[:12]}"
+    try:
+        Config.register_namespace(name, defaults=dict(registration["defaults"]))
+    except Exception:  # noqa: BLE001 - already registered by a previous run
+        pass
+
+    doc: dict[str, Any] = {"apcore": dict(_BASE)} if spec["mode"] == "namespace" else dict(_BASE)
+    path = Path(tempfile.mkdtemp()) / "apcore.yaml"
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    config = Config.load(str(path))
+    key = spec["key"].replace(registration["name"], name, 1)
+    value = config.get(key)
+
+    assert (value is not None) is expected["value_readable"], (
+        f"[{case_id}] {key!r} -> {value!r}; the registration must answer in "
+        f"namespace mode and stay silent for a legacy document"
+    )
+    if "value" in expected:
+        assert value == expected["value"]
 
 
 @pytest.mark.parametrize("case_id", list(CASES))
 def test_allow_unknown_namespaces(case_id: str, caplog: pytest.LogCaptureFixture) -> None:
     case = CASES[case_id]
     spec, expected = case["input"], case["expected"]
+
+    if "registered_namespace" in spec:
+        _drive_registered_namespace_default(case_id, spec, expected)
+        return
+
     path = Path(tempfile.mkdtemp()) / "apcore.yaml"
     path.write_text(yaml.safe_dump(_document(spec)), encoding="utf-8")
 
