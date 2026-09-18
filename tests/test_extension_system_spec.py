@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from apcore.acl import ACL
+from apcore.errors import InvalidInputError
 from apcore.extensions import ExtensionManager
 from apcore.middleware import Middleware
 from apcore.observability.tracing import InMemoryExporter, TracingMiddleware
@@ -69,13 +70,16 @@ def test_extension_system_register_input_point_name_unknown() -> None:
     """extension_system.register.input.point_name.unknown
 
     Spec ### Inputs: unknown point_name MUST raise. Spec ### Errors lists
-    `ExtensionPointNotFoundError` (or `ValueError`); the Python SDK raises the
-    built-in `KeyError`. Assert the error TYPE and that the message identifies
-    the unknown-point condition (CODE-equivalent for an unstructured error).
+    `ExtensionPointNotFoundError` (or `ValueError` / `Err(ModuleError)`); the
+    Python SDK raises `InvalidInputError(code=GENERAL_INVALID_INPUT)`, the same
+    code apcore-rust has always used and apcore-typescript now uses (D-108).
+    Assert the CODE, not just the type — the type alone was `KeyError`, which
+    carries no code and is what a plain dict miss raises.
     """
     mgr = ExtensionManager()
-    with pytest.raises(KeyError) as exc_info:
+    with pytest.raises(InvalidInputError) as exc_info:
         mgr.register("no_such_point", StubMiddleware())
+    assert exc_info.value.code == "GENERAL_INVALID_INPUT"
     assert "Unknown extension point" in str(exc_info.value)
 
 
@@ -96,13 +100,15 @@ def test_extension_system_register_input_extension_wrong_type() -> None:
 def test_extension_system_register_error_ExtensionPointNotFoundError() -> None:
     """extension_system.register.error.ExtensionPointNotFoundError
 
-    Spec ### Errors: `ExtensionPointNotFoundError` (Python: `KeyError`) when
-    `point_name` is not a registered extension point. Trigger it and assert the
-    error type + the diagnostic identifying the offending name.
+    Spec ### Errors: `ExtensionPointNotFoundError` (Python:
+    `InvalidInputError(code=GENERAL_INVALID_INPUT)`) when `point_name` is not a
+    registered extension point. Trigger it and assert the code + the diagnostic
+    identifying the offending name.
     """
     mgr = ExtensionManager()
-    with pytest.raises(KeyError) as exc_info:
+    with pytest.raises(InvalidInputError) as exc_info:
         mgr.register("totally_unknown", StubDiscoverer())
+    assert exc_info.value.code == "GENERAL_INVALID_INPUT"
     assert "totally_unknown" in str(exc_info.value)
 
 

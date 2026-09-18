@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from apcore.acl import ACL
 from apcore.approval import ApprovalHandler
+from apcore.errors import InvalidInputError
 from apcore.middleware import Middleware
 from apcore.observability.tracing import Span, SpanExporter, TracingMiddleware
 from apcore.registry.registry import Discoverer, ModuleValidator
@@ -101,6 +102,21 @@ class ExtensionManager:
         self._points: dict[str, ExtensionPoint] = _built_in_points()
         self._extensions: dict[str, list[Any]] = {name: [] for name in self._points}
 
+    def _require_point(self, point_name: str) -> ExtensionPoint:
+        """Return the named extension point, or raise if it is not registered.
+
+        D-108: an UNKNOWN point name is an error; an EMPTY point is not. The
+        distinction used to be blurred by the contract's ``### Errors: No
+        errors raised`` row, which was written about the empty case — one SDK
+        read it as covering the unknown case too and answered a misspelled
+        name with a silent ``None``/``[]``/``False``, so ``get("middlewares")``
+        wired nothing and first surfaced as a bug at ``apply()``.
+        """
+        point = self._points.get(point_name)
+        if point is None:
+            raise InvalidInputError(f"Unknown extension point: {point_name!r}. Available: {sorted(self._points)}")
+        return point
+
     def register(self, point_name: str, extension: Any) -> None:
         """Register an extension for the given extension point.
 
@@ -109,13 +125,10 @@ class ExtensionManager:
             extension: The extension instance to register.
 
         Raises:
-            KeyError: If point_name is not a known extension point.
+            InvalidInputError: If point_name is not a known extension point.
             TypeError: If extension does not satisfy the extension point's type.
         """
-        if point_name not in self._points:
-            raise KeyError(f"Unknown extension point: '{point_name}'. Available: {sorted(self._points.keys())}")
-
-        point = self._points[point_name]
+        point = self._require_point(point_name)
         if not isinstance(extension, point.extension_type):
             raise TypeError(
                 f"Extension for '{point_name}' must be an instance of "
@@ -134,11 +147,10 @@ class ExtensionManager:
             point_name: Name of the extension point.
 
         Raises:
-            KeyError: If point_name is not a known extension point.
+            InvalidInputError: If point_name is not a known extension point.
+                A point that exists but holds nothing returns None (D-108).
         """
-        if point_name not in self._points:
-            raise KeyError(f"Unknown extension point: '{point_name}'")
-
+        self._require_point(point_name)
         exts = self._extensions[point_name]
         return exts[0] if exts else None
 
@@ -149,11 +161,10 @@ class ExtensionManager:
             point_name: Name of the extension point.
 
         Raises:
-            KeyError: If point_name is not a known extension point.
+            InvalidInputError: If point_name is not a known extension point.
+                A point that exists but holds nothing returns [] (D-108).
         """
-        if point_name not in self._points:
-            raise KeyError(f"Unknown extension point: '{point_name}'")
-
+        self._require_point(point_name)
         return list(self._extensions[point_name])
 
     def unregister(self, point_name: str, extension: Any) -> bool:
@@ -176,11 +187,10 @@ class ExtensionManager:
             True if the extension was found and removed, False otherwise.
 
         Raises:
-            KeyError: If point_name is not a known extension point.
+            InvalidInputError: If point_name is not a known extension point.
+                An extension the point does not hold returns False (D-108).
         """
-        if point_name not in self._points:
-            raise KeyError(f"Unknown extension point: '{point_name}'")
-
+        self._require_point(point_name)
         exts = self._extensions[point_name]
         for index, candidate in enumerate(exts):
             if candidate is extension:

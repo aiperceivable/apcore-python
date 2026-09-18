@@ -2549,3 +2549,91 @@ def test_toggle_state_isolation(case: dict[str, Any]) -> None:
     finally:
         for client in instances.values():
             client.close()
+
+
+# ---------------------------------------------------------------------------
+# extension_point_lookup.json — D-108
+# ---------------------------------------------------------------------------
+
+from apcore.extensions import ExtensionManager as _ExtensionManager  # noqa: E402
+
+_extension_point_lookup_data = _load("extension_point_lookup")
+
+
+class _LookupMiddleware(Middleware):
+    """A distinct object per construction — `unregister` compares by identity."""
+
+
+def _make_extension(point_name: str) -> Any:
+    """Build one SDK-native extension satisfying `point_name`'s declared type."""
+    if point_name == "middleware":
+        return _LookupMiddleware()
+    if point_name == "acl":
+        return ACL(rules=[], default_effect="deny")
+    pytest.fail(f"extension_point_lookup: no factory for point {point_name!r}")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _extension_point_lookup_data["test_cases"],
+    ids=[c["id"] for c in _extension_point_lookup_data["test_cases"]],
+)
+def test_extension_point_lookup(case: dict[str, Any]) -> None:
+    cid = case["id"]
+    mgr = _ExtensionManager()
+    registered: list[Any] = []
+    for point_name in case["setup"]:
+        ext = _make_extension(point_name)
+        mgr.register(point_name, ext)
+        registered.append(ext)
+
+    point_name = case["point_name"]
+    operation = case["operation"]
+    expected = case["expected"]
+
+    def invoke() -> Any:
+        if operation == "get":
+            return mgr.get(point_name)
+        if operation == "get_all":
+            return mgr.get_all(point_name)
+        if operation == "unregister":
+            if case["unregister_target"] == "setup":
+                target = registered[0]
+            else:
+                # A stranger of the SAME type, never registered. Built from the
+                # point the case names when that point is known, so the call is
+                # a genuine identity miss rather than a type mismatch.
+                target = _make_extension(point_name if point_name in {"middleware", "acl"} else "middleware")
+            return mgr.unregister(point_name, target)
+        pytest.fail(f"[{cid}] unknown operation {operation!r}")
+
+    error_code = expected["error_code"]
+    if error_code is not None:
+        with pytest.raises(ModuleError) as exc_info:
+            result = invoke()
+            pytest.fail(
+                f"[{cid}] {operation}({point_name!r}) must reject an unregistered "
+                f"extension point with {error_code}, but answered {result!r}"
+            )
+        assert exc_info.value.code == error_code, (
+            f"[{cid}] {operation}({point_name!r}) raised code " f"{exc_info.value.code!r}, expected {error_code!r}"
+        )
+        return
+
+    # No error expected: the call must answer, and answer this.
+    result = invoke()
+    if "value" in expected:
+        present = result is not None
+        assert present == (
+            expected["value"] == "present"
+        ), f"[{cid}] get({point_name!r}) returned {result!r}, expected {expected['value']}"
+    elif "count" in expected:
+        assert len(result) == expected["count"], (
+            f"[{cid}] get_all({point_name!r}) returned {len(result)} extensions, " f"expected {expected['count']}"
+        )
+    elif "removed" in expected:
+        assert result is expected["removed"], (
+            f"[{cid}] unregister({point_name!r}) returned {result!r}, " f"expected {expected['removed']!r}"
+        )
+    else:
+        pytest.fail(f"[{cid}] expected block names no assertion: {expected!r}")

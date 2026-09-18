@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from apcore.acl import ACL
+from apcore.errors import InvalidInputError
 from apcore.extensions import ExtensionManager, ExtensionPoint
 from apcore.middleware import Middleware
 from apcore.observability.tracing import InMemoryExporter, TracingMiddleware
@@ -153,30 +154,46 @@ class TestModuleValidatorExtension:
 
 
 class TestValidation:
-    def test_unknown_point_raises_key_error(self) -> None:
+    def test_unknown_point_raises_invalid_input(self) -> None:
         mgr = ExtensionManager()
-        with pytest.raises(KeyError, match="Unknown extension point"):
+        with pytest.raises(InvalidInputError, match="Unknown extension point") as exc_info:
             mgr.register("nonexistent", object())
+        assert exc_info.value.code == "GENERAL_INVALID_INPUT"
 
     def test_wrong_type_raises_type_error(self) -> None:
         mgr = ExtensionManager()
         with pytest.raises(TypeError, match="must be an instance of"):
             mgr.register("middleware", "not_a_middleware")
 
-    def test_get_unknown_point_raises_key_error(self) -> None:
+    def test_get_unknown_point_raises_invalid_input(self) -> None:
+        # D-108: the code is the assertion. A bare KeyError says "something
+        # went wrong with a key" and is indistinguishable from a dict miss
+        # anywhere else in the call; GENERAL_INVALID_INPUT names the mistake.
         mgr = ExtensionManager()
-        with pytest.raises(KeyError):
+        with pytest.raises(InvalidInputError) as exc_info:
             mgr.get("nonexistent")
+        assert exc_info.value.code == "GENERAL_INVALID_INPUT"
 
-    def test_get_all_unknown_point_raises_key_error(self) -> None:
+    def test_get_all_unknown_point_raises_invalid_input(self) -> None:
         mgr = ExtensionManager()
-        with pytest.raises(KeyError):
+        with pytest.raises(InvalidInputError) as exc_info:
             mgr.get_all("nonexistent")
+        assert exc_info.value.code == "GENERAL_INVALID_INPUT"
 
-    def test_unregister_unknown_point_raises_key_error(self) -> None:
+    def test_unregister_unknown_point_raises_invalid_input(self) -> None:
         mgr = ExtensionManager()
-        with pytest.raises(KeyError):
+        with pytest.raises(InvalidInputError) as exc_info:
             mgr.unregister("nonexistent", object())
+        assert exc_info.value.code == "GENERAL_INVALID_INPUT"
+
+    def test_empty_registered_point_does_not_raise(self) -> None:
+        # D-108's other half, and the control for the three above: if the
+        # rejection were "raise for anything not holding an extension", these
+        # would be red. A registered point holding nothing answers, quietly.
+        mgr = ExtensionManager()
+        assert mgr.get("acl") is None
+        assert mgr.get_all("middleware") == []
+        assert mgr.unregister("middleware", object()) is False
 
     def test_discoverer_rejects_wrong_type(self) -> None:
         mgr = ExtensionManager()
