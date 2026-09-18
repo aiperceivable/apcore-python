@@ -1146,6 +1146,8 @@ class TestFixtureCoverage:
         "manifest_full_project_name_defaults_to_apcore": ("TestProjectNameAndOpenWorldDeclarations"),
         "health_summary_project_name_agrees_with_manifest_full": ("TestProjectNameAndOpenWorldDeclarations"),
         "system_modules_declare_open_world_false": ("TestProjectNameAndOpenWorldDeclarations"),
+        "error_rate_threshold_moves_only_the_healthy_boundary": ("TestErrorRateThresholdMovesOneBoundary"),
+        "the_error_boundary_stays_at_the_table_value": ("TestErrorRateThresholdMovesOneBoundary"),
     }
 
     def test_every_canonical_case_is_claimed(self) -> None:
@@ -1158,6 +1160,50 @@ class TestFixtureCoverage:
         module = sys.modules[__name__]
         missing = [cls for cls in self.COVERED.values() if not hasattr(module, cls)]
         assert missing == [], f"claimed driver class(es) not defined: {missing}"
+
+
+class TestErrorRateThresholdMovesOneBoundary:
+    """D-109: `error_rate_threshold` moves the HEALTHY/DEGRADED boundary only.
+
+    The degraded/error boundary is the classification table's fixed 0.10. This
+    SDK and apcore-typescript computed it as ``threshold * 10``, so a module
+    erroring 5% of the time was ``error`` here and ``degraded`` on apcore-rust —
+    same module, same metrics, same configuration.
+    """
+
+    @staticmethod
+    def _status_for(case: dict[str, Any]) -> str:
+        observed = case["action"]["observed"]
+        module_id = observed["module_id"]
+
+        registry = Registry()
+        dummy = MagicMock()
+        dummy.input_schema = {"type": "object", "properties": {}}
+        dummy.output_schema = {"type": "object", "properties": {}}
+        registry.register_internal(module_id, dummy)
+
+        from apcore.observability.error_history import ErrorHistory
+
+        metrics = MetricsCollector()
+        for i in range(observed["total_calls"]):
+            metrics.increment_calls(module_id, "error" if i < observed["error_calls"] else "success")
+
+        summary = HealthSummaryModule(registry, metrics, ErrorHistory(), Config({})).execute(
+            dict(case["action"]["input"]), _make_context()
+        )
+        entry = next(m for m in summary["modules"] if m["module_id"] == module_id)
+        return str(entry["status"])
+
+    def test_a_rate_between_the_two_boundaries_is_degraded(self) -> None:
+        case = _CASES["error_rate_threshold_moves_only_the_healthy_boundary"]
+        assert self._status_for(case) == case["expected"]["module_status"]
+
+    def test_the_error_boundary_stays_at_the_table_value(self) -> None:
+        # Without this, "not scaled" is also satisfied by an implementation that
+        # removed the error boundary and called everything above healthy
+        # `degraded`.
+        case = _CASES["the_error_boundary_stays_at_the_table_value"]
+        assert self._status_for(case) == case["expected"]["module_status"]
 
 
 class TestBulkReloadCarriesCallerIdentity:

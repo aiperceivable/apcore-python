@@ -100,7 +100,18 @@ class HealthSummaryModule:
     def execute(self, inputs: dict[str, Any], context: Any) -> dict[str, Any]:
         """Produce an aggregated health summary of all registered modules."""
         healthy_threshold = float(inputs.get("error_rate_threshold", _DEFAULT_HEALTHY_THRESHOLD))
-        degraded_threshold = healthy_threshold * 10.0
+        # D-109: `error_rate_threshold` moves the FIRST boundary only. The
+        # degraded/error boundary is the classification table's fixed 0.10.
+        #
+        # This used to be `healthy_threshold * 10.0`, which silently gave the
+        # caller a second knob the table does not define: with
+        # `error_rate_threshold: 0.001` a module erroring 5% of the time was
+        # classified `error` here and `degraded` by apcore-rust, which reads the
+        # table. The consequence is recorded in the contract because it
+        # surprises — at 0.001, `degraded` spans 0.1%-10% — and a caller wanting
+        # a stricter ERROR boundary is asking for a knob that deliberately does
+        # not exist.
+        degraded_threshold = _DEFAULT_DEGRADED_THRESHOLD
         include_healthy: bool = inputs.get("include_healthy", True)
 
         project_name = self._get_project_name()
