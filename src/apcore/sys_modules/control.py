@@ -513,10 +513,16 @@ class ReloadModule:
 
         try:
             new_module = self._rediscover_module(module_id)
+            self._reregister_module(module_id, new_module)
         except Exception as exc:
+            # D-112: put the previous instance back rather than leaving a
+            # working module gone. Both steps are inside the guard because a
+            # re-registration that fails leaves exactly the same hole as a
+            # re-discovery that fails.
+            self._restore_after_failed_reload(module_id, old_module)
+            if isinstance(exc, ReloadFailedError):
+                raise
             raise ReloadFailedError(module_id=module_id, reason=str(exc)) from exc
-
-        self._reregister_module(module_id, new_module)
 
         if suspended_state is not None:
             self._try_resume(module_id, new_module, suspended_state)
@@ -651,6 +657,38 @@ class ReloadModule:
             )
             return sorted(module_ids)
 
+    def _restore_after_failed_reload(self, module_id: str, old_module: Any) -> None:
+        """Put the previous instance back after a reload failed (D-112).
+
+        COMPENSATING, not transactional. The module is genuinely unregistered
+        for a window and a concurrent call in that window sees
+        ``MODULE_NOT_FOUND``; this does not claim atomic replacement, and the
+        spec forbids implementations from claiming it. What it does prevent is
+        the worse outcome: a failed hot-fix making a WORKING module disappear.
+
+        ``register_internal`` re-runs the module's ``on_load``, which rule 2
+        requires — ``on_unload`` already ran during the unregister, so
+        re-publishing without it yields a module that is visible but torn down,
+        harder to diagnose than one that is absent.
+
+        If the restoring load ALSO fails the module stays unavailable (rule 3):
+        there is no good state left to return to, and publishing a module whose
+        load hook failed is the defect deferred publication exists to prevent.
+        The original failure is the one the caller is told about, so this logs
+        rather than raises.
+        """
+        if old_module is None:
+            return
+        try:
+            self._registry.register_internal(module_id, old_module)
+        except Exception as restore_exc:  # noqa: BLE001 - rule 3: stay unavailable
+            logger.error(
+                "system.control.reload: restoring '%s' after a failed reload also failed: %s. "
+                "The module is unavailable (D-112 rule 3).",
+                module_id,
+                restore_exc,
+            )
+
     def _reload_one(self, module_id: str, context: Any = None) -> None:
         """Reload a single module as part of a bulk (path_filter) reload.
 
@@ -672,10 +710,16 @@ class ReloadModule:
 
         try:
             new_module = self._rediscover_module(module_id)
+            self._reregister_module(module_id, new_module)
         except Exception as exc:
+            # D-112 rule 4: restoration is PER MODULE. The bulk operation as a
+            # whole still fails (D-17), and modules that already reloaded
+            # successfully are NOT rolled back — cross-module transactionality
+            # is not a primitive the registry has.
+            self._restore_after_failed_reload(module_id, old_module)
+            if isinstance(exc, ReloadFailedError):
+                raise
             raise ReloadFailedError(module_id=module_id, reason=str(exc)) from exc
-
-        self._reregister_module(module_id, new_module)
 
         if suspended_state is not None:
             self._try_resume(module_id, new_module, suspended_state)
