@@ -247,22 +247,24 @@ class TestGetContract:
     def teardown_method(self) -> None:
         _reset_registry()
 
-    @pytest.mark.skip(
-        reason="spec/impl divergence: contract says Config.get('') is rejected "
-        "with ValueError/ConfigInvalidError, but this Python SDK returns the "
-        "default for an empty key instead of raising (config.py Config.get). "
-        "Recorded as a cross-language gap rather than a hard suite failure."
-    )
     def test_input_key_empty(self) -> None:
         """config_bus.get.input.key.empty
 
-        Spec: empty string is rejected with ValueError/ConfigInvalidError.
+        An empty key is NOT an error: it resolves no value and returns the
+        default, exactly like any other absent key (config-bus.md "Contract:
+        Config.get", D-74).
+
+        This was skipped in all three SDKs with the reason "contract says
+        Config.get('') is rejected ... but this SDK returns the default" —
+        written before D-74, which deleted that row and recorded that it
+        "described behaviour no SDK has ever had". The skip outlived the rule
+        it was about, and because all three suites skipped it symmetrically the
+        skip-asymmetry guard could not see it either.
         """
         config = Config.from_defaults()
-        with pytest.raises((ValueError, ConfigError)) as exc:
-            config.get("")
-        if isinstance(exc.value, ConfigError):
-            assert exc.value.code == "CONFIG_INVALID"
+        assert config.get("") is None
+        sentinel = object()
+        assert config.get("", sentinel) is sentinel
 
     def test_property_missing_returns_default(self) -> None:
         """config_bus.get.input.default.missing_key
