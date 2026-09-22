@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from apcore.context import Context
-from apcore.errors import TaskLimitExceededError
+from apcore.errors import ErrorCodes, ModuleError, TaskLimitExceededError
 
 __all__ = [
     "TaskStatus",
@@ -702,7 +702,8 @@ class AsyncTaskManager:
             the loop.
 
         Raises:
-            RuntimeError: If the reaper is already running.
+            ModuleError: With code ``REAPER_ALREADY_RUNNING`` if the reaper
+                is already running.
             TypeError: If both legacy and new kwargs are supplied for the
                 same value.
         """
@@ -734,7 +735,10 @@ class AsyncTaskManager:
             ttl_seconds = float(max_age_seconds)
 
         if self._reaper_task is not None and not self._reaper_task.done():
-            raise RuntimeError("Reaper is already running; call stop_reaper() first")
+            raise ModuleError(
+                ErrorCodes.REAPER_ALREADY_RUNNING,
+                "Reaper is already running; call stop_reaper() first",
+            )
 
         self._reaper_interval = float(sweep_interval_ms) / 1000.0
         self._reaper_max_age = float(ttl_seconds)

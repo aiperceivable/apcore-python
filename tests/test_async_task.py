@@ -18,6 +18,7 @@ from apcore.async_task import (
     TaskStore,
 )
 from apcore.context import Context
+from apcore.errors import ErrorCodes, ModuleError
 from apcore.executor import Executor
 from apcore.registry import Registry
 
@@ -764,11 +765,12 @@ class TestReaper:
 
     @pytest.mark.asyncio
     async def test_double_start_reaper_raises(self, executor: Executor) -> None:
-        """TC-023: starting the reaper twice raises RuntimeError."""
+        """TC-023: starting the reaper twice raises ModuleError(REAPER_ALREADY_RUNNING)."""
         mgr = AsyncTaskManager(executor)
         mgr.start_reaper(interval_seconds=60.0)
-        with pytest.raises(RuntimeError, match="already running"):
+        with pytest.raises(ModuleError, match="already running") as exc_info:
             mgr.start_reaper(interval_seconds=60.0)
+        assert exc_info.value.code == ErrorCodes.REAPER_ALREADY_RUNNING
         await mgr.stop_reaper()
 
 

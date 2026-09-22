@@ -29,7 +29,7 @@ from apcore.async_task import (
     TaskStatus,
 )
 from apcore.context import Context
-from apcore.errors import ErrorCodes, InvalidInputError, TaskLimitExceededError
+from apcore.errors import ErrorCodes, InvalidInputError, ModuleError, TaskLimitExceededError
 from apcore.executor import Executor
 from apcore.registry import Registry
 
@@ -521,11 +521,13 @@ async def test_start_reaper_property_not_idempotent(manager: AsyncTaskManager) -
     """async_tasks.start_reaper.property.idempotent_false
 
     start_reaper is declared NOT idempotent and SHOULD guard against a second
-    concurrent start: starting again while a reaper runs raises RuntimeError.
+    concurrent start: starting again while a reaper runs raises
+    ModuleError(REAPER_ALREADY_RUNNING).
     """
     handle = manager.start_reaper(ttl_seconds=3600.0, sweep_interval_ms=300_000)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ModuleError) as exc_info:
         manager.start_reaper(ttl_seconds=3600.0, sweep_interval_ms=300_000)
+    assert exc_info.value.code == ErrorCodes.REAPER_ALREADY_RUNNING
     await handle.stop()
 
 
