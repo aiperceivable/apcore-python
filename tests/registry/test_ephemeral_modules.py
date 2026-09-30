@@ -1,6 +1,6 @@
 """Tests for the ``ephemeral.*`` namespace + ``discoverable`` annotation pilot.
 
-Pilots the apcore RFC ``docs/spec/rfc-ephemeral-modules.md``. Covers:
+Pilots protocol-spec §2.5.1. Covers:
 
 * Filesystem discovery rejection of ``ephemeral.*`` IDs.
 * ``Registry.register()`` happy path for ``ephemeral.*`` IDs.
@@ -437,8 +437,8 @@ class TestEphemeralAuditEvents:
         ), "expected an INFO log fallback when no EventEmitter is wired"
 
     def test_bridge_does_not_dual_emit_for_ephemeral(self) -> None:
-        """Single-emit rule (apcore RFC ``rfc-ephemeral-modules.md``,
-        "Audit-event single-emit rule"): when both the registry-side direct
+        """Single-emit rule (protocol-spec §2.5.1,
+        "Audit events"): when both the registry-side direct
         emit (``set_event_emitter``) and the ``_bridge_registry_events``
         callback bridge are wired, an ``ephemeral.*`` registration MUST
         produce exactly ONE ``apcore.registry.module_registered`` event —
@@ -489,8 +489,7 @@ class TestEphemeralAuditEvents:
 
 
 class TestRegisterInternalRejectsEphemeral:
-    """Per apcore RFC ``rfc-ephemeral-modules.md`` §"register_internal()
-    interaction": ``register_internal()`` MUST reject ``ephemeral.*`` IDs
+    """Per protocol-spec §2.5.1: ``register_internal()`` MUST reject ``ephemeral.*`` IDs
     and direct the caller to ``Registry.register()``. Rationale: namespace →
     registration-mechanism is a 1:1 mapping; mixing blurs the audit-trail
     distinction between framework-emitted (``system.*``) and caller-emitted

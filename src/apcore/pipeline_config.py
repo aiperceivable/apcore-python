@@ -20,8 +20,8 @@ _step_type_registry: dict[str, type[BaseStep] | Callable[[dict[str, Any]], BaseS
 # `pipeline.configure` — a CLOSED field set
 # ---------------------------------------------------------------------------
 
-#: Exactly the four behavioural modifiers of DECLARATIVE_CONFIG_SPEC.md §4.2 and
-#: ``schemas/apcore-config.schema.json`` ``$defs/ConfigurableStepFields``: the §4.3
+#: Exactly the four behavioural modifiers of protocol-spec §5.16.1 and
+#: ``schemas/apcore-config.schema.json`` ``$defs/ConfigurableStepFields``: the
 #: step-entry fields that still mean something applied to a step that already exists.
 #:
 #: This gate used to be ``hasattr(step, key)`` — any attribute the concrete step
@@ -70,7 +70,7 @@ _NON_CONFIGURABLE_STEP_FIELDS: dict[str, str] = {
 
 
 #: The ten fields ``$defs/PipelineStep`` declares for a ``pipeline.steps`` entry
-#: (DECLARATIVE_CONFIG_SPEC.md §4.3). That definition has been
+#: (protocol-spec §5.16.1). That definition has been
 #: ``additionalProperties: false`` since it was written and nothing enforced it:
 #: ``_resolve_step`` read the ten it knew and ignored the rest, so
 #: ``{"name": "x", "type": "noop", "after": "execute", "tiemout_ms": 5000}`` built

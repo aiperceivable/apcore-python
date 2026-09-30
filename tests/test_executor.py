@@ -691,7 +691,7 @@ class TestValidate:
 
 
 class TestChangeExtensionKeys:
-    """RFC rfc-preview-method.md: Change.x-* extension fields cross-SDK encoding."""
+    """protocol-spec §12.8.5.1: Change.x-* extension fields cross-SDK encoding."""
 
     def test_change_accepts_x_prefixed_extras(self) -> None:
         from apcore.module import Change

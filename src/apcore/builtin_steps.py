@@ -163,7 +163,7 @@ class BuiltinContextCreation(BaseStep):
         # value (and, via `child()`, the enclosing tree's).
         #
         # D-99 — the clock is EPOCH SECONDS (`time.time()`), as
-        # design-context-annotations-acl.md has stated since the field was
+        # docs/features/context-object.md has stated since the field was
         # introduced. `global_deadline` is a public `Context.create`
         # parameter, so a spec-following caller writes `time.time() + budget`;
         # compared against a monotonic basis that is roughly 1.8e9 against

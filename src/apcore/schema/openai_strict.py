@@ -4,7 +4,7 @@ This module is deliberately **separate** from :mod:`apcore.schema.strict`.
 ``to_strict_schema()`` is a general-purpose registry/export transform; baking an
 OpenAI-specific dialect check into it would leak one vendor's constraints into
 every other consumer. Detection lives here and is invoked only on the
-``auto_schema: strict`` binding path (DECLARATIVE_CONFIG_SPEC.md §6.2 / §6.6).
+``auto_schema: strict`` binding path (protocol-spec §5.12.5).
 
 Detection **never rewrites** the schema. In particular an author-written
 ``oneOf`` is reported, not silently downgraded to ``anyOf``: the two differ in
@@ -188,7 +188,7 @@ def assert_openai_strict_compatible(
     """Raise :class:`BindingStrictSchemaIncompatibleError` for an incompatible schema.
 
     Invoked on the ``auto_schema: strict`` binding path only
-    (DECLARATIVE_CONFIG_SPEC.md §6.6). No-op for compatible schemas.
+    (protocol-spec §5.12.5). No-op for compatible schemas.
 
     Args:
         schema: The JSON Schema to check.

@@ -653,7 +653,7 @@ def _strategy():
 
 
 class TestStepNameUniquenessOnReplacement:
-    """design-execution-pipeline.md: step names MUST be unique within a strategy."""
+    """docs/features/execution-pipeline.md: step names are unique within a strategy."""
 
     def test_replace_rejects_an_existing_name(self):
         from apcore.pipeline import StepNameDuplicateError

@@ -834,7 +834,7 @@ class Executor:
                     )
                 )
 
-        # Module-level preview (optional, PROTOCOL_SPEC §5.6 / RFC rfc-preview-method.md).
+        # Module-level preview (optional, protocol-spec §5.6 / §12.8.5.1).
         # Predicted changes are an advisory signal — if preview() raises, we
         # surface the failure as a warning on the module_preview check rather
         # than failing validation. This mirrors preflight() exception semantics.

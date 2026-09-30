@@ -1369,7 +1369,7 @@ def test_approval_gate(case: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 18. Binding Errors (DECLARATIVE_CONFIG_SPEC.md §7.2)
+# 18. Binding Errors (protocol-spec §5.12.8)
 # ---------------------------------------------------------------------------
 
 _binding_errors_data = _load("binding_errors")
@@ -1452,7 +1452,7 @@ def test_binding_errors(case: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 19. Binding YAML Canonical (DECLARATIVE_CONFIG_SPEC.md §3)
+# 19. Binding YAML Canonical (protocol-spec §5.12)
 # ---------------------------------------------------------------------------
 
 

@@ -887,7 +887,7 @@ class BindingNotCallableError(ModuleError):
 class BindingSchemaInferenceFailedError(ModuleError):
     """Raised when auto-schema mode (explicit or implicit) cannot infer a schema from the target.
 
-    See DECLARATIVE_CONFIG_SPEC.md §3.4 and §6.6.
+    See protocol-spec §5.12.2 and §5.12.5.
     """
 
     _default_retryable: bool | None = False
@@ -917,7 +917,7 @@ class BindingSchemaInferenceFailedError(ModuleError):
             code="BINDING_SCHEMA_INFERENCE_FAILED",
             message=(
                 f"{loc}{mod_part}auto schema inference failed for target '{target}'. "
-                f"{rem} See DECLARATIVE_CONFIG_SPEC.md §6"
+                f"{rem} See protocol-spec §5.12.5"
             ),
             details={
                 "target": target,
@@ -930,14 +930,14 @@ class BindingSchemaInferenceFailedError(ModuleError):
 
 
 # Deprecated alias kept for backward compatibility in 0.19.x; canonical name is
-# BindingSchemaInferenceFailedError per DECLARATIVE_CONFIG_SPEC.md §7.1.
+# BindingSchemaInferenceFailedError per protocol-spec §5.12.8.
 BindingSchemaMissingError = BindingSchemaInferenceFailedError
 
 
 class BindingSchemaModeConflictError(ModuleError):
     """Raised when a binding entry specifies multiple schema modes simultaneously.
 
-    See DECLARATIVE_CONFIG_SPEC.md §3.4.
+    See protocol-spec §5.12.2.
     """
 
     _default_retryable: bool | None = False
@@ -962,7 +962,7 @@ class BindingSchemaModeConflictError(ModuleError):
             code="BINDING_SCHEMA_MODE_CONFLICT",
             message=(
                 f"{loc}binding '{module_id}' specifies multiple schema modes ({modes_str}). "
-                "Choose one. See DECLARATIVE_CONFIG_SPEC.md §3.4"
+                "Choose one. See protocol-spec §5.12.2"
             ),
             details={
                 "module_id": module_id,
@@ -977,7 +977,7 @@ class BindingSchemaModeConflictError(ModuleError):
 class BindingStrictSchemaIncompatibleError(ModuleError):
     """Raised when auto_schema: strict is requested but inferred schema contains incompatible features.
 
-    See DECLARATIVE_CONFIG_SPEC.md §6.2.
+    See protocol-spec §5.12.5.
     """
 
     _default_retryable: bool | None = False
@@ -1003,7 +1003,7 @@ class BindingStrictSchemaIncompatibleError(ModuleError):
             message=(
                 f"{loc}binding '{module_id}' uses auto_schema: strict but inferred schema "
                 f"contains incompatible features: {features_str}. "
-                "See DECLARATIVE_CONFIG_SPEC.md §6.2"
+                "See protocol-spec §5.12.5"
             ),
             details={
                 "module_id": module_id,

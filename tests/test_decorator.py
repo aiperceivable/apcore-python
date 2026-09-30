@@ -165,7 +165,7 @@ class TestBindingSchemaInferenceFailedError:
         )
         assert "app.thing" in err.message
         assert "b.yaml:12" in err.message
-        assert "DECLARATIVE_CONFIG_SPEC.md §6" in err.message
+        assert "See protocol-spec §5.12.5" in err.message
 
 
 class TestBindingFileInvalidError:

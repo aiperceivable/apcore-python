@@ -106,7 +106,7 @@ class TestPipelineConfigFailFast:
         accepted and applied them.
 
         ``pipeline.configure`` accepts exactly the four behavioural modifiers of
-        DECLARATIVE_CONFIG_SPEC.md §4.2 — ``match_modules``, ``ignore_errors``,
+        protocol-spec §5.16.1 — ``match_modules``, ``ignore_errors``,
         ``pure``, ``timeout_ms``. Anything else an operator writes here is
         either structural (belongs on the ``pipeline.steps`` entry) or a
         property of the step implementation, and accepting it made a working

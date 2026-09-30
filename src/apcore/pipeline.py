@@ -426,8 +426,8 @@ class ExecutionStrategy:
     def _validate_replacement_name(self, new_step: Step, idx: int) -> None:
         """Reject a replacement whose name is already taken by a DIFFERENT step.
 
-        EXE-007. ``design-execution-pipeline.md`` states the invariant: "Step
-        names MUST be unique within a strategy." The constructor checks it once
+        EXE-007. ``docs/features/execution-pipeline.md`` states the invariant:
+        step names are unique within a strategy. The constructor checks it once
         and never runs again, and ``insert_after`` / ``insert_before`` check it
         on their own doors — but ``replace`` and ``configure_step`` assigned
         straight into ``self.steps`` and rebuilt the index, so two identically

@@ -1,6 +1,6 @@
 """YAML binding loader for zero-code-modification module integration.
 
-Implements DECLARATIVE_CONFIG_SPEC.md §3 (Bindings YAML).
+Implements protocol-spec §5.12 (Bindings YAML).
 """
 
 from __future__ import annotations
@@ -220,7 +220,7 @@ def _validate_binding_limits(entry: dict[str, Any], config: Config | None, *, fi
 class BindingLoader:
     """Loads YAML binding files and creates FunctionModule instances.
 
-    See DECLARATIVE_CONFIG_SPEC.md §3.
+    See protocol-spec §5.12.
 
     Args:
         trusted_package_prefixes: Optional allowlist of module-path prefixes.
@@ -278,9 +278,7 @@ class BindingLoader:
         spec_version = data.get("spec_version")
         if spec_version is None:
             _logger.warning(
-                "%s: spec_version missing; defaulting to '1.0'. "
-                "spec_version will be mandatory in spec 1.1. "
-                "See DECLARATIVE_CONFIG_SPEC.md §2.4",
+                "%s: spec_version missing; defaulting to '1.0'. See protocol-spec §5.12.2",
                 file_path,
             )
         elif spec_version not in _SUPPORTED_SPEC_VERSIONS:
@@ -484,7 +482,7 @@ class BindingLoader:
         file_path: str,
         module_id: str,
     ) -> tuple[type[BaseModel], type[BaseModel]]:
-        """Resolve input/output schema per DECLARATIVE_CONFIG_SPEC.md §3.4."""
+        """Resolve input/output schema per protocol-spec §5.12.2."""
         modes = _detect_schema_modes(binding)
         if len(modes) > 1:
             raise BindingSchemaModeConflictError(

@@ -23,7 +23,7 @@ class-name assertion passed everywhere and proved nothing.
 Since aiperceivable/apcore#89 the fixture also pins the SIZE of the
 configurable set: ``pipeline.configure`` accepts exactly ``match_modules``,
 ``ignore_errors``, ``pure``, ``timeout_ms``
-(``$defs/ConfigurableStepFields`` / DECLARATIVE_CONFIG_SPEC.md §4.2).
+(``$defs/ConfigurableStepFields`` / protocol-spec §5.16.1).
 ``requires`` / ``provides`` are NOT among them — they are the step's own
 capability contract, and configuration able to rewrite it disables the
 ``PIPELINE_DEPENDENCY_ERROR`` MUST this same fixture pins two cases above.

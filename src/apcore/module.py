@@ -52,7 +52,7 @@ class Module(Protocol):
       is unavailable). MUST NOT have side effects. Mirrors ``preflight()``
       exception semantics: a raised exception is folded into a warning on the
       ``module_preview`` advisory check rather than failing validation.
-      Per PROTOCOL_SPEC §5.6 and RFC `apcore/docs/spec/rfc-preview-method.md`.
+      Per protocol-spec §5.6.
     - ``stream(inputs, context)`` — async generator variant (streaming mode).
 
     Cross-language parity with apcore-typescript Module interface and
@@ -107,8 +107,8 @@ class ModuleAnnotations:
         pagination_style: Pagination strategy (default "cursor"). Accepts any string.
         discoverable: Whether the module appears in enumeration surfaces
             (``Registry.list``, manifest export, etc.). Default ``True``.
-            ``ephemeral.*`` modules SHOULD set this to ``False`` per the
-            ephemeral-modules RFC pilot. Hidden modules remain callable
+            ``ephemeral.*`` modules SHOULD set this to ``False`` per
+            protocol-spec §2.5.1. Hidden modules remain callable
             through ``Registry.get`` / ``Executor.execute`` when the caller
             already knows the module ID.
         extra: Extension dictionary for ecosystem package metadata.
@@ -237,7 +237,7 @@ class PreflightCheckResult:
 class Change(_PydBaseModel):
     """Structured prediction of a single state change a module call would produce.
 
-    Per PROTOCOL_SPEC §12.8 and RFC `apcore/docs/spec/rfc-preview-method.md`:
+    Per protocol-spec §12.8.5.1:
 
     - ``action`` is a free-form verb describing the kind of change ("write",
       "delete", "send", ...). Module authors define their own taxonomy.
@@ -269,7 +269,7 @@ class Change(_PydBaseModel):
             if not key.startswith("x-"):
                 raise ValueError(
                     f"Unknown field {key!r} on Change; non-'x-*' extension keys "
-                    "are forbidden (see PROTOCOL_SPEC §4.6 / RFC rfc-preview-method.md)."
+                    "are forbidden (see protocol-spec §4.6 / §12.8.5.1)."
                 )
         return self
 

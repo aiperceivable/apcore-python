@@ -7,7 +7,7 @@ this driver on the next run rather than leaving Python on a stale snapshot.
 DRIVER CONTRACT: this file MUST drive
 ``apcore.schema.openai_strict.detect_openai_strict_incompatibilities()`` — the
 detector that backs ``BindingStrictSchemaIncompatibleError`` on the
-``auto_schema: strict`` binding path (DECLARATIVE_CONFIG_SPEC.md §6.2 / §6.6).
+``auto_schema: strict`` binding path (protocol-spec §5.12.5).
 The detector is the shared deterministic surface across the three SDKs; the
 binding wrapper around it differs per SDK (Rust performs no runtime type
 inference). Feature lists are compared for exact equality INCLUDING ORDER:

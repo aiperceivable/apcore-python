@@ -166,7 +166,7 @@ DEFAULT_MODULE_VERSION = "1.0.0"
 RESERVED_WORDS = frozenset({"system", "internal", "core", "apcore", "plugin", "schema", "acl"})
 
 # Namespace reserved for programmatically-registered modules synthesized at
-# runtime (see apcore RFC ``docs/spec/rfc-ephemeral-modules.md``). IDs in this
+# runtime (see protocol-spec §2.5.1). IDs in this
 # namespace MUST be registered through :meth:`Registry.register` only; the
 # filesystem discoverer rejects matching IDs because the namespace has no
 # directory-rooted source of truth. The trailing dot is required so module IDs
@@ -648,7 +648,7 @@ class Registry:
         ``"@external"`` when no identity is attached) plus a redacted
         identity snapshot when ``context.identity`` is set on the call site.
 
-        Pilot scope (apcore RFC ``docs/spec/rfc-ephemeral-modules.md``):
+        Pilot scope (protocol-spec §2.5.1):
         only ``ephemeral.*`` registrations trigger registry-side emits. The
         ``_bridge_registry_events`` helper in ``apcore.sys_modules.registration``
         continues to emit canonical events for all module registrations via
@@ -894,7 +894,7 @@ class Registry:
     def _reject_ephemeral_discoveries(discovered: list[Any]) -> None:
         """Reject filesystem-derived IDs that fall in the reserved ``ephemeral.*`` namespace.
 
-        Per the apcore ephemeral-modules RFC pilot, ``ephemeral.*`` is reserved
+        Per protocol-spec §2.5.1, ``ephemeral.*`` is reserved
         for programmatically-registered modules synthesized at runtime. Any
         filesystem layout that produces such an ID is a configuration error —
         either the directory is misnamed or the namespace prefix is being
@@ -1325,7 +1325,7 @@ class Registry:
         # ``ephemeral.*`` registrations only land via this programmatic
         # entry point — the filesystem discoverer rejects matching IDs
         # earlier (see ``_reject_ephemeral_discoveries``). When invoked
-        # here the RFC pilot recommends ``requires_approval=true`` so a
+        # here protocol-spec §2.5.1 recommends ``requires_approval=true`` so a
         # human gates execution of agent-synthesized code.
         ephemeral = _is_ephemeral(module_id)
         if ephemeral:
@@ -1986,13 +1986,13 @@ class Registry:
                         },
                     )
 
-    # ----- Ephemeral namespace pilot (apcore RFC: rfc-ephemeral-modules) -----
+    # ----- Ephemeral namespace pilot (protocol-spec §2.5.1) -----
 
     @staticmethod
     def _warn_if_missing_approval(module_id: str, module: Any, metadata: dict[str, Any] | None = None) -> None:
         """Soft-warn when an ephemeral.* module is registered without ``requires_approval=True``.
 
-        Per the ephemeral-modules RFC pilot, agent-synthesized modules SHOULD
+        Per protocol-spec §2.5.1, agent-synthesized modules SHOULD
         declare ``requires_approval: true`` so a human gates execution. The
         registry only warns; it does not refuse the registration.
 
@@ -2012,7 +2012,7 @@ class Registry:
         if not requires_approval:
             logger.warning(
                 "ephemeral.* module '%s' registered without requires_approval=True. "
-                "The apcore RFC docs/spec/rfc-ephemeral-modules.md recommends "
+                "The apcore protocol-spec §2.5.1 recommends "
                 "setting ModuleAnnotations(requires_approval=True) so agent-"
                 "synthesized code does not run unattended.",
                 module_id,
@@ -2574,8 +2574,7 @@ class Registry:
                 the module does not implement a conformant ``stream()``.
             RuntimeError: If module.on_load() fails (propagated).
         """
-        # Per apcore RFC docs/spec/rfc-ephemeral-modules.md
-        # "register_internal() interaction": ephemeral.* IDs MUST be rejected
+        # Per protocol-spec §2.5.1: ephemeral.* IDs MUST be rejected
         # here. Namespace → registration-mechanism is a 1:1 mapping; mixing
         # blurs the audit-trail distinction between framework-emitted
         # (system.*) and caller-emitted (ephemeral.*) modules.
@@ -2592,9 +2591,8 @@ class Registry:
             raise InvalidInputError(
                 message=(
                     f"ephemeral.* module IDs must be registered via Registry.register(), "
-                    f"not register_internal() (got: {module_id!r}). See apcore "
-                    f"docs/spec/rfc-ephemeral-modules.md "
-                    f"§'register_internal() interaction' for rationale."
+                    f"not register_internal() (got: {module_id!r}). "
+                    "See protocol-spec §2.5.1 for rationale."
                 ),
                 code=ErrorCodes.INVALID_MODULE_ID,
             )

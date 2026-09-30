@@ -1,6 +1,6 @@
 """Unit + binding-path regression tests for OpenAI strict-mode compatibility detection.
 
-Covers DECLARATIVE_CONFIG_SPEC.md §6.2 / §6.6.
+Covers protocol-spec §5.12.5.
 
 Cross-SDK feature-list parity lives in
 ``tests/conformance/test_openai_strict_compat.py``; this file covers the
@@ -147,11 +147,11 @@ class TestAssertOpenAiStrictCompatible:
         assert err.details["features_listed"] == ["input:$.s.minLength"]
         assert "binding 'demo.mod' uses auto_schema: strict" in str(err)
         assert "input:$.s.minLength" in str(err)
-        assert "DECLARATIVE_CONFIG_SPEC.md §6.2" in str(err)
+        assert "See protocol-spec §5.12.5" in str(err)
 
 
 class TestBindingLoaderStrictEnforcement:
-    """The ``auto_schema: strict`` binding path (DECLARATIVE_CONFIG_SPEC.md §6.6)."""
+    """The ``auto_schema: strict`` binding path (protocol-spec §5.12.5)."""
 
     @staticmethod
     def _write(tmp_path: Path, target: str, auto_schema: str = "strict") -> str:

@@ -743,8 +743,8 @@ def _bridge_registry_events(registry: Registry, emitter: EventEmitter) -> None:
         # direct emit (Registry.set_event_emitter / _emit_ephemeral_audit)
         # already fires the canonical event with the full D-35 contextual
         # payload. Skipping the empty-payload bridge emit here avoids dual
-        # emission for the same event_type. See apcore RFC
-        # docs/spec/rfc-ephemeral-modules.md "Audit-event single-emit rule".
+        # emission for the same event_type. See protocol-spec §2.5.1
+        # "Audit events".
         if module_id.startswith("ephemeral."):
             return
         ts = _now()
@@ -759,8 +759,8 @@ def _bridge_registry_events(registry: Registry, emitter: EventEmitter) -> None:
         )
 
     def on_unregister(module_id: str, module: Any) -> None:
-        # Mirror the single-emit rule for unregistrations. See apcore RFC
-        # docs/spec/rfc-ephemeral-modules.md "Audit-event single-emit rule".
+        # Mirror the single-emit rule for unregistrations. See protocol-spec
+        # §2.5.1 "Audit events".
         if module_id.startswith("ephemeral."):
             return
         ts = _now()
