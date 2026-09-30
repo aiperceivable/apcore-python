@@ -253,6 +253,9 @@ class TestObsLoggingMiddleware:
         logger = ContextLogger(name="obs", output=buf)
         mw = ObsLoggingMiddleware(logger=logger, log_inputs=True)
         ctx = Context.create()
+        ctx.redacted_inputs = {
+            "name": "Alice"
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
         mw.before("mod.a", {"name": "Alice"}, ctx)
         data = json.loads(buf.getvalue())
         assert "inputs" in data["extra"]
@@ -276,6 +279,9 @@ class TestObsLoggingMiddleware:
         mw.before("mod.a", {}, ctx)
         buf.truncate(0)
         buf.seek(0)
+        ctx.redacted_output = {
+            "message": "hello"
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
         mw.after("mod.a", {}, {"message": "hello"}, ctx)
         data = json.loads(buf.getvalue())
         assert "output" in data["extra"]

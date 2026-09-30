@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Security
+
+- **An executor's ACL, `ApprovalHandler` and `ExecutionPolicy` are bound into the built-in `acl_check` / `approval_gate` steps of every strategy it runs** — default, preset name, `pipeline:` section, registered name, pre-built instance, or per-call override — located by type; a provider the executor was not given leaves the step's own. `governance_state()` reports what the running gate holds (D-129, spec §6.6.5.5). Previously a pre-built strategy received none of them: a deny-all ACL let every call through while `acl_configured` and `builtin_acl_gate_wired` both read `true`.
+- **`ignore_errors: true`, any `match_modules`, and `pure: true` on `approval_gate` are rejected on the built-in gate steps** with `PIPELINE_CONFIGURATION_ERROR` naming the step and key — from `pipeline.configure` and from assigning the field on the step object (D-130, spec §5.16.1). `timeout_ms` and default values stay accepted.
+- **`ObsLoggingMiddleware` and `LoggingMiddleware` log only `context.redacted_inputs` / `redacted_output`**, never the raw inputs or output, so an `x-sensitive` field is redacted with or without a `RedactionConfig`; nothing captured means nothing logged (D-131, spec §10.6.1 requirement 5). `ObsLoggingMiddleware.after` previously logged the raw output.
+
+
 ## [0.31.0] - 2026-09-22
 
 ### Added

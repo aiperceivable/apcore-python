@@ -416,9 +416,11 @@ class ObsLoggingMiddleware(Middleware):
             "module_id": module_id,
             "caller_id": context.caller_id,
         }
-        if self._log_inputs:
-            base = context.redacted_inputs if context.redacted_inputs is not None else inputs
-            extra["inputs"] = self._redact(base)
+        # PROTOCOL_SPEC §10.6.1 requirement 5 (D-131): log the CAPTURED value,
+        # never the raw ``inputs`` handed in — only the capture point applies the
+        # ``x-sensitive`` schema rule. Nothing captured means nothing logged.
+        if self._log_inputs and context.redacted_inputs is not None:
+            extra["inputs"] = self._redact(context.redacted_inputs)
         self._logger.info("Module call started", extra=extra)
         return None
 
@@ -438,8 +440,11 @@ class ObsLoggingMiddleware(Middleware):
             "module_id": module_id,
             "duration_ms": duration_ms,
         }
-        if self._log_outputs:
-            extra["output"] = self._redact(output)
+        # D-131: ``context.redacted_output``, never the raw ``output`` — the raw
+        # value carries every ``x-sensitive`` field in plaintext.
+        redacted_output = getattr(context, "redacted_output", None)
+        if self._log_outputs and redacted_output is not None:
+            extra["output"] = self._redact(redacted_output)
         self._logger.info("Module call completed", extra=extra)
         return None
 

@@ -17,7 +17,8 @@ class LoggingMiddleware(Middleware):
     """Structured logging middleware with security-aware redaction.
 
     Logs module call start, completion (with duration), and errors using
-    context.redacted_inputs to avoid leaking sensitive data. Thread-safe
+    context.redacted_inputs / context.redacted_output — never the raw values
+    (PROTOCOL_SPEC §10.6.1 requirement 5). Thread-safe
     by storing per-call state in context.data.
     """
 
@@ -46,15 +47,16 @@ class LoggingMiddleware(Middleware):
         """Record start time and log module call initiation with redacted inputs."""
         LOGGING_START.set(context, time.time())
 
+        # PROTOCOL_SPEC §10.6.1 requirement 5 (D-131): only the captured
+        # ``context.redacted_inputs`` is logged, never the raw ``inputs``.
         if self._log_inputs:
-            redacted = context.redacted_inputs if context.redacted_inputs is not None else inputs
             self._logger.info(
                 f"[{context.trace_id}] START {module_id}",
                 extra={
                     "trace_id": context.trace_id,
                     "module_id": module_id,
                     "caller_id": context.caller_id,
-                    "inputs": redacted,
+                    "inputs": context.redacted_inputs,
                 },
             )
 
@@ -78,7 +80,8 @@ class LoggingMiddleware(Middleware):
                     "trace_id": context.trace_id,
                     "module_id": module_id,
                     "duration_ms": duration_ms,
-                    "output": output,
+                    # D-131: the captured value, never the raw ``output``.
+                    "output": getattr(context, "redacted_output", None),
                 },
             )
 
@@ -87,7 +90,7 @@ class LoggingMiddleware(Middleware):
     def on_error(self, module_id: str, inputs: dict[str, Any], error: Exception, context: Context) -> None:
         """Log module error with redacted inputs and traceback."""
         if self._log_errors:
-            redacted = context.redacted_inputs if context.redacted_inputs is not None else inputs
+            redacted = context.redacted_inputs
             self._logger.error(
                 f"[{context.trace_id}] ERROR {module_id}: {error}",
                 extra={

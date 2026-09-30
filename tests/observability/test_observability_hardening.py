@@ -458,6 +458,10 @@ def _assert_redaction_case(case_id: str) -> None:
     logger = ContextLogger.from_context(ctx, name="test", output=buf, output_format="json")
     mw = ObsLoggingMiddleware(logger=logger, log_inputs=True, redaction_config=config)
 
+    # D-131: the middleware logs the value the capture point wrote, never the
+    # raw inputs it is handed — so the log entry's inputs go where the pipeline
+    # puts them (no schema here, so the captured value equals the input).
+    ctx.redacted_inputs = dict(entry["inputs"])
     mw.before(entry["module_id"], dict(entry["inputs"]), ctx)
 
     record = json.loads(buf.getvalue().strip())
@@ -498,6 +502,10 @@ class TestRedactionFieldPatternMatch:
         mw = ObsLoggingMiddleware(logger=logger, log_inputs=True, redaction_config=config)
 
         ctx = Context.create()
+        ctx.redacted_inputs = {
+            "name": "alice",
+            "age": "30",
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
         mw.before("mod.a", {"name": "alice", "age": "30"}, ctx)
 
         log_entry = json.loads(buf.getvalue().strip())
@@ -527,6 +535,9 @@ class TestRedactionValuePatternMatch:
         mw = ObsLoggingMiddleware(logger=logger, log_inputs=True, redaction_config=config)
 
         ctx = Context.create()
+        ctx.redacted_inputs = {
+            "token": "not-an-sk-token"
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
         mw.before("mod.a", {"token": "not-an-sk-token"}, ctx)
 
         log_entry = json.loads(buf.getvalue().strip())

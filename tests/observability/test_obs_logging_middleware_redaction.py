@@ -51,13 +51,26 @@ def payload() -> dict[str, Any]:
     return {"top": SECRET, "items": [SECRET], "nested": {"key": SECRET}}
 
 
+def _captured(inputs: dict[str, Any] | None = None, output: dict[str, Any] | None = None) -> Context:
+    """A Context carrying what the pipeline's capture point would have written.
+
+    The middleware logs ``context.redacted_inputs`` / ``redacted_output`` and never
+    the raw values it is handed (PROTOCOL_SPEC §10.6.1 requirement 5, D-131), so a
+    direct drive has to put the payload where the pipeline puts it.
+    """
+    ctx = Context.create()
+    ctx.redacted_inputs = inputs
+    ctx.redacted_output = output
+    return ctx
+
+
 def _value_rule() -> RedactionConfig:
     return RedactionConfig(sensitive_keys=[], regex_patterns=[r"sk-[A-Za-z0-9]{6,}"])
 
 
 def test_a_logged_input_is_redacted_at_every_position(payload: dict[str, Any]) -> None:
     h = Harness(_value_rule())
-    h.mw.before("executor.x.y", payload, Context.create())
+    h.mw.before("executor.x.y", payload, _captured(inputs=payload))
 
     inputs = h.records()[0]["extra"]["inputs"]
     assert inputs["top"] == "***REDACTED***"
@@ -70,7 +83,7 @@ def test_a_logged_input_is_redacted_at_every_position(payload: dict[str, Any]) -
 
 def test_a_logged_output_is_redacted_at_every_position(payload: dict[str, Any]) -> None:
     h = Harness(_value_rule())
-    ctx = Context.create()
+    ctx = _captured(inputs={}, output=payload)
     h.mw.before("executor.x.y", {}, ctx)
     h.mw.after("executor.x.y", {}, payload, ctx)
 
@@ -90,7 +103,7 @@ def test_a_narrowed_rule_set_is_not_widened_again_by_the_logger_default() -> Non
     key rule at all.
     """
     h = Harness(RedactionConfig(sensitive_keys=[], regex_patterns=[]))
-    h.mw.before("executor.x.y", {"password": "hunter2"}, Context.create())
+    h.mw.before("executor.x.y", {"password": "hunter2"}, _captured(inputs={"password": "hunter2"}))
 
     assert h.records()[0]["extra"]["inputs"]["password"] == "hunter2"
 
@@ -98,7 +111,8 @@ def test_a_narrowed_rule_set_is_not_widened_again_by_the_logger_default() -> Non
 def test_with_no_config_the_shipped_defaults_still_apply() -> None:
     """The other half: aligning the passes must not disable out-of-the-box redaction."""
     h = Harness(None)
-    h.mw.before("executor.x.y", {"password": "hunter2", "nested": {"token": "abc"}}, Context.create())
+    payload = {"password": "hunter2", "nested": {"token": "abc"}}
+    h.mw.before("executor.x.y", payload, _captured(inputs=payload))
 
     inputs = h.records()[0]["extra"]["inputs"]
     assert inputs["password"] == "***REDACTED***"

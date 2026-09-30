@@ -373,6 +373,12 @@ class Executor:
         else:
             self._strategy = strategy
 
+        # PROTOCOL_SPEC §6.6.5.5 (D-129): however the strategy was supplied, the
+        # executor's providers reach its built-in gate steps. A pre-built
+        # instance never received them, so a deny-all ACL let every call through
+        # while governance_state() reported the gate as configured and wired.
+        self._bind_providers(self._strategy)
+
         self._pipeline_engine = PipelineEngine()
 
         if config is not None:
@@ -452,68 +458,81 @@ class Executor:
         """Return a copy of the current middleware list."""
         return self._middleware_manager.snapshot()
 
+    def _bind_providers(self, strategy: ExecutionStrategy) -> None:
+        """Bind this executor's providers into *strategy*'s built-in gate steps.
+
+        PROTOCOL_SPEC §6.6.5.5 (D-129). Gates are located by TYPE, never by step
+        name (§6.6.5.2), exactly as :meth:`governance_state` recognises them. A
+        provider the executor holds replaces the one the step holds; a provider
+        the executor was not given leaves the step's own provider untouched, so a
+        pre-built strategy that carries its own ACL keeps enforcing it.
+
+        This mutates *strategy* — the instance the caller passed, or a shared
+        strategy registered by name — the same way :meth:`set_acl` always has.
+        """
+        from apcore.builtin_steps import BuiltinACLCheck, BuiltinApprovalGate
+
+        for step in strategy.steps:
+            if isinstance(step, BuiltinACLCheck):
+                if self._acl is not None:
+                    step.set_acl(self._acl)
+            elif isinstance(step, BuiltinApprovalGate):
+                if self._approval_handler is not None:
+                    step.set_handler(self._approval_handler)
+                if self._policy is not None:
+                    step.set_policy(self._policy)
+
     def set_acl(self, acl: ACL) -> None:
         """Set the access control provider.
 
-        Updates both the executor field and the strategy's ``acl_check`` step
-        via its public :meth:`BuiltinACLCheck.set_acl` setter when present.
-        Custom user-supplied ACL steps without that setter are silently
-        skipped — callers should re-register the strategy if they need to
-        replace a custom step's ACL provider.
+        Updates both the executor field and every built-in ACL gate step
+        (:class:`BuiltinACLCheck`, located by type — PROTOCOL_SPEC §6.6.5.5) of
+        the running strategy. A custom step named ``acl_check`` that is not the
+        built-in gate is not touched.
 
         Args:
             acl: The ACL instance to use for access control enforcement.
         """
+        from apcore.builtin_steps import BuiltinACLCheck
+
         self._acl = acl
         for step in self._strategy.steps:
-            if step.name != "acl_check":
-                continue
-            setter = getattr(step, "set_acl", None)
-            if callable(setter):
-                setter(acl)
-            break
+            if isinstance(step, BuiltinACLCheck):
+                step.set_acl(acl)
 
     def set_approval_handler(self, handler: ApprovalHandler) -> None:
         """Set the approval handler for Step 5 gate.
 
-        Updates both the executor field and the strategy's ``approval_gate``
-        step via its public :meth:`BuiltinApprovalGate.set_handler` setter
-        when present. Custom user-supplied approval steps without that
-        setter are silently skipped — callers should re-register the
-        strategy if they need to replace a custom step's handler.
+        Updates both the executor field and every built-in approval gate step
+        (:class:`BuiltinApprovalGate`, located by type — PROTOCOL_SPEC §6.6.5.5)
+        of the running strategy.
 
         Args:
             handler: The ApprovalHandler instance to use for approval enforcement.
         """
+        from apcore.builtin_steps import BuiltinApprovalGate
+
         self._approval_handler = handler
         for step in self._strategy.steps:
-            if step.name != "approval_gate":
-                continue
-            setter = getattr(step, "set_handler", None)
-            if callable(setter):
-                setter(handler)
-            break
+            if isinstance(step, BuiltinApprovalGate):
+                step.set_handler(handler)
 
     def set_policy(self, policy: ExecutionPolicy | None) -> None:
         """Set the execution-time governance policy for the Step 5 gate.
 
-        Updates both the executor field and the strategy's ``approval_gate``
-        step via its public :meth:`BuiltinApprovalGate.set_policy` setter
-        when present. Custom user-supplied approval steps without that
-        setter are silently skipped — callers should re-register the
-        strategy if they need to replace a custom step's policy.
+        Updates both the executor field and every built-in approval gate step
+        (:class:`BuiltinApprovalGate`, located by type — PROTOCOL_SPEC §6.6.5.5)
+        of the running strategy.
 
         Args:
             policy: The ExecutionPolicy to apply, or None to remove it.
         """
+        from apcore.builtin_steps import BuiltinApprovalGate
+
         self._policy = policy
         for step in self._strategy.steps:
-            if step.name != "approval_gate":
-                continue
-            setter = getattr(step, "set_policy", None)
-            if callable(setter):
-                setter(policy)
-            break
+            if isinstance(step, BuiltinApprovalGate):
+                step.set_policy(policy)
 
     def use(self, middleware: Middleware) -> Executor:
         """Add class-based middleware with duplicate detection and return self for chaining."""
@@ -1547,16 +1566,23 @@ class Executor:
         if strategy is None:
             return self._strategy
         if isinstance(strategy, str):
-            return self._resolve_strategy_name(
+            resolved = self._resolve_strategy_name(
                 strategy,
                 registry=self._registry,
                 config=self._config,
                 acl=self._acl,
                 approval_handler=self._approval_handler,
+                policy=self._policy,
+                event_emitter=self._event_emitter,
                 middlewares=self._middleware_manager.snapshot(),
                 toggle_state=self._toggle_state,
             )
-        return strategy
+        else:
+            resolved = strategy
+        # §6.6.5.5 (D-129): a per-call strategy is still a way this executor gets
+        # a strategy, so its gates receive the executor's providers too.
+        self._bind_providers(resolved)
+        return resolved
 
     # -------------------------------------------------------------------------
     # Introspection
@@ -1656,9 +1682,24 @@ class Executor:
             for mid in control_ids
         )
 
-        acl_configured = self._acl is not None
-        handler_configured = self._approval_handler is not None
-        policy_strict = self._policy is not None and bool(getattr(self._policy, "strict", False))
+        # PROTOCOL_SPEC §6.6.5.5 requirement 3 (D-129): report what the RUNNING
+        # gate step holds when that gate is wired — a gate may enforce a provider
+        # the executor never saw — and fall back to the executor's own provider
+        # only when no built-in gate is wired ("configured and not wired").
+        acl_gates = [step for step in steps if isinstance(step, BuiltinACLCheck)]
+        approval_gates = [step for step in steps if isinstance(step, BuiltinApprovalGate)]
+        if acl_gates:
+            acl_configured = any(gate.acl is not None for gate in acl_gates)
+        else:
+            acl_configured = self._acl is not None
+        if approval_gates:
+            handler_configured = any(gate.handler is not None for gate in approval_gates)
+            policy_strict = any(
+                gate.policy is not None and bool(getattr(gate.policy, "strict", False)) for gate in approval_gates
+            )
+        else:
+            handler_configured = self._approval_handler is not None
+            policy_strict = self._policy is not None and bool(getattr(self._policy, "strict", False))
 
         # PROTOCOL_SPEC 6.6.5.1. The approval conjunct carries
         # `all_control_modules_require_approval` because `approval_gate` is

@@ -330,7 +330,11 @@ def build_strategy_from_config(
     Returns:
         Configured ExecutionStrategy.
     """
-    from apcore.builtin_steps import build_standard_strategy
+    from apcore.builtin_steps import (
+        build_standard_strategy,
+        gate_field_violation_message,
+        gate_field_violations,
+    )
 
     _validate_pipeline_limits(pipeline_config, config)
 
@@ -372,6 +376,11 @@ def build_strategy_from_config(
         unknown = [k for k in overrides if k not in _CONFIGURABLE_STEP_FIELDS]
         if unknown:
             raise ConfigurationError(_unconfigurable_field_message(step_name, unknown))
+        # D-130 (§5.16.1): a built-in gate may not be weakened by configure —
+        # checked before any field is applied, naming every offending key.
+        weakening = gate_field_violations(target, overrides)
+        if weakening:
+            raise ConfigurationError(gate_field_violation_message(target.name, weakening))
         for key, value in overrides.items():
             setattr(target, key, value)
 

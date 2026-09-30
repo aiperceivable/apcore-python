@@ -44,11 +44,12 @@ class TestProtectedLogFields:
         mw = ObsLoggingMiddleware(logger=logger, log_inputs=True, redaction_config=config)
         ctx = Context.create()
         ctx.call_chain.append("executor.x")
-        mw.before(
-            "executor.x",
-            {"span_id": "s1", "target_id": "t1", "user_id": "xyz"},
-            ctx,
-        )
+        ctx.redacted_inputs = {
+            "span_id": "s1",
+            "target_id": "t1",
+            "user_id": "xyz",
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
+        mw.before("executor.x", dict(ctx.redacted_inputs), ctx)
         entry = json.loads(buf.getvalue().strip())
         inputs = entry["extra"]["inputs"]
         # non-protected id field IS redacted
@@ -69,11 +70,13 @@ class TestProtectedLogFields:
         mw = ObsLoggingMiddleware(logger=logger, log_inputs=True, redaction_config=config)
         ctx = Context.create()
         ctx.call_chain.append("executor.x")
-        mw.before(
-            "executor.x",
-            {"trace_id": "abc", "user_id": "xyz", "caller_id": "c", "module_id": "m"},
-            ctx,
-        )
+        ctx.redacted_inputs = {
+            "trace_id": "abc",
+            "user_id": "xyz",
+            "caller_id": "c",
+            "module_id": "m",
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
+        mw.before("executor.x", dict(ctx.redacted_inputs), ctx)
         entry = json.loads(buf.getvalue().strip())
         inputs = entry["extra"]["inputs"]
         # user_id IS redacted (matches *_id and not protected)
@@ -93,7 +96,11 @@ class TestProtectedLogFields:
         logger = ContextLogger(name="t", output=buf)
         mw = ObsLoggingMiddleware(logger=logger, log_inputs=True, redaction_config=config)
         ctx = Context.create()
-        mw.before("mod.a", {"trace_id": "kept", "other": "v"}, ctx)
+        ctx.redacted_inputs = {
+            "trace_id": "kept",
+            "other": "v",
+        }  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
+        mw.before("mod.a", dict(ctx.redacted_inputs), ctx)
         entry = json.loads(buf.getvalue().strip())
         inputs = entry["extra"]["inputs"]
         assert inputs["trace_id"] == "kept"

@@ -114,6 +114,9 @@ class TestAfter:
         ctx = _make_context(trace_id="abc-123")
         ctx.data["_apcore.mw.logging.start_time"] = time.time()
         output = {"result": "ok"}
+        ctx.redacted_output = (
+            output  # D-131: the middleware logs the captured value, as the pipeline's capture point sets it
+        )
         mw.after("test.module", {}, output, ctx)
 
         mock_logger.info.assert_called_once()
@@ -249,3 +252,14 @@ class TestConcurrencyAndConfig:
         custom = logging.getLogger("custom.test")
         mw = LoggingMiddleware(logger=custom)
         assert mw._logger is custom
+
+
+def test_after_logs_redacted_output_not_raw() -> None:
+    """after() logs context.redacted_output, NOT the raw output (§10.6.1 requirement 5, D-131)."""
+    mock_logger = MagicMock()
+    mw = LoggingMiddleware(logger=mock_logger)
+    ctx = _make_context()
+    ctx.redacted_output = {"password": "***REDACTED***"}
+    mw.after("test.module", {}, {"password": "hunter2"}, ctx)
+
+    assert mock_logger.info.call_args[1]["extra"]["output"] == {"password": "***REDACTED***"}

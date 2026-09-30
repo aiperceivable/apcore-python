@@ -36,6 +36,7 @@ from apcore.errors import (
 from apcore.module import ModuleAnnotations
 from apcore.pipeline import (
     BaseStep,
+    ConfigurationError,
     ExecutionStrategy,
     PipelineContext,
     StepResult,
@@ -97,6 +98,93 @@ def _ensure_middleware_manager(manager: Any | None, middlewares: list[Any] | Non
     for mw in middlewares or []:
         built.add(mw)
     return built
+
+
+# ---------------------------------------------------------------------------
+# Governance gate fields (PROTOCOL_SPEC §5.16.1, D-130)
+# ---------------------------------------------------------------------------
+
+_GATE_FIELD_REASONS: dict[str, str] = {
+    "ignore_errors": "ignore_errors turns a denial into a warning and lets the call run",
+    "match_modules": "match_modules exempts every module it does not match",
+    "pure": "pure makes validate() run the gate and consult the ApprovalHandler during a dry run",
+}
+
+
+def gate_field_violations(step: Any, overrides: dict[str, Any]) -> list[str]:
+    """Return the keys of *overrides* that would weaken *step* if it is a built-in gate.
+
+    PROTOCOL_SPEC §5.16.1 (D-130): on the built-in ``acl_check`` and
+    ``approval_gate`` steps, ``ignore_errors: true``, any ``match_modules`` and
+    ``pure: true`` are rejected. Writing a field's default value is accepted, so
+    ``pure: true`` on ``acl_check`` — whose built-in default is already
+    ``pure=True`` (it is side-effect free and ``validate()`` runs it) — is not a
+    violation. ``timeout_ms`` is always accepted. A step that is not a built-in
+    gate (recognised by TYPE, §6.6.5.2) has no violations.
+    """
+    if not isinstance(step, (BuiltinACLCheck, BuiltinApprovalGate)):
+        return []
+    offending: list[str] = []
+    for key, value in overrides.items():
+        if key == "ignore_errors" and bool(value):
+            offending.append(key)
+        elif key == "match_modules" and value is not None:
+            offending.append(key)
+        elif key == "pure" and bool(value) and isinstance(step, BuiltinApprovalGate):
+            offending.append(key)
+    return offending
+
+
+def gate_field_violation_message(step_name: str, keys: list[str]) -> str:
+    """Build the ``PIPELINE_CONFIGURATION_ERROR`` message naming the gate step and every key."""
+    noun = "field" if len(keys) == 1 else "fields"
+    parts = "; ".join(f"'{k}' ({_GATE_FIELD_REASONS[k]})" for k in keys)
+    return (
+        f"Cannot configure step '{step_name}': {len(keys)} {noun} would weaken a governance gate: "
+        f"{parts}. On the built-in gate steps acl_check and approval_gate only timeout_ms is "
+        f"configurable; remove the step instead if it is not wanted (PROTOCOL_SPEC §5.16.1, D-130)."
+    )
+
+
+class _GovernanceGateFields(BaseStep):
+    """Refuse weakening field values on a built-in governance gate at every door.
+
+    ``pipeline.configure`` is one way to set ``ignore_errors`` / ``match_modules`` /
+    ``pure`` on a step; plain attribute assignment is the programmatic one. Both
+    land on these property setters, so the D-130 rule cannot be bypassed by
+    configuring the step object directly instead of through YAML.
+    """
+
+    def _check_gate_field(self, key: str, value: Any) -> None:
+        if gate_field_violations(self, {key: value}):
+            raise ConfigurationError(gate_field_violation_message(self.name, [key]))
+
+    @property
+    def ignore_errors(self) -> bool:
+        return bool(self.__dict__.get("_gate_ignore_errors", False))
+
+    @ignore_errors.setter
+    def ignore_errors(self, value: bool) -> None:
+        self._check_gate_field("ignore_errors", value)
+        self.__dict__["_gate_ignore_errors"] = value
+
+    @property
+    def match_modules(self) -> tuple[str, ...] | None:
+        return self.__dict__.get("_gate_match_modules")
+
+    @match_modules.setter
+    def match_modules(self, value: tuple[str, ...] | None) -> None:
+        self._check_gate_field("match_modules", value)
+        self.__dict__["_gate_match_modules"] = value
+
+    @property
+    def pure(self) -> bool:
+        return bool(self.__dict__.get("_gate_pure", False))
+
+    @pure.setter
+    def pure(self, value: bool) -> None:
+        self._check_gate_field("pure", value)
+        self.__dict__["_gate_pure"] = value
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +458,7 @@ class BuiltinModuleLookup(BaseStep):
 # ---------------------------------------------------------------------------
 
 
-class BuiltinACLCheck(BaseStep):
+class BuiltinACLCheck(_GovernanceGateFields):
     """Access control list enforcement."""
 
     def __init__(self, *, acl: Any | None = None, event_emitter: Any | None = None) -> None:
@@ -388,6 +476,11 @@ class BuiltinACLCheck(BaseStep):
     def set_acl(self, acl: Any | None) -> None:
         """Replace the ACL provider used by this step at runtime."""
         self._acl = acl
+
+    @property
+    def acl(self) -> Any | None:
+        """The ACL provider this gate enforces (read by ``governance_state()``, §6.6.5.5)."""
+        return self._acl
 
     async def execute(self, ctx: PipelineContext) -> StepResult:
         if self._acl is None:
@@ -486,7 +579,7 @@ class BuiltinACLCheck(BaseStep):
 # ---------------------------------------------------------------------------
 
 
-class BuiltinApprovalGate(BaseStep):
+class BuiltinApprovalGate(_GovernanceGateFields):
     """Approval handler flow for modules requiring approval.
 
     For modules whose annotations declare ``requires_approval=True`` (or that
@@ -530,6 +623,16 @@ class BuiltinApprovalGate(BaseStep):
     def set_policy(self, policy: ExecutionPolicy | None) -> None:
         """Replace the execution policy used by this step at runtime."""
         self._policy = policy
+
+    @property
+    def handler(self) -> Any | None:
+        """The ApprovalHandler this gate consults (read by ``governance_state()``, §6.6.5.5)."""
+        return self._handler
+
+    @property
+    def policy(self) -> ExecutionPolicy | None:
+        """The ExecutionPolicy this gate applies (read by ``governance_state()``, §6.6.5.5)."""
+        return self._policy
 
     @staticmethod
     def _take_approval_token(ctx: PipelineContext) -> str | None:
@@ -1206,10 +1309,18 @@ class BuiltinOutputValidation(BaseStep):
         output_schema = getattr(module, "output_schema", None)
         if output_schema is None:
             ctx.validated_output = ctx.output
+            # No schema → no x-sensitive field to redact. Capture the output as
+            # the input capture point does for a schema-less module, so logging
+            # middleware — which logs only the captured value (§10.6.1
+            # requirement 5, D-131) — neither drops it nor logs a stale one.
+            if ctx.context is not None and hasattr(ctx.context, "redacted_output"):
+                ctx.context.redacted_output = dict(ctx.output) if isinstance(ctx.output, dict) else None
             return StepResult(action="continue")
 
         if ctx.output is None:
             ctx.validated_output = None
+            if ctx.context is not None and hasattr(ctx.context, "redacted_output"):
+                ctx.context.redacted_output = None
             return StepResult(action="continue")
 
         try:
