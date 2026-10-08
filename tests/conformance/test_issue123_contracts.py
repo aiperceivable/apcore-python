@@ -712,15 +712,17 @@ def test_d151_declaration_matches_verified_fixture_scope_and_package() -> None:
     assert implementation["name"] == "apcore-python"
     assert implementation["language"] == "python"
     assert implementation["version"] == project["project"]["version"]
-    assert implementation["spec_version"] == "1.64.0"
+    assert implementation["spec_version"] == "1.65.0"
     conformance = declaration["conformance"]
     assert conformance["level"] == 0
     results = conformance["fixture_results"]
-    assert results["fixtures"] == len(results["fixture_names"]) == 8
+    assert results["fixtures"] == len(results["fixture_names"]) == len(set(results["fixture_names"])) == 9
     cases = sum(len(load_fixture(name + ".json")["test_cases"]) for name in results["fixture_names"])
-    assert results["cases"] == results["passed"] == cases == 47
+    assert results["cases"] == results["passed"] == cases == 79
     assert results["failed"] == results["skipped"] == 0
     assert (root / results["report"]).is_file()
+    assert len(results["reports"]) == 2
+    assert all((root / report).is_file() for report in results["reports"])
     assert any(item["feature"] == "full-fixture-verification" for item in conformance["known_deviations"])
 
 

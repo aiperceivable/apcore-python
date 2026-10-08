@@ -222,6 +222,9 @@ from apcore.utils.call_chain import (
 )
 from apcore.utils.error_propagation import propagate_error as propagate_error
 from apcore.utils.normalize import (
+    CanonicalNameError as CanonicalNameError,
+    CanonicalNameResult as CanonicalNameResult,
+    canonicalize_name as canonicalize_name,
     normalize_to_canonical_id as normalize_to_canonical_id,
 )
 from apcore.utils.pattern import calculate_specificity as calculate_specificity
@@ -791,6 +794,9 @@ __all__ = [
     "DEFAULT_MAX_CALL_DEPTH",
     "DEFAULT_MAX_MODULE_REPEAT",
     "normalize_to_canonical_id",
+    "canonicalize_name",
+    "CanonicalNameError",
+    "CanonicalNameResult",
     "calculate_specificity",
     "propagate_error",
     "redact_sensitive",

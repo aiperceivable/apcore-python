@@ -113,6 +113,27 @@ A governed runtime for agent-callable capabilities — schema, ACL, approval, an
 | `ErrorCodeRegistry` | Central registry for structured error codes |
 | `ErrorFormatterRegistry` | Surface-specific error formatter registry (MCP, A2A, CLI adapters) |
 
+**Name canonicalization**
+
+`canonicalize_name()` converts a bare ASCII name into one canonical segment,
+retaining the original for display and audit. It rejects Unicode rather than
+dropping or transliterating characters and returns a diagnostic instead of
+throwing for invalid strings. `normalize_to_canonical_id()` remains the
+non-repairing A02 module-ID converter. The name `system` is a valid segment;
+reserved namespace enforcement and name collisions belong to registration
+and scanning, not this utility.
+
+```python
+from apcore import canonicalize_name
+
+source_name = " HTTP / UserProfile "
+result = canonicalize_name(source_name)
+if result.error is None:
+    print({"original_name": result.original_name, "canonical_name": result.canonical_name})
+else:
+    print({"original_name": result.original_name, "error": result.error.value})
+```
+
 ## Cross-Language Parity Notes
 
 The Python, TypeScript, and Rust SDKs share one verified contract. As of **v0.22.0**,

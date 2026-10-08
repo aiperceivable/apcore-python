@@ -3,8 +3,29 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from enum import Enum
 
-__all__ = ["normalize_to_canonical_id"]
+__all__ = ["CanonicalNameError", "CanonicalNameResult", "canonicalize_name", "normalize_to_canonical_id"]
+
+
+class CanonicalNameError(str, Enum):
+    """Diagnostics for a bare name that cannot form a canonical segment."""
+
+    EMPTY_NAME = "empty_name"
+    NON_ASCII = "non_ascii"
+    INVALID_START = "invalid_start"
+    NAME_TOO_LONG = "name_too_long"
+
+
+@dataclass(frozen=True)
+class CanonicalNameResult:
+    """A lossless original name together with its canonical segment or error."""
+
+    original_name: str
+    canonical_name: str | None
+    error: CanonicalNameError | None
+
 
 #: Language-specific separators used to split local IDs.
 _SEPARATORS: dict[str, str] = {
@@ -19,6 +40,31 @@ _SUPPORTED_LANGUAGES: frozenset[str] = frozenset(_SEPARATORS)
 
 #: Canonical ID format from PROTOCOL_SPEC §2.7 EBNF grammar.
 _CANONICAL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
+_NAME_EDGE_RE = re.compile(r"^[^A-Za-z0-9_]+|[^A-Za-z0-9_]+$")
+_NAME_SEPARATOR_RE = re.compile(r"[^A-Za-z0-9_]+")
+
+
+def canonicalize_name(name: str) -> CanonicalNameResult:
+    """Canonicalize one bare ASCII name without throwing for any string.
+
+    Preserves the original and existing underscores; Unicode is rejected,
+    never trimmed or transliterated. Module-ID reservation and collision
+    handling remain registration/scanning concerns, not name conversion.
+    Unlike A02's non-repairing module-ID conversion, this utility trims edge
+    punctuation and turns each internal punctuation run into one underscore.
+    """
+    if not name.isascii():
+        return CanonicalNameResult(name, None, CanonicalNameError.NON_ASCII)
+    candidate = _NAME_SEPARATOR_RE.sub("_", _to_snake_case(_NAME_EDGE_RE.sub("", name)))
+    if not candidate:
+        error = CanonicalNameError.EMPTY_NAME
+    elif not "a" <= candidate[0] <= "z":
+        error = CanonicalNameError.INVALID_START
+    elif len(candidate) > 192:
+        error = CanonicalNameError.NAME_TOO_LONG
+    else:
+        return CanonicalNameResult(name, candidate, None)
+    return CanonicalNameResult(name, None, error)
 
 
 def _to_snake_case(segment: str) -> str:
