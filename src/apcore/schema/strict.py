@@ -49,8 +49,12 @@ def _apply_llm_descriptions(node: Any) -> None:
                 _apply_llm_descriptions(defn)
 
 
-def _strip_extensions(node: Any, *, strip_defaults: bool = True) -> None:
-    """Remove all x-* keys (and optionally default keys) recursively. Mutates in place.
+def _strip_extensions(node: Any, *, strip_defaults: bool = True, _names: bool = False) -> None:
+    """Remove x-* schema keywords, preserving named properties and data values.
+
+    Schema maps such as ``properties`` and ``$defs`` contain names, not keyword
+    positions. Their child schemas are still processed recursively. Mutates
+    in place and optionally removes schema defaults for OpenAI strict mode.
 
     Args:
         node: JSON Schema node to process.
@@ -61,14 +65,23 @@ def _strip_extensions(node: Any, *, strip_defaults: bool = True) -> None:
         return
 
     keys_to_remove = [
-        k for k in node if (isinstance(k, str) and k.startswith("x-")) or (strip_defaults and k == "default")
+        k
+        for k in node
+        if not _names and ((isinstance(k, str) and k.startswith("x-")) or (strip_defaults and k == "default"))
     ]
     for k in keys_to_remove:
         del node[k]
 
-    for value in node.values():
+    for key, value in node.items():
+        if not _names and key in {"const", "enum", "default", "examples"}:
+            continue
         if isinstance(value, dict):
-            _strip_extensions(value, strip_defaults=strip_defaults)
+            _strip_extensions(
+                value,
+                strip_defaults=strip_defaults,
+                _names=not _names
+                and key in {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"},
+            )
         elif isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):

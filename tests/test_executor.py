@@ -607,7 +607,7 @@ class TestValidate:
         assert all(c.check != "module_preview" for c in result.checks)
 
     def test_preview_returns_none_yields_empty_predicted_changes(self) -> None:
-        """validate() records the module_preview check but leaves predicted_changes empty."""
+        """D-141: null preview records no check and leaves predicted_changes empty."""
         from apcore.module import PreviewResult
 
         class NonePreviewModule(MockModule):
@@ -620,9 +620,7 @@ class TestValidate:
         assert result.valid is True
         assert result.predicted_changes == []
         preview_checks = [c for c in result.checks if c.check == "module_preview"]
-        assert len(preview_checks) == 1
-        assert preview_checks[0].passed is True
-        assert preview_checks[0].warnings == []
+        assert preview_checks == []
 
     def test_preview_returns_result_populates_predicted_changes(self) -> None:
         """validate() folds PreviewResult.changes into PreflightResult.predicted_changes."""

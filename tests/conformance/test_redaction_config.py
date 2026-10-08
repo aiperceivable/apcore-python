@@ -155,11 +155,18 @@ def _emit_through_context_logger(config: RedactionConfig, payload: dict[str, Any
     return json.loads(lines[0])["extra"]  # type: ignore[no-any-return]
 
 
-def _run_redact_sensitive(config: RedactionConfig, payload: dict[str, Any]) -> dict[str, Any]:
-    """Executor capture path: Algorithm A13 `redact_sensitive`."""
+def _run_redact_sensitive(
+    config: RedactionConfig, payload: dict[str, Any], schema: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Executor capture path: Algorithm A13 `redact_sensitive`.
+
+    ``schema`` is the case's ``schema`` (driver_contract.schema_marked_fields):
+    the ``x-sensitive`` rule walks it alongside the configured rules. Cases
+    without one pass an empty schema and exercise the configured rules only.
+    """
     return redact_sensitive(
         dict(payload),
-        {},  # no x-sensitive schema; the fixture exercises config rules only
+        schema or {},
         sensitive_keys=config.sensitive_keys,
         regex_patterns=config.regex_patterns,
         replacement=config.replacement,
@@ -171,6 +178,11 @@ class TestRedactionViaContextLogger:
 
     @pytest.mark.parametrize("case", RULE_CASES, ids=lambda c: c["id"])
     def test_case(self, case: dict[str, Any]) -> None:
+        if "schema" in case:
+            # driver_contract.schema_marked_fields names the capture-path entry
+            # point: a log record's `extra` carries no schema, so the
+            # `x-sensitive` rule is asserted through redact_sensitive only.
+            pytest.skip(f"[{case['id']}] schema-marked case; driven through redact_sensitive")
         got = _emit_through_context_logger(_build_config(case), case["input"])
         _assert_matches(case, got, via="ContextLogger._emit")
 
@@ -180,7 +192,7 @@ class TestRedactionViaRedactSensitive:
 
     @pytest.mark.parametrize("case", RULE_CASES, ids=lambda c: c["id"])
     def test_case(self, case: dict[str, Any]) -> None:
-        got = _run_redact_sensitive(_build_config(case), case["input"])
+        got = _run_redact_sensitive(_build_config(case), case["input"], case.get("schema"))
         _assert_matches(case, got, via="redact_sensitive")
 
 
@@ -393,6 +405,13 @@ def test_fixture_case_ids_are_covered() -> None:
         # PROTOCOL_SPEC 10.6.1 requirement 2 — string values only (v1.40.0).
         "regex_patterns_do_not_test_non_string_values",
         "regex_patterns_still_reach_a_string_inside_a_container",
+        # PROTOCOL_SPEC 10.6 / A13 — x-sensitive inside combinator branches (D-152).
+        "x_sensitive_inside_an_any_of_branch_is_redacted",
+        "x_sensitive_in_any_branch_redacts_the_value_whichever_branch_it_matches",
+        "x_sensitive_in_an_all_of_branch_is_redacted",
+        "properties_declared_inside_a_branch_are_walked",
+        "a_combinator_without_a_marker_stays_visible",
+        "array_items_marked_inside_a_branch_are_redacted",
     }
     ids = {c["id"] for c in CASES}
     assert ids == driven, (

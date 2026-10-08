@@ -357,14 +357,14 @@ def build_strategy_from_config(
         toggle_state=toggle_state,
     )
 
-    # (1) Remove steps — fail-fast (Issue #33 §1.2)
+    # (1) Remove steps — fail-fast (execution-pipeline.md § "Configuring the pipeline from apcore.yaml")
     for step_name in pipeline_config.get("remove", []):
         try:
             strategy.remove(step_name)
         except StepNotFoundError as exc:
             raise ConfigurationError(f"Cannot remove step '{step_name}': step not found in strategy") from exc
 
-    # (2) Configure existing step fields — fail-fast (Issue #33 §1.2)
+    # (2) Configure existing step fields — fail-fast (execution-pipeline.md § "Configuring the pipeline from apcore.yaml")
     configure_section = pipeline_config.get("configure", {}) or {}
     for step_name, overrides in configure_section.items():
         target = next((s for s in strategy.steps if s.name == step_name), None)
@@ -384,7 +384,7 @@ def build_strategy_from_config(
         for key, value in overrides.items():
             setattr(target, key, value)
 
-    # (3) Resolve and insert custom steps — fail-fast (Issue #33 §1.2)
+    # (3) Resolve and insert custom steps — fail-fast (execution-pipeline.md § "Configuring the pipeline from apcore.yaml")
     for step_def in pipeline_config.get("steps", []):
         # `$defs/PipelineStep` is additionalProperties:false — enforce it before
         # anything is constructed, so a typo is a startup error rather than a

@@ -75,7 +75,8 @@ def redact_sensitive(
     Args:
         data: The data dict to redact.
         schema_dict: A JSON Schema dict that may contain ``x-sensitive: true``
-            on individual properties.
+            on individual properties, including inside ``anyOf`` / ``oneOf`` /
+            ``allOf`` branches (D-152).
         sensitive_keys: Optional override for the field-name match list.
         regex_patterns: Optional list of regex patterns matched against
             **string** values (case-insensitive, unanchored search). Already
@@ -102,42 +103,87 @@ def redact_sensitive(
     return redacted
 
 
+_COMBINATORS: tuple[str, ...] = ("anyOf", "oneOf", "allOf")
+
+
+def _branches(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """The subschemas of ``schema``'s ``anyOf`` / ``oneOf`` / ``allOf``, in that order."""
+    found: list[dict[str, Any]] = []
+    for keyword in _COMBINATORS:
+        branches = schema.get(keyword)
+        if isinstance(branches, list):
+            found.extend(b for b in branches if isinstance(b, dict))
+    return found
+
+
+def _is_sensitive(schema: dict[str, Any]) -> bool:
+    """True when ``schema`` or any combinator branch below it carries ``x-sensitive: true``.
+
+    D-152: a value is redacted when ANY branch that describes it marks it,
+    without deciding which branch the value matches. ``Secret | None`` puts the
+    marker in ``anyOf[0]``; requiring the marked branch to validate would leak
+    exactly the values that match an unmarked sibling.
+    """
+    if schema.get("x-sensitive") is True:
+        return True
+    return any(_is_sensitive(branch) for branch in _branches(schema))
+
+
+def _property_schemas(schema: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Every ``(name, schema)`` a property is declared with, directly or inside a combinator branch.
+
+    A name declared in several branches appears once per declaration, so each
+    declaration's marker is honoured.
+    """
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        pairs.extend((name, sub) for name, sub in properties.items() if isinstance(sub, dict))
+    for branch in _branches(schema):
+        pairs.extend(_property_schemas(branch))
+    return pairs
+
+
+def _items_schemas(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ``items`` schemas of ``schema`` and of its combinator branches."""
+    found: list[dict[str, Any]] = []
+    items = schema.get("items")
+    if isinstance(items, dict):
+        found.append(items)
+    for branch in _branches(schema):
+        found.extend(_items_schemas(branch))
+    return found
+
+
 def _redact_fields(
     data: dict[str, Any],
     schema_dict: dict[str, Any],
     *,
     token: str = REDACTED_VALUE,
 ) -> None:
-    """In-place redaction based on schema x-sensitive markers."""
-    properties = schema_dict.get("properties")
-    if not properties:
-        return
-
-    for field_name, field_schema in properties.items():
+    """In-place redaction based on schema x-sensitive markers, combinator branches included (D-152)."""
+    for field_name, field_schema in _property_schemas(schema_dict):
         if field_name not in data:
             continue
 
         value = data[field_name]
 
-        # x-sensitive: true on this property
-        if field_schema.get("x-sensitive") is True:
+        if _is_sensitive(field_schema):
             if value is not None:
                 data[field_name] = token
             continue
 
-        # Nested object: recurse
-        if field_schema.get("type") == "object" and "properties" in field_schema and isinstance(value, dict):
+        if isinstance(value, dict):
             _redact_fields(value, field_schema, token=token)
             continue
 
-        # Array: redact items
-        if field_schema.get("type") == "array" and "items" in field_schema and isinstance(value, list):
-            items_schema = field_schema["items"]
-            if items_schema.get("x-sensitive") is True:
-                for i, item in enumerate(value):
-                    if item is not None:
-                        value[i] = token
-            elif items_schema.get("type") == "object" and "properties" in items_schema:
+        if isinstance(value, list):
+            for items_schema in _items_schemas(field_schema):
+                if _is_sensitive(items_schema):
+                    for i, item in enumerate(value):
+                        if item is not None:
+                            value[i] = token
+                    break
                 for item in value:
                     if isinstance(item, dict):
                         _redact_fields(item, items_schema, token=token)

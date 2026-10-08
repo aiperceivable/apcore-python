@@ -54,6 +54,7 @@ class TestErrorPropagation:
         assert err.code == "SCHEMA_VALIDATION_ERROR"
         assert len(err.details["errors"]) > 0
         error_entry = err.details["errors"][0]
-        assert "field" in error_entry
-        assert "code" in error_entry
-        assert "message" in error_entry
+        assert set(error_entry) == {"path", "keyword", "message"}
+        assert error_entry["path"] == "/name"
+        assert error_entry["keyword"] == "type"
+        assert error_entry["message"]

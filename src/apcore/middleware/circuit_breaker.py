@@ -1,6 +1,6 @@
 """CircuitBreakerMiddleware — rolling-window per-(module_id, caller_id) breaker (Issue #42).
 
-Spec reference: middleware-system.md §1.2 CircuitBreakerMiddleware.
+Spec reference: ``features/middleware-system.md`` § "CircuitBreakerMiddleware".
 
 Tracks per-(``module_id``, ``caller_id``) outcomes over a bounded rolling window.
 When the error rate in the window meets or exceeds ``open_threshold`` (and at

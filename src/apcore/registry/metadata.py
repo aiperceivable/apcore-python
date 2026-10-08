@@ -198,8 +198,6 @@ def load_id_map(id_map_path: Path) -> dict[str, dict[str, Any]]:
         if not file_path:
             logger.warning("ID map entry missing 'file' field, skipping")
             continue
-        result[file_path] = {
-            "id": entry.get("id", file_path),
-            "class": entry.get("class"),
-        }
+        # An entry carries `file` and `id` only (protocol-spec §2.2, D-138).
+        result[file_path] = {"id": entry.get("id", file_path)}
     return result

@@ -302,6 +302,12 @@ _normalize_data = _load("normalize_id")
     ids=[c["id"] for c in _normalize_data["test_cases"]],
 )
 def test_normalize_id(case: dict[str, Any]) -> None:
+    if case.get("expected_error"):
+        with pytest.raises(ValueError) as exc_info:
+            normalize_to_canonical_id(case["local_id"], case["language"])
+        assert f"Normalized ID '{case['expected_normalized']}'" in str(exc_info.value)
+        return
+
     result = normalize_to_canonical_id(case["local_id"], case["language"])
     assert result == case["expected"], (
         f"normalize_to_canonical_id({case['local_id']!r}, {case['language']!r}) "
@@ -407,9 +413,9 @@ def test_call_chain(case: dict[str, Any]) -> None:
     chain = list(case["call_chain"])
     result = guard_call_chain(module_id, chain, **kwargs)
     assert result is None, f"[call_chain :: {case_id}] guard_call_chain signals by raising and returns nothing"
-    assert chain == case["call_chain"], (
-        f"[call_chain :: {case_id}] guard_call_chain MUST NOT mutate the caller's " f"chain; it became {chain!r}"
-    )
+    assert (
+        chain == case["call_chain"]
+    ), f"[call_chain :: {case_id}] guard_call_chain MUST NOT mutate the caller's chain; it became {chain!r}"
 
     # Boundary probe: the guard accepted this chain because it is WITHIN the
     # limits, not because it inspects nothing. Re-run it with the one limit the
@@ -470,9 +476,9 @@ def _run_error_code_registrations(
         registry.register(module_id, {code})
         owned.setdefault(module_id, set()).add(code)
         if observe:
-            assert code in registry.all_codes, (
-                f"[error_codes :: {case_id}] {code!r} registered OK but is not queryable " f"through registry.all_codes"
-            )
+            assert (
+                code in registry.all_codes
+            ), f"[error_codes :: {case_id}] {code!r} registered OK but is not queryable through registry.all_codes"
 
     def _unregister(module_id: str) -> None:
         released = owned.pop(module_id, set())
@@ -879,8 +885,8 @@ def test_schema_validation(
     # Verify error path when expected
     if not expected_valid and "expected_error_path" in case:
         error_paths = [e.path for e in result.errors]
-        expected_path = "/" + case["expected_error_path"].replace(".", "/").replace("[", "/").replace("]", "")
-        assert any(expected_path in p for p in error_paths), f"Expected error at {expected_path}, got {error_paths}"
+        expected_path = case["expected_error_path"]
+        assert expected_path in error_paths, f"Expected error at {expected_path!r}, got {error_paths}"
 
 
 # ---------------------------------------------------------------------------
@@ -1171,10 +1177,9 @@ def test_annotations_extra_round_trip(case: dict[str, Any]) -> None:
         # the whole descriptor never reaches the assertion, and one that dropped
         # everything would satisfy it.
         for field, want in case.get("expected_survivors", {}).items():
-            assert getattr(ann, field) == want, (
-                f"[annotations_extra_round_trip :: {case_id}] {field}: "
-                f"got {getattr(ann, field)!r}, expected {want!r}"
-            )
+            assert (
+                getattr(ann, field) == want
+            ), f"[annotations_extra_round_trip :: {case_id}] {field}: got {getattr(ann, field)!r}, expected {want!r}"
 
         if "expected_reserialized" in case:
             serialized = _dataclasses_asdict(ann)
@@ -1356,9 +1361,7 @@ def test_approval_gate(case: dict[str, Any]) -> None:
                     f"{exc_info.value.approval_id!r} != {expected['approval_id']!r}"
                 )
         else:
-            pytest.fail(
-                f"[approval_gate :: {case_id}] unknown outcome {outcome!r}. " f"Teach the driver, do not skip it."
-            )
+            pytest.fail(f"[approval_gate :: {case_id}] unknown outcome {outcome!r}. Teach the driver, do not skip it.")
 
         gate_invoked = handler is not None and handler.called
         assert (
@@ -1929,9 +1932,9 @@ def test_error_fingerprinting(case: dict[str, Any]) -> None:
         for entry in all_entries:
             for field in expected["timestamp_fields"]:
                 value = getattr(entry, field)
-                assert pattern.match(value), (
-                    f"[{case['id']}] {field}: {value!r} does not match " f"{expected['timestamp_pattern']}"
-                )
+                assert pattern.match(
+                    value
+                ), f"[{case['id']}] {field}: {value!r} does not match {expected['timestamp_pattern']}"
 
 
 # ---------------------------------------------------------------------------
@@ -2277,12 +2280,12 @@ def test_context_create_unified_signature(case: dict[str, Any]) -> None:
             executor_b.call("test.echo", {}, context=ctx)
         except ModuleError as exc:
             raised_code = exc.code
-        assert (raised_code is not None) is expected["raises"], (
-            f"cross-executor rebind: raised={raised_code!r}, fixture declares raises=" f"{expected['raises']}"
-        )
-        assert raised_code == expected["error_code"], (
-            f"cross-executor rebind raised {raised_code!r}, fixture declares " f"{expected['error_code']!r}"
-        )
+        assert (raised_code is not None) is expected[
+            "raises"
+        ], f"cross-executor rebind: raised={raised_code!r}, fixture declares raises={expected['raises']}"
+        assert (
+            raised_code == expected["error_code"]
+        ), f"cross-executor rebind raised {raised_code!r}, fixture declares {expected['error_code']!r}"
         # The wire code is the contract; this pins the Python class that carries
         # it so a future refactor cannot quietly move the code onto another type.
         assert issubclass(_ContextBindingError, ModuleError)
@@ -2615,9 +2618,9 @@ def test_extension_point_lookup(case: dict[str, Any]) -> None:
                 f"[{cid}] {operation}({point_name!r}) must reject an unregistered "
                 f"extension point with {error_code}, but answered {result!r}"
             )
-        assert exc_info.value.code == error_code, (
-            f"[{cid}] {operation}({point_name!r}) raised code " f"{exc_info.value.code!r}, expected {error_code!r}"
-        )
+        assert (
+            exc_info.value.code == error_code
+        ), f"[{cid}] {operation}({point_name!r}) raised code {exc_info.value.code!r}, expected {error_code!r}"
         return
 
     # No error expected: the call must answer, and answer this.
@@ -2628,12 +2631,12 @@ def test_extension_point_lookup(case: dict[str, Any]) -> None:
             expected["value"] == "present"
         ), f"[{cid}] get({point_name!r}) returned {result!r}, expected {expected['value']}"
     elif "count" in expected:
-        assert len(result) == expected["count"], (
-            f"[{cid}] get_all({point_name!r}) returned {len(result)} extensions, " f"expected {expected['count']}"
-        )
+        assert (
+            len(result) == expected["count"]
+        ), f"[{cid}] get_all({point_name!r}) returned {len(result)} extensions, expected {expected['count']}"
     elif "removed" in expected:
-        assert result is expected["removed"], (
-            f"[{cid}] unregister({point_name!r}) returned {result!r}, " f"expected {expected['removed']!r}"
-        )
+        assert (
+            result is expected["removed"]
+        ), f"[{cid}] unregister({point_name!r}) returned {result!r}, expected {expected['removed']!r}"
     else:
         pytest.fail(f"[{cid}] expected block names no assertion: {expected!r}")

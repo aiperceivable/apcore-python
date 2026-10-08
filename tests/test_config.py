@@ -647,7 +647,15 @@ class TestReloadHonoursOriginalValidateFlag:
 class TestPathTypedConfigKeys:
     """PROTOCOL_SPEC §9.2.1 — the closed set of path-typed configuration keys."""
 
-    EXPECTED = ("acl.root", "bindings.dir", "extensions.root", "extensions.roots[]", "schema.root")
+    EXPECTED = (
+        "acl.root",
+        "bindings.dir",
+        "extensions.root",
+        "extensions.roots[]",
+        "id_map.overrides",
+        "schema.root",
+        "sys_modules.control.overrides_path",
+    )
 
     def test_accessor_matches_declared_set_in_both_directions(self):
         actual = set(Config.path_typed_keys())
@@ -684,9 +692,13 @@ class TestPathTypedConfigKeys:
         # `extensions.roots`; strip the marker before checking membership.
         for key in Config.path_typed_keys():
             base = key[:-2] if key.endswith("[]") else key
+            # The exempt keys have no default-table entry: `extensions.roots` is
+            # list-valued, and the rest default to null (no directory, no map).
             assert Config.get_default(base, "__missing__") != "__missing__" or base in {
                 "extensions.roots",
                 "bindings.dir",
+                "id_map.overrides",
+                "sys_modules.control.overrides_path",
             }, base
 
 
@@ -706,14 +718,31 @@ class TestEmptyPathTypedValueIsDiscarded:
     held nothing would pass on an implementation that simply deleted the key.
     """
 
-    SCALAR_KEYS = ("acl.root", "bindings.dir", "extensions.root", "schema.root")
+    SCALAR_KEYS = (
+        "acl.root",
+        "bindings.dir",
+        "extensions.root",
+        "id_map.overrides",
+        "schema.root",
+        "sys_modules.control.overrides_path",
+    )
 
     ENV_VAR = {
         "acl.root": "APCORE_ACL_ROOT",
         "bindings.dir": "APCORE_BINDINGS_DIR",
         "extensions.root": "APCORE_EXTENSIONS_ROOT",
+        "id_map.overrides": "APCORE_ID__MAP_OVERRIDES",
         "schema.root": "APCORE_SCHEMA_ROOT",
+        "sys_modules.control.overrides_path": "APCORE_SYS__MODULES_CONTROL_OVERRIDES__PATH",
     }
+
+    @staticmethod
+    def _nested(key: str, value: Any) -> dict[str, Any]:
+        """``"a.b.c", v`` -> ``{"a": {"b": {"c": v}}}``."""
+        node: Any = value
+        for part in reversed(key.split(".")):
+            node = {part: node}
+        return node  # type: ignore[no-any-return]
 
     @staticmethod
     @pytest.fixture(autouse=True)
@@ -735,9 +764,8 @@ class TestEmptyPathTypedValueIsDiscarded:
         self, key: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The tier below the variable is the configuration file, and it wins."""
-        section, leaf = key.split(".")
-        declared = f"./declared_{leaf}"
-        config_path = self._write(tmp_path, {section: {leaf: declared}})
+        declared = f"./declared_{key.rsplit('.', 1)[-1]}"
+        config_path = self._write(tmp_path, self._nested(key, declared))
 
         monkeypatch.setenv(self.ENV_VAR[key], "")
         config = Config.load(config_path, validate=False)
@@ -772,8 +800,11 @@ class TestEmptyPathTypedValueIsDiscarded:
         monkeypatch.setenv(self.ENV_VAR[key], "")
         config = Config.load(config_path, validate=False)
 
-        section, leaf = key.split(".")
-        assert leaf not in config.declared.get(section, {})
+        *parents, leaf = key.split(".")
+        node: Any = config.declared
+        for part in parents:
+            node = node.get(part, {}) if isinstance(node, dict) else {}
+        assert leaf not in node
 
     @pytest.mark.parametrize("key", SCALAR_KEYS)
     def test_empty_env_var_does_not_resolve_to_the_working_directory(
@@ -796,8 +827,7 @@ class TestEmptyPathTypedValueIsDiscarded:
     @pytest.mark.parametrize("key", SCALAR_KEYS)
     def test_empty_value_in_the_file_falls_through_to_the_default(self, key: str, tmp_path: Path) -> None:
         """Requirement 5 is about the value, not only about the variable."""
-        section, leaf = key.split(".")
-        config_path = self._write(tmp_path, {section: {leaf: ""}})
+        config_path = self._write(tmp_path, self._nested(key, ""))
 
         config = Config.load(config_path, validate=False)
 
@@ -812,8 +842,7 @@ class TestEmptyPathTypedValueIsDiscarded:
         Without this, "discard the empty string" and "ignore the variable
         entirely" are the same test result.
         """
-        section, leaf = key.split(".")
-        config_path = self._write(tmp_path, {section: {leaf: "./declared"}})
+        config_path = self._write(tmp_path, self._nested(key, "./declared"))
 
         monkeypatch.setenv(self.ENV_VAR[key], "./from_env")
         config = Config.load(config_path, validate=False)

@@ -245,7 +245,7 @@ class TestDisabledByDefault:
         assert result == []
 
     def test_mixed_decorated_and_undecorated(self, tmp_path: Path) -> None:
-        """Only the @multi_class-decorated class is returned."""
+        """Only the @multi_class-decorated class is returned, under its segment (D-147)."""
         content = textwrap.dedent(
             """\
             from apcore.registry.multi_class import multi_class
@@ -276,8 +276,9 @@ class TestDisabledByDefault:
         result = discover_multi_class(fp, extensions_root="extensions")
 
         assert len(result) == 1
-        # Single-class identity guarantee applies
-        assert result[0][0] == "math.math_ops"
+        # Two Module classes in the file: the single-class identity rule does
+        # not apply, so the marked one keeps its segment.
+        assert result[0][0] == "math.math_ops.addition"
         assert result[0][1].__name__ == "Addition"
 
 

@@ -253,9 +253,10 @@ class SchemaValidator:
         details: list[SchemaValidationErrorDetail] = []
         for err in error.errors():
             loc = err.get("loc", ())
-            path = "/" + "/".join(str(segment) for segment in loc) if loc else "/"
-
             pydantic_type = err.get("type", "")
+            if pydantic_type in {"missing", "extra_forbidden"}:
+                loc = loc[:-1]
+            path = "".join("/" + str(segment).replace("~", "~0").replace("/", "~1") for segment in loc)
             constraint = _PYDANTIC_TO_CONSTRAINT.get(pydantic_type, pydantic_type)
 
             message = err.get("msg", "")

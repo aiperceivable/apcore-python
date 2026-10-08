@@ -1,0 +1,50 @@
+implementation:
+  name: apcore-python
+  version: 0.31.0
+  language: python
+  spec_version: 1.64.0
+  maintainer: AI Perceivable
+  repository: https://github.com/aiperceivable/apcore-python
+
+conformance:
+  level: 0
+  date: "2026-10-08"
+  assessment_scope: issue-123-regressions
+  fixture_results:
+    fixtures: 8
+    cases: 47
+    passed: 47
+    failed: 0
+    skipped: 0
+    report: tests/conformance/test_issue123_contracts.py
+    command: uv run pytest tests/conformance/test_issue123_contracts.py -q
+    fixture_names:
+      - binding_file_validation
+      - env_prefix_dispatch
+      - ephemeral_modules
+      - error_details_shape
+      - export_profiles
+      - json_input_native_types
+      - preflight_check_reporting
+      - timeout_cancellation
+  known_deviations:
+    - feature: full-fixture-verification
+      spec: conformance §6.2
+      reason: Only the eight issue-123 fixtures have individually verified case counts in this assessment. No claim is made that all 1075 canonical cases pass; Level 1 or 2 certification requires a complete case-level report.
+      severity: major
+    - feature: storage-backend-scalar-values
+      spec: StorageBackend.save
+      reason: Five existing canonical scalar-value cases remain expected failures because Python storage accepts dictionary records. Record-valued storage paths pass.
+      severity: major
+    - feature: version-negotiation-on-load
+      spec: §13.3
+      reason: negotiate_version is available but is not invoked when loading configuration or schema files.
+      severity: major
+    - feature: schema-migration
+      spec: §13.4
+      reason: migrate_schema is not implemented.
+      severity: minor
+    - feature: module-isolation
+      spec: §5.5
+      reason: Modules execute in the host process rather than isolated processes or containers.
+      severity: minor

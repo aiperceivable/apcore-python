@@ -263,14 +263,14 @@ class TestLoadIdMap:
         result = load_id_map(f)
         assert len(result) == 2
         assert result["extensions/email/send.py"]["id"] == "email.send"
-        assert result["extensions/email/send.py"]["class"] == "SendModule"
+        assert result["extensions/email/send.py"] == {"id": "email.send"}
 
-    def test_class_override_present(self, tmp_path: Path) -> None:
-        """Entry with class has class field in result."""
+    def test_class_field_is_not_carried(self, tmp_path: Path) -> None:
+        """An entry carries `file` and `id` only (D-138); a stray `class` is not read."""
         f = tmp_path / "id_map.yaml"
         f.write_text(yaml.dump({"mappings": [{"file": "mod.py", "id": "m", "class": "MyClass"}]}))
         result = load_id_map(f)
-        assert result["mod.py"]["class"] == "MyClass"
+        assert result["mod.py"] == {"id": "m"}
 
     def test_nonexistent_raises(self, tmp_path: Path) -> None:
         """Non-existent file raises ConfigNotFoundError."""
@@ -284,9 +284,9 @@ class TestLoadIdMap:
         with pytest.raises(ConfigError):
             load_id_map(f)
 
-    def test_no_class_field(self, tmp_path: Path) -> None:
-        """Entry without class field has class as None."""
+    def test_entry_without_class_field(self, tmp_path: Path) -> None:
+        """An entry maps its file to its id."""
         f = tmp_path / "id_map.yaml"
         f.write_text(yaml.dump({"mappings": [{"file": "mod.py", "id": "my.mod"}]}))
         result = load_id_map(f)
-        assert result["mod.py"]["class"] is None
+        assert result["mod.py"] == {"id": "my.mod"}

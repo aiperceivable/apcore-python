@@ -6,13 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.32.0] - 2026-10-08
 
 ### Security
 
 - **An executor's ACL, `ApprovalHandler` and `ExecutionPolicy` are bound into the built-in `acl_check` / `approval_gate` steps of every strategy it runs** — default, preset name, `pipeline:` section, registered name, pre-built instance, or per-call override — located by type; a provider the executor was not given leaves the step's own. `governance_state()` reports what the running gate holds (D-129, spec §6.6.5.5). Previously a pre-built strategy received none of them: a deny-all ACL let every call through while `acl_configured` and `builtin_acl_gate_wired` both read `true`.
 - **`ignore_errors: true`, any `match_modules`, and `pure: true` on `approval_gate` are rejected on the built-in gate steps** with `PIPELINE_CONFIGURATION_ERROR` naming the step and key — from `pipeline.configure` and from assigning the field on the step object (D-130, spec §5.16.1). `timeout_ms` and default values stay accepted.
 - **`ObsLoggingMiddleware` and `LoggingMiddleware` log only `context.redacted_inputs` / `redacted_output`**, never the raw inputs or output, so an `x-sensitive` field is redacted with or without a `RedactionConfig`; nothing captured means nothing logged (D-131, spec §10.6.1 requirement 5). `ObsLoggingMiddleware.after` previously logged the raw output.
+
+### Fixed
+
+- **Timeouts cancel a linked, invocation-owned cooperative token and return without waiting for module cleanup** (D-133). Late outputs and errors are discarded; cancellation never cancels an ancestor token or reverses external costs.
+- **Preflight preserves all evaluable checks after a failure while withholding module hooks from ACL-denied callers** (D-134). Null previews emit no check (D-141).
+- **Strict JSON input validation accepts contract-valid datetime, UUID and enum strings without enabling coercion** (D-136); native Python values remain supported.
+- **Binding files reject unknown top-level and entry keys** (D-139).
+- **Anthropic exports preserve `x-*` property names while removing extension keywords; MCP approval and streaming hints are emitted only when true in `_meta`** (D-140).
+- **Standard bootstrap delivers exactly one contextual ephemeral registry audit event, including bare `ephemeral` IDs and null identities** (D-148).
+- **Native validation errors serialize canonical JSON Pointer `path`, JSON Schema `keyword`, and `message` fields** (D-149).
+- **The eight issue #123 canonical fixtures are now driven through public SDK paths** (47 cases), with additional timeout, native-input, JSON Pointer, and subscriber circuit-breaker regressions.
+
+- **`module(...)` / `client.module(...)` accept a bound method** — it gets a transparent forwarder carrying `apcore_module`; previously the module was registered and then `AttributeError` was raised (#123).
+- **An auto-derived module ID for a function defined in `__main__` raises `INVALID_MODULE_ID` asking for an explicit `id`**, before anything is registered, instead of producing the illegal ID `__main__.<name>` (#123).
+- **Hot reload registers a newly created file under the ID `discover()` would give it** — path relative to its root, namespace prefix, ID-map override — instead of its bare basename; deletion unregisters by the same ID (#123).
+- **The legacy `RedactionConfig.value_patterns` rule tests string values only**, never a stringified number or container (§10.6.1 requirement 2) (#123).
+- **`AsyncTaskManager.get_result_async()` added** — the `get_result` counterpart for I/O-backed stores, alongside `get_status_async` / `list_tasks_async` (#123).
+- **`Executor.set_acl()` logs a warning when the running strategy has no built-in `acl_check` step**, as apcore-typescript does (#123).
 
 
 ## [0.31.0] - 2026-09-22

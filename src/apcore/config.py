@@ -15,6 +15,7 @@ import sys
 import threading
 import warnings
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Type, TypeVar
 
 import yaml
@@ -36,6 +37,8 @@ _logger = logging.getLogger(__name__)
 
 #: Environment variable prefix for overrides.
 _ENV_PREFIX = "APCORE_"
+#: The `apcore` namespace's env prefix; no other namespace may register it (§9.8.2 rule 3).
+_APCORE_ENV_PREFIX = "APCORE"
 
 #: Environment variable naming the configuration file to load (§9.14 discovery).
 #:
@@ -254,9 +257,9 @@ _DEFAULTS: dict[str, Any] = {
 #: working directory differs. Without a published set each such consumer builds
 #: its own and drifts.
 #:
-#: Two exclusions are deliberate. ``bindings.pattern`` is a glob matched against
+#: ``bindings.pattern`` is deliberately excluded: it is a glob matched against
 #: filenames *within* ``bindings.dir``, never resolved as a path itself.
-#: ``id_map.overrides`` holds module IDs.
+#: ``id_map.overrides`` holds the path of an ID map file (D-138).
 #:
 #: ``extensions.roots`` is list-valued; every element is path-typed in both the
 #: bare-string and the ``{root, namespace}`` form, which is why it is reported
@@ -269,7 +272,9 @@ _PATH_TYPED_CONFIG_KEYS: tuple[str, ...] = (
     "bindings.dir",
     "extensions.root",
     "extensions.roots[]",
+    "id_map.overrides",
     "schema.root",
+    "sys_modules.control.overrides_path",
 )
 
 #: The path-typed keys that resolve through §9.2's *scalar* precedence chain
@@ -532,7 +537,11 @@ def _discard_empty_path_values(data: dict[str, Any], *, tier: str) -> dict[str, 
     return data
 
 
-def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
+def _apply_env_overrides(
+    data: dict[str, Any],
+    *,
+    namespace_prefixes: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Apply APCORE_* environment variable overrides and global mappings.
 
     A path-typed key (§9.2.1) whose variable is *set but empty* is skipped
@@ -540,6 +549,12 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     whatever *data* already carries — the configuration file's value, or the
     default — stands. See :func:`_discard_empty_path_values` for why the guard
     belongs at the tier rather than on the merged document.
+
+    ``namespace_prefixes`` is given in namespace mode, where *data* is the
+    ``apcore`` namespace alone: a variable matching one of those registered
+    prefixes (each ending in ``_``) belongs to that namespace, and a global
+    ``env_map`` variable to its top-level key, so neither is written here too
+    (§9.8.2 rule 4, D-146).
     """
     result = copy.deepcopy(data)  # deep copy to protect shared defaults
     for env_key, env_value in os.environ.items():
@@ -547,7 +562,10 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
 
         # 1. Global env_map (bare env var → top-level key).
         if env_key in _GLOBAL_ENV_MAP:
-            _set_nested(result, _GLOBAL_ENV_MAP[env_key], coerced)
+            if namespace_prefixes is None:
+                _set_nested(result, _GLOBAL_ENV_MAP[env_key], coerced)
+            continue
+        if namespace_prefixes is not None and any(env_key.startswith(p) for p in namespace_prefixes):
             continue
 
         # 2. Standard APCORE_ prefix.
@@ -839,12 +857,21 @@ def _find_matching_ns_registration(
     env_key: str,
     sorted_registrations: list[_NamespaceRegistration],
 ) -> _NamespaceRegistration | None:
-    """Return the first (longest) registration whose env_prefix matches env_key."""
+    """Return the first (longest) registration whose ``env_prefix + "_"`` starts env_key.
+
+    The separator is part of the match (§9.8.2 dispatch algorithm): ``APCORE_OBS``
+    does not claim ``APCORE_OBSERVABILITY_*`` by sharing its leading letters.
+    """
     for reg in sorted_registrations:
         prefix = reg.env_prefix or ""
-        if env_key.startswith(prefix):
+        if prefix and env_key.startswith(prefix + "_"):
             return reg
     return None
+
+
+def _registered_env_prefixes(registrations: list[_NamespaceRegistration]) -> list[str]:
+    """Each registered namespace's env prefix with its ``_`` separator."""
+    return [reg.env_prefix + "_" for reg in registrations if reg.env_prefix]
 
 
 def _apply_namespace_defaults(
@@ -1132,6 +1159,10 @@ def _emit_per_load(message: str, category: type[Warning], *, stacklevel: int) ->
 #: `acl.default_effect` joined in v1.47.0 as §9.1.3's first application: it is
 #: read from the ACL FILE, and the `apcore.yaml` twin reaches nothing. Ordered
 #: first because §9.2.4's table lists it first.
+#:
+#: `middleware.disabled` (D-137) names built-in middleware that is not installed;
+#: `extensions.auto_discover` (D-150) is read only by `validate()`'s semantic
+#: warning — discovery runs when `discover()` is called.
 _DEPRECATED_INERT_KEYS: tuple[str, ...] = (
     "acl.default_effect",
     "observability.metrics.enabled",
@@ -1141,6 +1172,8 @@ _DEPRECATED_INERT_KEYS: tuple[str, ...] = (
     "acl.audit.enabled",
     "acl.audit.include_denied",
     "acl.audit.log_level",
+    "middleware.disabled",
+    "extensions.auto_discover",
 )
 
 
@@ -1386,6 +1419,13 @@ class Config:
 
         if name in _RESERVED_NAMESPACES:
             raise ConfigNamespaceReservedError(name=name)
+        # The exact prefix `APCORE` is the `apcore` namespace's own; `APCORE_MCP`
+        # and the like stay legal (§9.8.2 rules 2-3, D-146).
+        if resolved_prefix == _APCORE_ENV_PREFIX:
+            raise ConfigNamespaceReservedError(
+                name=name,
+                message=f"Env prefix {resolved_prefix!r} is reserved for the 'apcore' namespace",
+            )
 
         with _GLOBAL_NS_REGISTRY_LOCK:
             if name in _GLOBAL_NS_REGISTRY:
@@ -1602,9 +1642,11 @@ class Config:
         # Apply namespace defaults (lower priority than file data)
         merged = _apply_namespace_defaults(file_data, registrations)
 
-        # Apply legacy APCORE_ overrides to the "apcore" namespace only
+        # An APCORE_ variable no registered prefix claims belongs to `apcore`;
+        # one a registered prefix claims goes to that namespace only (§9.8.2 rule 4).
+        claimed_prefixes = _registered_env_prefixes(registrations)
         apcore_ns = merged.get("apcore", {})
-        apcore_ns = _apply_env_overrides(apcore_ns)
+        apcore_ns = _apply_env_overrides(apcore_ns, namespace_prefixes=claimed_prefixes)
         merged["apcore"] = apcore_ns
 
         # Apply per-namespace env overrides for registered namespaces
@@ -1620,7 +1662,7 @@ class Config:
         # Same rule as legacy mode (§9.1): file + env overrides, never defaults.
         # The namespace-defaults merge is skipped for exactly that reason.
         declared_ns = copy.deepcopy(file_data)
-        declared_apcore = _apply_env_overrides(declared_ns.get("apcore", {}))
+        declared_apcore = _apply_env_overrides(declared_ns.get("apcore", {}), namespace_prefixes=claimed_prefixes)
         if declared_apcore:
             declared_ns["apcore"] = declared_apcore
         config._declared = _apply_namespace_env_overrides(declared_ns, registrations)
@@ -2140,6 +2182,9 @@ def _instantiate_model(model_class: type, data: dict[str, Any], namespace: str) 
 # Bootstrap: register apcore built-in namespaces (§9.15)
 # =============================================================================
 
+# Only the two blocks $defs/ObservabilityConfig declares (D-144, §9.15.2). The
+# live homes of error history, platform notification and redaction are
+# `sys_modules.error_history.*`, `sys_modules.events.thresholds.*` and `obs.redaction.*`.
 Config.register_namespace(
     "observability",
     env_prefix="APCORE_OBSERVABILITY",
@@ -2152,21 +2197,6 @@ Config.register_namespace(
             "otlp_endpoint": None,
         },
         "metrics": {"enabled": False, "exporter": "stdout"},
-        "logging": {
-            "enabled": True,
-            "level": "info",
-            "format": "json",
-            "redact_sensitive": True,
-        },
-        "error_history": {
-            "max_entries_per_module": 50,
-            "max_total_entries": 1000,
-        },
-        "platform_notify": {
-            "enabled": False,
-            "error_rate_threshold": 0.1,
-            "latency_p99_threshold_ms": 5000.0,
-        },
     },
 )
 

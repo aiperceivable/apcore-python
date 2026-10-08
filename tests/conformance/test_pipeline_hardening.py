@@ -16,6 +16,7 @@ Exercises five fixture cases:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from typing import Any
 
@@ -31,6 +32,7 @@ from apcore.pipeline import (
     PipelineStepNotFoundError,
     StepResult,
 )
+from apcore.errors import ModuleTimeoutError
 from conformance.canonical_fixtures import (
     case_ids,
     dispatch_or_fail,
@@ -90,6 +92,18 @@ class _TrackingRaisingStep(BaseStep):
     async def execute(self, ctx: PipelineContext) -> StepResult:
         self._log.append(self.name)
         raise ValueError(f"step '{self.name}' intentionally raised")
+
+
+class _SlowStep(BaseStep):
+    """A fixture-driven step that can cross or remain within its timeout."""
+
+    def __init__(self, name: str, sleep_ms: int, timeout_ms: int) -> None:
+        super().__init__(name, timeout_ms=timeout_ms)
+        self._sleep_ms = sleep_ms
+
+    async def execute(self, ctx: PipelineContext) -> StepResult:
+        await asyncio.sleep(self._sleep_ms / 1000)
+        return StepResult(action="continue")
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +665,42 @@ class TestStepLookupIsNotLinear:
             await engine.run(strategy, ctx)
 
 
+class TestStepTimeout:
+    """D-142: a configured step timeout reaches callers as MODULE_TIMEOUT."""
+
+    @pytest.mark.asyncio
+    async def test_step_timeout_raises_module_timeout(self) -> None:
+        case = _case("step_timeout_raises_module_timeout")
+        spec = case["input"]
+        custom = spec["custom_step"]
+        step = _SlowStep(custom["name"], custom["sleep_ms"], spec["timeout_ms"])
+        strategy = ExecutionStrategy("test", [step])
+        ctx = PipelineContext(module_id="fixture.module", inputs={}, context=None)
+
+        with pytest.raises(PipelineStepError) as exc_info:
+            await PipelineEngine().run(strategy, ctx)
+
+        cause = exc_info.value.cause
+        assert isinstance(cause, ModuleTimeoutError)
+        assert cause.code == case["expected"]["call_error_code"]
+
+    @pytest.mark.asyncio
+    async def test_step_within_its_timeout_runs(self) -> None:
+        case = _case("step_within_its_timeout_runs")
+        spec = case["input"]
+        custom = spec["custom_step"]
+        step = _SlowStep(custom["name"], custom["sleep_ms"], spec["timeout_ms"])
+        strategy = ExecutionStrategy("test", [step])
+        ctx = PipelineContext(module_id="fixture.module", inputs={}, context=None)
+
+        _, trace = await PipelineEngine().run(strategy, ctx)
+
+        assert trace.steps[-1].name == custom["name"]
+        assert trace.steps[-1].result.action == "continue"
+        assert trace.steps[-1].skipped is False
+        assert case["expected"]["call_succeeds"] is True
+
+
 # ---------------------------------------------------------------------------
 # Fixture coverage guard
 # ---------------------------------------------------------------------------
@@ -677,6 +727,8 @@ class TestFixtureCoverage:
         "replace_semantic_no_duplicate": "TestReplaceSemanticNoDuplicate",
         "run_until_stops_early": "TestRunUntilStopsEarly",
         "step_lookup_is_not_linear": "TestStepLookupIsNotLinear",
+        "step_timeout_raises_module_timeout": "TestStepTimeout",
+        "step_within_its_timeout_runs": "TestStepTimeout",
     }
 
     def test_every_canonical_case_is_claimed(self) -> None:

@@ -611,6 +611,7 @@ def _setup_events(
         _load_overrides_from_store(config, overrides_store, toggle_state=effective_toggle_state)
 
     _instantiate_subscribers(config, sys_cfg, event_emitter)
+    registry.set_event_emitter(event_emitter)
     _bridge_registry_events(registry, event_emitter)
 
 
@@ -745,7 +746,7 @@ def _bridge_registry_events(registry: Registry, emitter: EventEmitter) -> None:
         # payload. Skipping the empty-payload bridge emit here avoids dual
         # emission for the same event_type. See protocol-spec §2.5.1
         # "Audit events".
-        if module_id.startswith("ephemeral."):
+        if module_id == "ephemeral" or module_id.startswith("ephemeral."):
             return
         ts = _now()
         emitter.emit(
@@ -761,7 +762,7 @@ def _bridge_registry_events(registry: Registry, emitter: EventEmitter) -> None:
     def on_unregister(module_id: str, module: Any) -> None:
         # Mirror the single-emit rule for unregistrations. See protocol-spec
         # §2.5.1 "Audit events".
-        if module_id.startswith("ephemeral."):
+        if module_id == "ephemeral" or module_id.startswith("ephemeral."):
             return
         ts = _now()
         emitter.emit(

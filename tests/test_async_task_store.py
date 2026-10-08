@@ -201,3 +201,31 @@ class TestManagerWithAsyncStore:
         assert info.task_id == task_id
         listed = await mgr.list_tasks_async()
         assert any(t.task_id == task_id for t in listed)
+
+
+class TestGetResultAsync:
+    """#123: ``get_result`` pumps the store synchronously, so I/O-backed stores need an async twin."""
+
+    @pytest.mark.asyncio
+    async def test_get_result_async_reads_an_io_backed_store(self) -> None:
+        mgr = AsyncTaskManager(executor=_StubExecutor(), store=_AsyncOnlyStore())
+        task_id = await mgr.submit("test.x", {})
+        await asyncio.sleep(0.05)
+
+        with pytest.raises(RuntimeError, match="suspended"):
+            mgr.get_result(task_id)
+        assert await mgr.get_result_async(task_id) == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_get_result_async_unknown_task_raises_key_error(self) -> None:
+        mgr = AsyncTaskManager(executor=_StubExecutor(), store=_AsyncOnlyStore())
+        with pytest.raises(KeyError):
+            await mgr.get_result_async("missing")
+
+    @pytest.mark.asyncio
+    async def test_get_result_async_incomplete_task_raises_runtime_error(self) -> None:
+        store = _AsyncOnlyStore()
+        mgr = AsyncTaskManager(executor=_StubExecutor(), store=store)
+        await store.save(TaskInfo(task_id="t1", module_id="test.x", status=TaskStatus.PENDING, submitted_at=0.0))
+        with pytest.raises(RuntimeError, match="not completed"):
+            await mgr.get_result_async("t1")

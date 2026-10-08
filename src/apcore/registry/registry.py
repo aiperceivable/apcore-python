@@ -103,7 +103,7 @@ class _DictSchemaAdapter:
         if not result.valid:
             raise SchemaValidationError(
                 message=f"Input validation failed: {result.errors}",
-                errors=result.errors,
+                errors=result.to_error().details["errors"],
             )
         return data
 
@@ -738,8 +738,7 @@ class Registry:
         # return 0, matching apcore-typescript's ``!Array.isArray`` guard.
         if not isinstance(custom_modules, list):
             logger.warning(
-                "Custom discoverer returned non-list (%s); expected list of "
-                "{'module_id', 'module'} entries. Ignoring.",
+                "Custom discoverer returned non-list (%s); expected list of {'module_id', 'module'} entries. Ignoring.",
                 type(custom_modules).__name__,
             )
             return 0
@@ -987,12 +986,6 @@ class Registry:
         resolved: dict[str, type] = {}
         for dm in discovered:
             meta = raw_metadata.get(dm.canonical_id, {})
-            # Inject class override from ID map (if present)
-            if dm.canonical_id in self._id_map:
-                map_entry = self._id_map[dm.canonical_id]
-                if map_entry.get("class"):
-                    stem = dm.file_path.stem
-                    meta.setdefault("entry_point", f"{stem}:{map_entry['class']}")
             try:
                 resolved[dm.canonical_id] = resolve_entry_point(
                     dm.file_path,
@@ -1552,10 +1545,10 @@ class Registry:
             prefix: When supplied, only IDs starting with the prefix are returned.
             visibility: Filter by module visibility. Supported: ``["public", "hidden"]``.
                 Defaults to ``["public"]``. Pass ``["public", "hidden"]`` to see
-                all modules. Aligned with apcore D-24.
+                all modules (protocol-spec §4.4 ``discoverable``).
             include_hidden: Deprecated. Use ``visibility=["public", "hidden"]`` instead.
         """
-        # D-24 alignment: visibility list takes precedence over legacy include_hidden bool.
+        # protocol-spec §4.4 discoverable: the visibility list takes precedence over the legacy include_hidden bool.
         if visibility is not None:
             vis = set(visibility)
             show_public = "public" in vis
@@ -1564,7 +1557,7 @@ class Registry:
             show_public = True
             show_hidden = True
         else:
-            # Default per D-24: public only.
+            # Default per protocol-spec §4.4 discoverable: public only.
             show_public = True
             show_hidden = False
 
@@ -2083,11 +2076,14 @@ class Registry:
             payload = self._build_ephemeral_audit_payload(context)
         except Exception as e:  # defensive: identity extraction must never break registration
             logger.warning(
-                "Failed to extract audit payload for ephemeral '%s': %s. " "Falling back to caller_id='@external'.",
+                "Failed to extract audit payload for ephemeral '%s': %s. Falling back to caller_id='@external'.",
                 module_id,
                 e,
             )
-            payload = {"caller_id": "@external"}
+            payload = {"caller_id": "@external", "identity": None}
+
+        payload.setdefault("identity", None)
+        payload["namespace_class"] = "ephemeral"
 
         emitter = self._event_emitter
         if emitter is None:
@@ -2340,8 +2336,11 @@ class Registry:
         # Phase 2 (under lock): snapshot old module + inline unregister from
         # all stores. Do NOT call user hooks or fire events while holding the lock.
         with self._lock:
-            module_id = self._path_to_module_id(path)
-            new_id = module_id or os.path.splitext(os.path.basename(path))[0]
+            new_id = (
+                self._canonical_id_for_path(path)
+                or self._path_to_module_id(path)
+                or os.path.splitext(os.path.basename(path))[0]
+            )
             old_module = self._modules.get(new_id)
             self._inline_unregister(new_id)
             self._versioned_modules.remove_all(new_id)
@@ -2501,7 +2500,9 @@ class Registry:
         unregister event OUTSIDE the lock.
         """
         with self._lock:
-            module_id = self._path_to_module_id(path)
+            module_id = self._canonical_id_for_path(path)
+            if module_id not in self._modules:
+                module_id = self._path_to_module_id(path)
             if not module_id or module_id not in self._modules:
                 return
             module = self._modules.get(module_id)
@@ -2513,8 +2514,34 @@ class Registry:
             self._call_on_unload(module_id, module)
         self._trigger_event("unregister", module_id, module)
 
+    def _canonical_id_for_path(self, path: str) -> str | None:
+        """Derive the module ID ``discover()`` would give the file at ``path``.
+
+        Applies the same rules as discovery — path relative to its extension
+        root, the root's namespace prefix when discovery would add one, and the
+        ID-map override — so a file first seen by the watcher gets the ID it
+        would have had if it had existed at startup. Returns None when ``path``
+        lies under no configured extension root.
+        """
+        real = Path(path).resolve()
+        prefixed = len(self._extension_roots) > 1 or any("namespace" in r for r in self._extension_roots)
+        for root_config in self._extension_roots:
+            root = Path(root_config.get("root", "")).resolve()
+            try:
+                rel = real.relative_to(root)
+            except ValueError:
+                continue
+            if self._id_map and str(rel) in self._id_map:
+                return str(self._id_map[str(rel)]["id"])
+            canonical_id = str(rel.with_suffix("")).replace(os.sep, ".")
+            if prefixed:
+                namespace = root_config.get("namespace") or Path(root_config.get("root", "")).name
+                canonical_id = f"{namespace}.{canonical_id}"
+            return canonical_id
+        return None
+
     def _path_to_module_id(self, path: str) -> str | None:
-        """Map a file path to a module ID if known."""
+        """Map a file path to a registered module ID by basename, for paths under no extension root."""
         basename = os.path.splitext(os.path.basename(path))[0]
         # Check if any registered module ID ends with this basename
         for mid in self.module_ids:

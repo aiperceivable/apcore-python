@@ -923,6 +923,38 @@ class TestCircuitEventUsesTheDlqDefaultForAnUndeclaredSubscriber:
         assert event.data["subscriber_type"] == _get_subscriber_type(subscriber)
 
 
+class TestCircuitEventsCarrySubscriberId:
+    """D-145: opening and closing events identify the affected subscriber."""
+
+    @pytest.mark.asyncio
+    async def test_opened_event_carries_the_subscriber_id(self) -> None:
+        case = _case("circuit_opened_event_carries_the_subscriber_id")
+        event = await _trip_open(case)
+        assert event.data["subscriber_id"] == case["expected"]["event_subscriber_id"]
+        assert event.data["subscriber_type"] == case["expected"]["event_subscriber_type"]
+
+    @pytest.mark.asyncio
+    async def test_closed_event_carries_the_subscriber_id(self) -> None:
+        case = _case("circuit_closed_event_carries_the_subscriber_id")
+        params = case["input"]
+        subscriber = MagicMock()
+        subscriber.subscriber_id = params["subscriber"]["subscriber_id"]
+        subscriber.subscriber_type = params["subscriber"]["subscriber_type"]
+        subscriber.event_pattern = "*"
+        subscriber.on_event = AsyncMock(return_value=None)
+        emitted: list[ApCoreEvent] = []
+        emitter = _make_mock_emitter()
+        emitter.emit.side_effect = emitted.append
+        breaker = CircuitBreakerWrapper(subscriber=subscriber, emitter=emitter)
+        breaker._state = _CIRCUIT_STATE_BY_NAME[params["circuit_state"]]
+
+        await breaker.on_event(_make_event())
+
+        closed = [event for event in emitted if event.event_type == case["expected"]["event_emitted"]]
+        assert len(closed) == 1
+        assert closed[0].data["subscriber_id"] == case["expected"]["event_subscriber_id"]
+
+
 # ---------------------------------------------------------------------------
 # Fixture coverage guard
 # ---------------------------------------------------------------------------
@@ -952,6 +984,8 @@ class TestFixtureCoverage:
         "circuit_open_after_threshold": "TestCircuitOpenAfterThreshold",
         "circuit_event_reports_the_declared_subscriber_type": "TestCircuitEventReportsTheDeclaredSubscriberType",
         "circuit_event_uses_the_dlq_default_for_an_undeclared_subscriber": "TestCircuitEventUsesTheDlqDefaultForAnUndeclaredSubscriber",
+        "circuit_opened_event_carries_the_subscriber_id": "TestCircuitEventsCarrySubscriberId",
+        "circuit_closed_event_carries_the_subscriber_id": "TestCircuitEventsCarrySubscriberId",
         "circuit_discards_in_open_state": "TestCircuitDiscardsInOpenState",
         "circuit_half_open_after_window": "TestCircuitHalfOpenAfterWindow",
         "circuit_closes_on_success": "TestCircuitClosesOnSuccess",

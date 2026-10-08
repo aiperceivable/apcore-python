@@ -45,7 +45,7 @@ def utc_millis_z() -> str:
 def normalize_message(msg: str) -> str:
     """Replace ephemeral values with placeholders before fingerprint hashing.
 
-    Canonical algorithm (apcore observability spec §1.4) — exactly five
+    Canonical algorithm (error-history.md § "Error fingerprinting") — exactly five
     steps, no others:
     1. UUID patterns (8-4-4-4-12 hex) → <UUID>
     2. ISO 8601 timestamps → <TIMESTAMP>  (must precede integer step: years are 4 digits)
@@ -74,8 +74,8 @@ def normalize_message(msg: str) -> str:
 def compute_fingerprint(error_code: str, module_id: str, message: str) -> str:
     """Compute SHA-256(error_code:module_id:normalized_message) as 64-char hex.
 
-    This is the canonical cross-language fingerprint (apcore observability
-    spec §1.4 / §"Error fingerprinting"). :func:`compute_error_fingerprint`
+    This is the canonical cross-language fingerprint (error-history.md
+    § "Error fingerprinting"). :func:`compute_error_fingerprint`
     is a thin adapter that extracts ``code``/``message`` from an exception
     and delegates here.
     """

@@ -93,7 +93,9 @@ _STEP_TO_CHECK: dict[str, str] = {
 }
 
 
-def _trace_to_checks(trace: PipelineTrace) -> list[PreflightCheckResult]:
+def _trace_to_checks(
+    trace: PipelineTrace, errors: dict[str, dict[str, Any]] | None = None
+) -> list[PreflightCheckResult]:
     """Convert PipelineTrace steps to PreflightCheckResult list."""
     checks: list[PreflightCheckResult] = []
     for st in trace.steps:
@@ -103,7 +105,7 @@ def _trace_to_checks(trace: PipelineTrace) -> list[PreflightCheckResult]:
         passed = st.result.action != "abort"
         error = None
         if not passed and st.result.explanation:
-            error = {
+            error = (errors or {}).get(st.name) or {
                 "code": f"STEP_{st.name.upper()}_FAILED",
                 "message": st.result.explanation,
             }
@@ -496,9 +498,15 @@ class Executor:
         from apcore.builtin_steps import BuiltinACLCheck
 
         self._acl = acl
+        found = False
         for step in self._strategy.steps:
             if isinstance(step, BuiltinACLCheck):
                 step.set_acl(acl)
+                found = True
+        if not found:
+            _logger.warning(
+                "set_acl() called but current strategy has no BuiltinACLCheck step — ACL will not be enforced"
+            )
 
     def set_approval_handler(self, handler: ApprovalHandler) -> None:
         """Set the approval handler for Step 5 gate.
@@ -676,7 +684,6 @@ class Executor:
             checks.append(PreflightCheckResult(check="module_id", passed=True))
         except InvalidInputError as e:
             checks.append(PreflightCheckResult(check="module_id", passed=False, error=e.to_dict()))
-            return PreflightResult(valid=False, checks=checks)
 
         # PROTOCOL_SPEC §"Contract: Executor binding to Context": bind self
         # to the Context before pipeline step 1 (also applies to dry-run
@@ -752,7 +759,7 @@ class Executor:
 
         # Convert pipeline trace to PreflightResult checks
         if trace is not None:
-            checks.extend(_trace_to_checks(trace))
+            checks.extend(_trace_to_checks(trace, pipe_ctx.preflight_errors))
 
         # Detect requires_approval (preflight reports, does not enforce).
         #
@@ -871,7 +878,7 @@ class Executor:
                     raw = await raw
                 if isinstance(raw, PreviewResult):
                     predicted_changes = list(raw.changes)
-                checks.append(PreflightCheckResult(check=_MODULE_PREVIEW_CHECK, passed=True))
+                    checks.append(PreflightCheckResult(check=_MODULE_PREVIEW_CHECK, passed=True))
             except Exception as exc:
                 checks.append(
                     PreflightCheckResult(
@@ -973,13 +980,15 @@ class Executor:
         that case the daemon thread is still left alive to keep process exit
         clean, but a warning is logged so the condition is visible.
 
-        The per-call ``timeout_s`` still applies inside the thread via
-        ``asyncio.wait_for``; the outer bound is a strictly-looser safety
-        net for the case where the coroutine swallows cancellation.
+        The pipeline enforces cooperative invocation timeouts. The optional
+        outer ``timeout_s`` is a separate bridge safety bound. Once the call
+        reports an outcome, remaining cooperative tasks drain on this daemon
+        thread without delaying the sync caller.
         """
         result_holder: dict[str, Any] = {}
         exception_holder: dict[str, Exception] = {}
         loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
+        finished = threading.Event()
 
         def thread_target() -> None:
             loop = asyncio.new_event_loop()
@@ -997,13 +1006,18 @@ class Executor:
             except Exception as e:
                 exception_holder["error"] = e
             finally:
+                # Report the call's outcome before draining cooperative work
+                # that outlived its timeout. The caller never waits for it.
+                finished.set()
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                 loop.close()
 
         thread = threading.Thread(target=thread_target, daemon=True)
         thread.start()
         outer_budget_s = max(self._global_timeout, self._default_timeout) / 1000.0 + 1.0
-        thread.join(timeout=outer_budget_s)
-        if thread.is_alive():
+        if not finished.wait(timeout=outer_budget_s):
             inner_loop = loop_holder.get("loop")
             if inner_loop is not None and inner_loop.is_running():
                 try:
@@ -1064,7 +1078,7 @@ class Executor:
                 raise self._translate_abort(e) from e
             except PipelineStepError as e:
                 # Unwrap to the original typed cause for the executor public API.
-                # PipelineStepError is the engine-level contract (§1.1); the
+                # PipelineStepError is the engine-level contract (execution-pipeline.md § "Errors"); the
                 # executor exposes the underlying typed error to callers.
                 underlying = e.cause if isinstance(e.cause, Exception) else e
                 # D-20: cancellation MUST short-circuit BEFORE on_error. A step
@@ -1523,7 +1537,7 @@ class Executor:
             # D-19: "the trace variant MUST share identical error-recovery
             # semantics with the underlying call()". ``call_async`` unwraps
             # ``PipelineStepError`` to its typed cause before entering recovery
-            # (§1.1 makes the wrapper the *engine*-level contract, not the
+            # (execution-pipeline.md § "Errors" makes the wrapper the *engine*-level contract, not the
             # executor's). Passing the raw wrapper made one step failure surface
             # as PIPELINE_STEP_ERROR here and as, say, MODULE_NOT_FOUND through
             # ``call()`` — to on_error middleware and to the caller alike.

@@ -139,7 +139,7 @@ class TestValidate:
     def test_nested_error_path(self, validator: SchemaValidator) -> None:
         result = validator.validate({"address": {"zip_code": "12345"}}, NestedModel)
         assert result.valid is False
-        assert any(e.path == "/address/city" for e in result.errors)
+        assert any(e.path == "/address" and e.constraint == "required" for e in result.errors)
 
     def test_array_item_error_path(self, strict_validator: SchemaValidator) -> None:
         result = strict_validator.validate({"items": [{"quantity": "bad"}]}, ArrayModel)
@@ -274,7 +274,7 @@ class TestValidateOutput:
 class TestErrorConversion:
     def test_missing_constraint(self, validator: SchemaValidator) -> None:
         result = validator.validate({}, SimpleModel)
-        name_err = next(e for e in result.errors if e.path == "/name")
+        name_err = next(e for e in result.errors if e.path == "")
         assert name_err.constraint == "required"
 
     def test_type_constraint(self, strict_validator: SchemaValidator) -> None:
@@ -308,11 +308,11 @@ class TestErrorConversion:
 
     def test_loc_to_path(self, validator: SchemaValidator) -> None:
         result = validator.validate({}, SimpleModel)
-        assert any(e.path == "/name" for e in result.errors)
+        assert any(e.path == "" and e.constraint == "required" for e in result.errors)
 
     def test_nested_loc_to_path(self, validator: SchemaValidator) -> None:
         result = validator.validate({"address": {"zip_code": "12345"}}, NestedModel)
-        assert any(e.path == "/address/city" for e in result.errors)
+        assert any(e.path == "/address" and e.constraint == "required" for e in result.errors)
 
 
 # === TYPE_MAPPING §11 — what the library-level coercion knob coerces ===

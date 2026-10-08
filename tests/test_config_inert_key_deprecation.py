@@ -61,6 +61,8 @@ _SAMPLE_VALUES: dict[str, Any] = {
     "acl.audit.enabled": True,
     "acl.audit.include_denied": False,
     "acl.audit.log_level": "warn",
+    "middleware.disabled": [],
+    "extensions.auto_discover": True,
 }
 
 _ACL_RULES: list[dict[str, Any]] = [

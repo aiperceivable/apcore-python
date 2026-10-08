@@ -148,6 +148,8 @@ class TestConfigKeySurfaceGovernance:
             "sdk_default_values_match_canonical_defaults",
             "unknown_framework_key_is_retained_by_default",
             "unknown_framework_key_is_rejected_under_strict",
+            "observability_namespace_declares_what_the_schema_declares",
+            "the_three_builtin_namespaces_are_registered",
         }
         assert set(CASES) == covered, (
             f"config_key_governance.json cases without a driver: {sorted(set(CASES) - covered)}; "
@@ -566,3 +568,41 @@ def test_sys_modules_namespace_supplies_every_declared_default() -> None:
     assert missing == [], "the sys_modules namespace does not supply defaults its own schema " f"declares: {missing}"
     mismatched = {k: (supplied[k], expected[k]) for k in expected if not _values_equal(supplied[k], expected[k])}
     assert mismatched == {}, f"namespace defaults disagree with the schema: {mismatched}"
+
+
+# ---------------------------------------------------------------------------
+# §9.15 built-in namespace registrations (D-144)
+# ---------------------------------------------------------------------------
+
+
+def _load_bare_namespace_document(tmp_path: Path) -> Config:
+    """driver_contract.builtin_namespace: a namespace-mode document declaring nothing else."""
+    path = tmp_path / "bare.yaml"
+    path.write_text(yaml.safe_dump({"apcore": dict(_REQUIRED_SCAFFOLD)}, sort_keys=False))
+    return Config.load(str(path), validate=True)
+
+
+class TestBuiltinNamespaces:
+    def test_observability_namespace_declares_what_the_schema_declares(self, tmp_path: Path) -> None:
+        case = CASES["observability_namespace_declares_what_the_schema_declares"]
+        name = case["builtin_namespace"]
+        config = _load_bare_namespace_document(tmp_path)
+        leaves = set(_flatten(config.namespace(name), prefix=name))
+
+        violations = sorted(leaves - ALLOWED)
+        assert (
+            violations == case["expected"]["violations"]
+        ), f"the built-in {name!r} registration declares keys no schema declares: {violations}"
+        missing = sorted(set(case["expected"]["required_keys"]) - leaves)
+        assert missing == [], f"the built-in {name!r} registration lacks {missing}"
+
+    def test_the_three_builtin_namespaces_are_registered(self, tmp_path: Path) -> None:
+        case = CASES["the_three_builtin_namespaces_are_registered"]
+        _load_bare_namespace_document(tmp_path)
+        registered = {ns["name"]: ns["env_prefix"] for ns in Config.registered_namespaces()}
+        missing = sorted(
+            f"{name} ({prefix})"
+            for name, prefix in case["builtin_namespaces_registered"].items()
+            if registered.get(name) != prefix
+        )
+        assert missing == case["expected"]["missing"], f"built-in namespaces not registered as declared: {missing}"

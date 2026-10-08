@@ -169,3 +169,21 @@ def test_setters_locate_the_gate_by_type_not_by_name() -> None:
     state = executor.governance_state()
     assert state.builtin_acl_gate_wired is False
     assert state.acl_configured is True
+
+
+class TestSetAclWarnsWithoutGate:
+    """#123: matches apcore-typescript ``setAcl`` — an ACL no step will consult is announced."""
+
+    def test_warns_when_strategy_has_no_acl_step(self, caplog: pytest.LogCaptureFixture) -> None:
+        registry = Registry()
+        executor = Executor(registry=registry, strategy="internal")
+        with caplog.at_level("WARNING", logger="apcore.executor"):
+            executor.set_acl(_deny_all())
+        assert any("no BuiltinACLCheck step" in r.getMessage() for r in caplog.records)
+
+    def test_silent_when_strategy_has_acl_step(self, caplog: pytest.LogCaptureFixture) -> None:
+        registry = Registry()
+        executor = Executor(registry=registry, strategy=build_standard_strategy(registry=registry))
+        with caplog.at_level("WARNING", logger="apcore.executor"):
+            executor.set_acl(_deny_all())
+        assert not any("no BuiltinACLCheck step" in r.getMessage() for r in caplog.records)

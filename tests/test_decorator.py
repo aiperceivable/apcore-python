@@ -1241,3 +1241,86 @@ class TestDecoratorExecutorIntegration:
         executor = Executor(registry=reg)
         result = executor.call("test.fn", {"name": "World"})
         assert result == {"greeting": "Hello, World!"}
+
+
+class _Greeter:
+    def __init__(self, prefix: str) -> None:
+        self.prefix = prefix
+
+    def greet(self, name: str) -> dict:
+        return {"text": f"{self.prefix} {name}"}
+
+    async def greet_async(self, name: str) -> dict:
+        return {"text": f"{self.prefix} {name}"}
+
+
+class TestBoundMethodModules:
+    """#123: a bound method cannot carry ``apcore_module``; decorating one must not half-register."""
+
+    def test_client_module_accepts_bound_method(self) -> None:
+        from apcore.client import APCore
+
+        client = APCore()
+        greeter = _Greeter("hi")
+        wrapped = client.module(id="greeter.greet")(greeter.greet)
+
+        assert client.registry.has("greeter.greet")
+        assert isinstance(wrapped.apcore_module, FunctionModule)
+        assert wrapped("bob") == {"text": "hi bob"}
+        assert client.call("greeter.greet", {"name": "bob"}) == {"text": "hi bob"}
+
+    def test_decorator_with_registry_accepts_bound_method(self) -> None:
+        registry = Registry()
+        greeter = _Greeter("hey")
+        wrapped = module(id="greeter.greet", registry=registry)(greeter.greet)
+
+        assert wrapped.apcore_module is registry.get("greeter.greet")
+        assert wrapped.__name__ == "greet"
+
+    def test_async_bound_method_stays_a_coroutine_function(self) -> None:
+        registry = Registry()
+        greeter = _Greeter("yo")
+        wrapped = module(id="greeter.greet_async", registry=registry)(greeter.greet_async)
+
+        assert inspect.iscoroutinefunction(wrapped)
+        assert registry.has("greeter.greet_async")
+
+    def test_plain_function_is_returned_unchanged(self) -> None:
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        wrapped = module(id="math.add_plain", registry=Registry())(add)
+        assert wrapped is add
+
+
+class TestAutoIdFromMain:
+    """#123: ``__main__`` is not a legal ID segment, so auto-derivation must refuse it clearly."""
+
+    def test_function_defined_in_main_raises_invalid_module_id(self) -> None:
+        def handler(x: int) -> int:
+            return x
+
+        handler.__module__ = "__main__"
+        with pytest.raises(ModuleError) as exc_info:
+            _make_auto_id(handler)
+        assert exc_info.value.code == "INVALID_MODULE_ID"
+        assert "explicit id" in str(exc_info.value)
+
+    def test_decorator_refuses_before_registering(self) -> None:
+        def handler(x: int) -> int:
+            return x
+
+        handler.__module__ = "__main__"
+        registry = Registry()
+        with pytest.raises(ModuleError):
+            module(handler, registry=registry)
+        assert registry.module_ids == []
+
+    def test_explicit_id_still_works_in_main(self) -> None:
+        def handler(x: int) -> int:
+            return x
+
+        handler.__module__ = "__main__"
+        registry = Registry()
+        module(handler, id="app.handler", registry=registry)
+        assert registry.has("app.handler")

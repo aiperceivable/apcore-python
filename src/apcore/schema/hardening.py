@@ -213,7 +213,7 @@ def _map_error_code(errors: list[JsonschemaError]) -> str:
 
 def _error_to_detail(error: JsonschemaError) -> SchemaValidationErrorDetail:
     path_parts = list(error.absolute_path)
-    path = "/" + "/".join(str(p) for p in path_parts) if path_parts else "/"
+    path = "".join("/" + str(part).replace("~", "~0").replace("/", "~1") for part in path_parts)
     raw_validator = error.validator
     constraint: str | None = str(raw_validator) if raw_validator is not None else None
     return SchemaValidationErrorDetail(

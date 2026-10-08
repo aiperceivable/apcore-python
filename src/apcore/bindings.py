@@ -275,6 +275,10 @@ class BindingLoader:
         if not isinstance(data, dict):
             raise BindingFileInvalidError(file_path=file_path, reason="Top-level must be a mapping")
 
+        unknown = set(data) - {"spec_version", "bindings"}
+        if unknown:
+            raise BindingFileInvalidError(file_path=file_path, reason=f"Unknown top-level keys: {sorted(unknown)}")
+
         spec_version = data.get("spec_version")
         if spec_version is None:
             _logger.warning(
@@ -302,6 +306,24 @@ class BindingLoader:
                 raise BindingFileInvalidError(
                     file_path=file_path,
                     reason="Each binding entry must be a mapping",
+                )
+            unknown = set(entry) - {
+                "module_id",
+                "target",
+                "description",
+                "documentation",
+                "input_schema",
+                "output_schema",
+                "auto_schema",
+                "schema_ref",
+                "tags",
+                "version",
+                "annotations",
+                "metadata",
+            }
+            if unknown:
+                raise BindingFileInvalidError(
+                    file_path=file_path, reason=f"Unknown binding entry keys: {sorted(unknown)}"
                 )
             if "module_id" not in entry:
                 raise BindingFileInvalidError(

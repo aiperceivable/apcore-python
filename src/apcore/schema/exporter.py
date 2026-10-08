@@ -52,7 +52,6 @@ class SchemaExporter:
                 "destructiveHint": annotations.destructive if annotations else False,
                 "idempotentHint": annotations.idempotent if annotations else False,
                 "openWorldHint": annotations.open_world if annotations else True,
-                "streaming": annotations.streaming if annotations else False,
             },
             "_meta": {
                 "cacheable": annotations.cacheable if annotations else False,
@@ -60,6 +59,8 @@ class SchemaExporter:
                 "cacheKeyFields": annotations.cache_key_fields if annotations else None,
                 "paginated": annotations.paginated if annotations else False,
                 "paginationStyle": annotations.pagination_style if annotations else "cursor",
+                **({"requiresApproval": True} if annotations and annotations.requires_approval else {}),
+                **({"streaming": True} if annotations and annotations.streaming else {}),
             },
         }
 

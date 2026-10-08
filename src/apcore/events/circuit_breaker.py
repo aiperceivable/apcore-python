@@ -149,6 +149,7 @@ class CircuitBreakerWrapper:
                     "apcore.subscriber.circuit_closed",
                     "info",
                     {
+                        "subscriber_id": self.subscriber_id,
                         "subscriber_type": self._declared_subscriber_type(),
                         "recovery_attempt": True,
                     },
@@ -177,6 +178,7 @@ class CircuitBreakerWrapper:
                     "apcore.subscriber.circuit_opened",
                     "warn",
                     {
+                        "subscriber_id": self.subscriber_id,
                         "subscriber_type": subscriber_type,
                         "consecutive_failures": self._consecutive_failures,
                     },

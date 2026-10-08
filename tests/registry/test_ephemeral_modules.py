@@ -358,7 +358,8 @@ class TestEphemeralAuditEvents:
         assert ev.severity == "info"
         # Default audit payload — no context = "@external" sentinel
         assert ev.data.get("caller_id") == "@external"
-        assert "identity" not in ev.data  # no context.identity provided
+        assert ev.data["identity"] is None
+        assert ev.data["namespace_class"] == "ephemeral"
 
     def test_unregister_emits_canonical_event(self) -> None:
         emitter, sub = self._make_emitter()
@@ -478,9 +479,9 @@ class TestEphemeralAuditEvents:
         legacy_events = [
             e for e in sub.events if e.event_type == "module_registered" and e.module_id == "ephemeral.single_emit"
         ]
-        assert legacy_events == [], (
-            "single-emit rule: legacy `module_registered` alias must also be " "suppressed for ephemeral.* IDs"
-        )
+        assert (
+            legacy_events == []
+        ), "single-emit rule: legacy `module_registered` alias must also be suppressed for ephemeral.* IDs"
 
 
 # ===========================================================================

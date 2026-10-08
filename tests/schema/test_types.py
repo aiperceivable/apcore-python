@@ -156,9 +156,8 @@ class TestSchemaValidationResult:
         err_dict = err.details["errors"][0]
         assert err_dict["path"] == "/name"
         assert err_dict["message"] == "required field"
-        assert err_dict["constraint"] == "required"
-        assert err_dict["expected"] == "string"
-        assert err_dict["actual"] is None
+        assert err_dict["keyword"] == "required"
+        assert set(err_dict) == {"path", "keyword", "message"}
 
     def test_to_error_raises_on_valid(self) -> None:
         result = SchemaValidationResult(valid=True)

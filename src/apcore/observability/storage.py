@@ -32,10 +32,10 @@ __all__ = [
 
 #: The namespace each bundled collector writes under.
 #:
-#: §1.1 made the `StorageBackend` argument a MUST and never named these, so of
-#: nine collector/SDK combinations only four wrote anything and the two that
-#: wrote ErrorHistory records used different names. A namespace is the key a
-#: caller queries by, so an unnamed one is an argument that cannot be read back.
+#: metrics-and-usage.md § "Pluggable storage backends" makes the `StorageBackend`
+#: argument a MUST, but an argument is only useful if what it holds can be found
+#: again: a namespace is the key a caller queries by, so an unnamed one is an
+#: argument that cannot be read back.
 STORAGE_NAMESPACE_METRICS = "metrics"
 STORAGE_NAMESPACE_USAGE = "usage"
 STORAGE_NAMESPACE_ERROR_HISTORY = "error_history"

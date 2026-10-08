@@ -16,15 +16,22 @@ class CancelToken:
     """Cooperative cancellation token for module execution.
 
     Pass to Context and check periodically during long-running operations.
+    A linked parent's signal is visible here; cancelling this token never
+    cancels its parent. Cancellation cannot reverse already consumed resources.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, parent: CancelToken | None = None) -> None:
         self._cancelled: bool = False
+        self._parent = parent
 
     @property
     def is_cancelled(self) -> bool:
         """Whether cancellation has been requested."""
-        return self._cancelled
+        return self._cancelled or (self._parent is not None and self._parent.is_cancelled)
+
+    def child(self) -> CancelToken:
+        """Create a linked token; child cancellation never cancels its parent."""
+        return CancelToken(parent=self)
 
     def cancel(self) -> None:
         """Request cancellation."""
@@ -35,7 +42,7 @@ class CancelToken:
 
         Call this periodically in long-running operations.
         """
-        if self._cancelled:
+        if self.is_cancelled:
             raise ExecutionCancelledError()
 
     def raise_if_cancelled(self) -> None:

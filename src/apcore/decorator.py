@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import inspect
 import logging
 import re
@@ -14,7 +15,7 @@ from pydantic.fields import FieldInfo
 
 from apcore._docstrings import parse_docstring
 from apcore.context import Context
-from apcore.errors import FuncMissingReturnTypeError, FuncMissingTypeHintError
+from apcore.errors import ErrorCodes, FuncMissingReturnTypeError, FuncMissingTypeHintError, InvalidInputError
 from apcore.module import ModuleAnnotations, ModuleExample
 
 _logger = logging.getLogger(__name__)
@@ -244,8 +245,39 @@ class FunctionModule:
             self.execute = _sync_execute
 
 
+def _attribute_host(func: Callable) -> Callable:
+    """Return the callable that carries ``apcore_module`` and is handed back to the caller.
+
+    A plain function is its own host. A bound method rejects attribute
+    assignment, so it gets a transparent forwarder instead.
+    """
+    if not inspect.ismethod(func):
+        return func
+    if inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def _async_forward(*args: Any, **kwargs: Any) -> Any:
+            return await func(*args, **kwargs)
+
+        return _async_forward
+
+    @functools.wraps(func)
+    def _forward(*args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    return _forward
+
+
 def _make_auto_id(func: Callable) -> str:
     """Generate a module ID from a function's module path and qualified name."""
+    if func.__module__ == "__main__":
+        # `__main__` names the entry script, not a location: it is not a legal ID
+        # segment, and the same function imported elsewhere would get another ID.
+        raise InvalidInputError(
+            f"Cannot derive a module ID for '{func.__qualname__}' defined in __main__; "
+            'pass an explicit id, e.g. @module(id="my_app.my_function").',
+            code=ErrorCodes.INVALID_MODULE_ID,
+        )
     raw = f"{func.__module__}.{func.__qualname__}"
     raw = raw.replace("<locals>.", ".")
     raw = raw.lower()
@@ -289,12 +321,16 @@ def module(
             display=display,
             examples=examples,
         )
+        # Resolved before registering: a bound method refuses attribute
+        # assignment, and failing after `register` would leave the module
+        # registered while the caller sees an exception.
+        host = None if return_module else _attribute_host(func)
         if registry is not None:
             registry.register(fm.module_id, fm)
-        if return_module:
+        if host is None:
             return fm
-        func.apcore_module = fm  # type: ignore[attr-defined]
-        return func
+        host.apcore_module = fm  # type: ignore[attr-defined]
+        return host
 
     if func_or_none is not None and callable(func_or_none):
         # Bare @module or module(func, id=...) call

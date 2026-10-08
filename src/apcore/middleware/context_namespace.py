@@ -1,6 +1,6 @@
 """Context-data namespace validation (Issue #42).
 
-Spec reference: ``features/middleware-system.md`` §1.1 "Context Namespacing",
+Spec reference: ``features/middleware-system.md`` § "Context Namespacing",
 pinned by ``conformance/fixtures/middleware_hardening.json`` cases
 ``context_namespace_apcore_prefix`` / ``context_namespace_ext_prefix`` /
 ``context_namespace_violation``.

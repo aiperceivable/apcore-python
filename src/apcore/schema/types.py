@@ -97,9 +97,7 @@ class SchemaValidationResult:
             {
                 "path": e.path,
                 "message": e.message,
-                "constraint": e.constraint,
-                "expected": e.expected,
-                "actual": e.actual,
+                "keyword": e.constraint or "type",
             }
             for e in self.errors
         ]

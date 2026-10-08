@@ -47,7 +47,7 @@ class Mod:
 """
 
 
-def _tree(declare_override: bool) -> Path:
+def _tree(declare_override: bool, config_map_entries: list[dict[str, str]] | None = None) -> Path:
     root = Path(tempfile.mkdtemp())
     leaf = root / "ext" / "executor" / "orig"
     leaf.mkdir(parents=True)
@@ -57,6 +57,9 @@ def _tree(declare_override: bool) -> Path:
             yaml.safe_dump({"mappings": [{"file": "executor/orig/mod.py", "id": module_id}]}),
             encoding="utf-8",
         )
+    if config_map_entries is not None:
+        # driver_contract.config_map_entries: replaces map.yaml's mappings.
+        (root / "map.yaml").write_text(yaml.safe_dump({"mappings": config_map_entries}), encoding="utf-8")
     doc: dict[str, Any] = {
         "version": "1.0",
         "project": {"name": "id-map-probe"},
@@ -69,10 +72,14 @@ def _tree(declare_override: bool) -> Path:
 
 
 @pytest.mark.parametrize("case_id", list(CASES))
-def test_id_map_from_config(case_id: str) -> None:
+def test_id_map_from_config(case_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
     case = CASES[case_id]
-    root = _tree(case["input"]["declare_override"])
+    root = _tree(case["input"]["declare_override"], case["input"].get("config_map_entries"))
     explicit = str(root / "explicit.yaml") if case["input"]["explicit_argument"] else None
+    # driver_contract.env: the variable is unset unless the case lists it.
+    monkeypatch.delenv("APCORE_ID__MAP_OVERRIDES", raising=False)
+    for name, value in case["input"].get("env", {}).items():
+        monkeypatch.setenv(name, value)
 
     cwd = os.getcwd()
     os.chdir(root)

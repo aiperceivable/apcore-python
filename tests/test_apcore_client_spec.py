@@ -568,16 +568,23 @@ def test_validate_no_raise_on_validation_failure() -> None:
 def test_validate_returns_preflight_result_shape() -> None:
     """apcore_client.validate.returns.preflight_result
 
-    PreflightResult exposes valid(bool), checks(list, 8 steps for a fully
+    PreflightResult exposes valid(bool), checks(list, 6 evaluable steps for a fully
     passing dry-run: module_id, context, call_chain, module_lookup, acl,
-    schema, output_validation, return_result), requires_approval(bool),
+    schema), requires_approval(bool),
     errors(list).
     """
     client = _client_with_module()
     result = client.validate("math.add", {"a": 1, "b": 2})
     assert isinstance(result.valid, bool)
     assert isinstance(result.checks, list)
-    assert len(result.checks) == 8
+    assert [check.check for check in result.checks] == [
+        "module_id",
+        "context",
+        "call_chain",
+        "module_lookup",
+        "acl",
+        "schema",
+    ]
     assert isinstance(result.requires_approval, bool)
     assert isinstance(result.errors, list)
 

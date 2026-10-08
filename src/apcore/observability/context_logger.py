@@ -213,8 +213,9 @@ def _apply_redaction_config(data: dict[str, Any], config: RedactionConfig) -> di
         # `sensitive_keys` and takes the same matcher (A25, 9.2.3). It stays
         # case-SENSITIVE, as it has always been; only the dialect changes.
         field_match = any(match_glob(pattern, key) for pattern in config.field_patterns)
-        value_str = str(value) if not isinstance(value, str) else value
-        value_match = any(re.search(pattern, value_str) for pattern in config.value_patterns)
+        # §10.6.1 requirement 2 binds the legacy value rule as much as
+        # `regex_patterns`: string values only, never a stringified number or container.
+        value_match = isinstance(value, str) and any(re.search(pattern, value) for pattern in config.value_patterns)
         sensitive_key_match = _key_matches_sensitive(key, config.sensitive_keys)
         regex_value_match = _value_matches(value, config.compiled_regex_patterns)
         if field_match or value_match or sensitive_key_match or regex_value_match:

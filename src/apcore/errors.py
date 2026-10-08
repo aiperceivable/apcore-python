@@ -209,10 +209,10 @@ class ConfigNamespaceReservedError(ModuleError):
 
     _default_retryable: bool | None = False
 
-    def __init__(self, name: str, **kwargs: Any) -> None:
+    def __init__(self, name: str, message: str | None = None, **kwargs: Any) -> None:
         super().__init__(
             code="CONFIG_NAMESPACE_RESERVED",
-            message=f"Namespace name is reserved: {name!r}",
+            message=message or f"Namespace name is reserved: {name!r}",
             details={"name": name},
             **kwargs,
         )

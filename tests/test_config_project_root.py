@@ -673,5 +673,7 @@ class TestPathTypedKeySurface:
             "bindings.dir",
             "extensions.root",
             "extensions.roots[]",
+            "id_map.overrides",
             "schema.root",
+            "sys_modules.control.overrides_path",
         )

@@ -223,3 +223,20 @@ class TestConfigDefaults:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])
+
+
+class TestLegacyValuePatternsStringOnly:
+    """#123: §10.6.1 requirement 2 — the legacy ``value_patterns`` rule never stringifies a value."""
+
+    def test_non_string_values_are_not_tested(self) -> None:
+        from apcore.observability.context_logger import _apply_redaction_config
+
+        config = RedactionConfig(value_patterns=[r"\d+", r"True", r"\{"])
+        data = {"amount": 42, "flag": True, "nested": {"a": 1}, "items": [1, 2]}
+        assert _apply_redaction_config(data, config) == data
+
+    def test_string_values_still_match(self) -> None:
+        from apcore.observability.context_logger import _apply_redaction_config
+
+        config = RedactionConfig(value_patterns=[r"\d+"], replacement="X")
+        assert _apply_redaction_config({"amount": "42"}, config) == {"amount": "X"}

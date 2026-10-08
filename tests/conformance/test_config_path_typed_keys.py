@@ -99,21 +99,35 @@ def _project_path_markers(document: dict[str, Any]) -> set[str]:
     ``{root, namespace}`` form would project as ``extensions.roots[].root`` and
     read as a sixth key that no SDK is asked to expose.
     """
-    defs = document.get("$defs", {})
     found: set[str] = set()
 
-    def resolve(node: dict[str, Any]) -> dict[str, Any]:
-        ref = node.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            resolved = defs.get(ref.rsplit("/", 1)[-1])
-            if isinstance(resolved, dict):
-                return resolved
-        return node
+    def resolve(node: dict[str, Any], defs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Follow ``$ref`` chains, local (``#/$defs/X``) and cross-file (``other.schema.json``).
 
-    def walk(node: Any, path: list[str]) -> None:
+        driver_contract.cross_file_ref: ``sys_modules`` delegates to
+        ``sys-modules.schema.json``, and ``sys_modules.control.overrides_path``
+        carries its marker there. The referenced file brings its own ``$defs``.
+        """
+        seen: set[str] = set()
+        while isinstance(node.get("$ref"), str) and node["$ref"] not in seen:
+            ref = node["$ref"]
+            seen.add(ref)
+            if ref.startswith("#/$defs/"):
+                resolved = defs.get(ref.rsplit("/", 1)[-1])
+            elif not ref.startswith("#"):
+                resolved = _schema(ref.split("#", 1)[0])
+                defs = resolved.get("$defs", {})
+            else:
+                resolved = None
+            if not isinstance(resolved, dict):
+                break
+            node = resolved
+        return node, defs
+
+    def walk(node: Any, path: list[str], defs: dict[str, Any]) -> None:
         if not isinstance(node, dict):
             return
-        node = resolve(node)
+        node, defs = resolve(node, defs)
 
         if node.get("x-apcore-path") is True:
             if "[]" in path:
@@ -124,20 +138,21 @@ def _project_path_markers(document: dict[str, Any]) -> set[str]:
         properties = node.get("properties")
         if isinstance(properties, dict):
             for name, child in properties.items():
-                walk(child, [*path, name])
+                walk(child, [*path, name], defs)
 
         items = node.get("items")
         if isinstance(items, dict):
-            walk(items, [*path, "[]"])
+            walk(items, [*path, "[]"], defs)
 
         for keyword in ("oneOf", "anyOf", "allOf"):
             for alternative in node.get(keyword) or []:
-                walk(alternative, path)
+                walk(alternative, path, defs)
 
+    root_defs = document.get("$defs", {})
     root_properties = document.get("properties")
     if isinstance(root_properties, dict):
         for name, child in root_properties.items():
-            walk(child, [name])
+            walk(child, [name], root_defs)
     return found
 
 
@@ -271,6 +286,17 @@ def test_non_path_string_keys_are_not_path_typed() -> None:
     assert wrongly_included == [], f"non-path key(s) reported as path-typed: {wrongly_included}"
 
 
+def test_id_map_overrides_is_path_typed() -> None:
+    """D-138: the ID map path and the runtime overrides path are path-typed."""
+    case = _case("id_map_overrides_is_path_typed")
+    reject_unknown_expectations(FIXTURE, case, {"expected"})
+    assert case["expected"]["path_typed"] is True
+
+    accessor = set(Config.path_typed_keys())
+    missing = sorted(set(case["keys"]) - accessor)
+    assert missing == [], f"path-typed key(s) the accessor does not report: {missing}"
+
+
 # ---------------------------------------------------------------------------
 # extensions.roots — list-valued, both element forms
 # ---------------------------------------------------------------------------
@@ -400,12 +426,13 @@ COVERED: dict[str, str] = {
     "extensions_roots_elements_are_path_typed": "test_extensions_roots_elements_are_path_typed",
     "no_scalar_env_encoding_for_roots": "test_no_scalar_env_encoding_for_roots",
     "accessor_is_stable_across_config_instances": "test_accessor_is_stable_across_config_instances",
+    "id_map_overrides_is_path_typed": "test_id_map_overrides_is_path_typed",
 }
 
 
 #: The canonical fixture's case count, asserted so that an upstream addition or
 #: removal is a named failure rather than a quietly smaller run.
-EXPECTED_CASE_COUNT = 7
+EXPECTED_CASE_COUNT = 8
 
 
 def test_every_canonical_case_is_driven() -> None:

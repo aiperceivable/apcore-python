@@ -22,8 +22,8 @@ _CANONICAL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
 
 def _to_snake_case(segment: str) -> str:
-    """Convert a PascalCase, camelCase, or mixed-case segment to snake_case."""
-    if not segment:
+    """Apply A02's non-repairing, ASCII-only identifier case conversion."""
+    if not segment or not any("A" <= char <= "Z" for char in segment):
         return segment
 
     res = []
@@ -31,17 +31,17 @@ def _to_snake_case(segment: str) -> str:
         if i > 0:
             prev = segment[i - 1]
             # Case 1: lowercase/digit followed by uppercase -> add underscore
-            if prev.islower() or prev.isdigit():
-                if char.isupper():
+            if ("a" <= prev <= "z") or ("0" <= prev <= "9"):
+                if "A" <= char <= "Z":
                     res.append("_")
             # Case 2: uppercase followed by uppercase followed by lowercase -> add underscore before the middle one
             # e.g., HTTPAPIHandler: ...PIH... -> ...PI_H...
-            elif prev.isupper() and char.isupper():
-                if i + 1 < len(segment) and segment[i + 1].islower():
+            elif ("A" <= prev <= "Z") and ("A" <= char <= "Z"):
+                if i + 1 < len(segment) and ("a" <= segment[i + 1] <= "z"):
                     res.append("_")
-        res.append(char.lower())
+        res.append(char.lower() if "A" <= char <= "Z" else char)
 
-    return "".join(res).replace("__", "_")
+    return "".join(res)
 
 
 def normalize_to_canonical_id(local_id: str, language: str) -> str:

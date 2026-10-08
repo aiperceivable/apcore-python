@@ -202,3 +202,27 @@ class TestRedactSensitiveEdgeCases:
         data = {"key": "value"}
         result = redact_sensitive(data, {})
         assert result == {"key": "value"}
+
+
+class TestXSensitiveInCombinators:
+    """D-152: an optional pydantic field puts ``x-sensitive`` inside ``anyOf``; it is still redacted."""
+
+    def test_optional_secret_field_from_pydantic_is_redacted(self) -> None:
+        from typing import Annotated
+
+        from pydantic import BaseModel, Field
+
+        Secret = Annotated[str, Field(json_schema_extra={"x-sensitive": True})]
+
+        class Inputs(BaseModel):
+            pin: Secret | None = None
+            cards: list[Secret] | None = None
+            note: str = ""
+
+        schema = Inputs.model_json_schema()
+        result = redact_sensitive({"pin": "4711", "cards": ["4111"], "note": "hi"}, schema, sensitive_keys=[])
+        assert result == {"pin": "***REDACTED***", "cards": ["***REDACTED***"], "note": "hi"}
+
+    def test_none_value_of_a_marked_optional_field_stays_none(self) -> None:
+        schema = {"properties": {"pin": {"anyOf": [{"type": "string", "x-sensitive": True}, {"type": "null"}]}}}
+        assert redact_sensitive({"pin": None}, schema, sensitive_keys=[]) == {"pin": None}

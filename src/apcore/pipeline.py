@@ -103,6 +103,7 @@ class PipelineContext:
     trace: PipelineTrace | None = None
     # New in v0.17
     dry_run: bool = False
+    preflight_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
     version_hint: str | None = None
     executed_middlewares: list[Any] = field(default_factory=list)
     # New in v0.20
@@ -656,8 +657,9 @@ class PipelineEngine:
         start = time.monotonic()
         steps = strategy.steps
         step_mws = strategy.step_middlewares
-        name_to_idx = strategy._name_to_idx  # O(1) step lookup (§1.5)
+        name_to_idx = strategy._name_to_idx  # O(1) step lookup
         step_outputs: dict[str, Any] = {}
+        unavailable: set[str] = set()
         effective_run_until = run_until or ctx.run_until
         i = 0
 
@@ -673,6 +675,8 @@ class PipelineEngine:
 
             # (1) match_modules filter
             if match_modules is not None and not _any_match(match_modules, ctx.module_id):
+                if ctx.dry_run:
+                    unavailable.update(getattr(step, "provides", ()))
                 trace.steps.append(
                     StepTrace(
                         name=step.name,
@@ -687,6 +691,7 @@ class PipelineEngine:
 
             # (2) dry_run filter: skip impure steps
             if getattr(ctx, "dry_run", False) and not pure:
+                unavailable.update(getattr(step, "provides", ()))
                 trace.steps.append(
                     StepTrace(
                         name=step.name,
@@ -694,6 +699,23 @@ class PipelineEngine:
                         result=StepResult(action="continue"),
                         skipped=True,
                         skip_reason="dry_run",
+                    )
+                )
+                i += 1
+                continue
+
+            # Dependencies are logical capabilities, not Context attributes.
+            # Only a failed or skipped provider makes a dependent check
+            # unevaluable. Independent checks continue after every failure.
+            if ctx.dry_run and unavailable.intersection(getattr(step, "requires", ())):
+                unavailable.update(getattr(step, "provides", ()))
+                trace.steps.append(
+                    StepTrace(
+                        name=step.name,
+                        duration_ms=0,
+                        result=StepResult(action="continue"),
+                        skipped=True,
+                        skip_reason="missing_dependency",
                     )
                 )
                 i += 1
@@ -763,6 +785,28 @@ class PipelineEngine:
                     result = await step.execute(ctx)
             except Exception as exc:
                 duration = (time.monotonic() - step_start) * 1000
+
+                if ctx.dry_run:
+                    unavailable.update(getattr(step, "provides", ()))
+                    to_dict = getattr(exc, "to_dict", None)
+                    serialized = to_dict() if callable(to_dict) else None
+                    ctx.preflight_errors[step.name] = (
+                        serialized
+                        if isinstance(serialized, dict)
+                        else {
+                            "code": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                    )
+                    trace.steps.append(
+                        StepTrace(
+                            name=step.name,
+                            duration_ms=duration,
+                            result=StepResult(action="abort", explanation=str(exc)),
+                        )
+                    )
+                    i += 1
+                    continue
 
                 # EXE-006 — a per-step timeout is an ordinary step failure.
                 # `timeout_ms` is documented as a plain per-step timeout
@@ -838,7 +882,7 @@ class PipelineEngine:
                         )
                         i += 1
                         continue
-                    # Fail-fast (§1.1): wrap in PipelineStepError with step name and cause
+                    # Fail-fast (execution-pipeline.md § "Errors"): wrap in PipelineStepError with step name and cause
                     trace.steps.append(
                         StepTrace(
                             name=step.name,
@@ -901,6 +945,10 @@ class PipelineEngine:
             step_outputs[step.name] = dict(ctx.output) if ctx.output is not None else None
 
             if result.action == "abort":
+                if ctx.dry_run:
+                    unavailable.update(getattr(step, "provides", ()))
+                    i += 1
+                    continue
                 trace.total_duration_ms = (time.monotonic() - start) * 1000
                 raise PipelineAbortError(
                     step=step.name,
@@ -912,12 +960,14 @@ class PipelineEngine:
                 target = result.skip_to
                 if target is None:
                     raise StepNotFoundError("skip_to target is None")
-                # O(1) lookup via pre-built index (§1.5)
+                # O(1) lookup via pre-built index
                 target_idx = name_to_idx.get(target)
                 if target_idx is None or target_idx <= i:
                     raise StepNotFoundError(f"skip_to target '{target}' not found")
                 # Record skipped steps in trace
                 for j in range(i + 1, target_idx):
+                    if ctx.dry_run:
+                        unavailable.update(getattr(steps[j], "provides", ()))
                     trace.steps.append(
                         StepTrace(
                             name=steps[j].name,
@@ -930,7 +980,10 @@ class PipelineEngine:
                 i = target_idx
                 continue
 
-            # (7) run_until: evaluate predicate only on clean continue (§1.4)
+            if ctx.dry_run:
+                unavailable.difference_update(getattr(step, "provides", ()))
+
+            # (7) run_until: evaluate predicate only on clean continue (execution-pipeline.md § "run_until")
             if effective_run_until is not None:
                 state = PipelineState(
                     step_name=step.name,
@@ -944,7 +997,7 @@ class PipelineEngine:
 
             i += 1
 
-        trace.success = True
+        trace.success = not any(item.result.action == "abort" for item in trace.steps if not item.skipped)
         trace.total_duration_ms = (time.monotonic() - start) * 1000
         # Use ctx.output — it's the most up-to-date (middleware_after may modify it)
         return ctx.output, trace
@@ -1038,7 +1091,7 @@ class StrategyNotFoundError(ModuleError):
 
 
 class PipelineStepError(ModuleError):
-    """Raised when a pipeline step fails (fail-fast, §1.1).
+    """Raised when a pipeline step fails (fail-fast; execution-pipeline.md § "Errors").
 
     Wraps the original exception from the step, carrying the step name for
     diagnostics. When ignore_errors is true on the step, this error is NOT
@@ -1077,7 +1130,7 @@ class PipelineStepNotFoundError(ModuleError):
 
 
 class ConfigurationError(ModuleError):
-    """Raised when pipeline YAML configuration is invalid (Issue #33 §1.2).
+    """Raised when pipeline YAML configuration is invalid (execution-pipeline.md § "Configuring the pipeline from apcore.yaml").
 
     Replaces the prior warning-and-continue behaviour: when YAML refers to a
     step name that does not exist (in ``remove``, ``configure``, or
@@ -1104,7 +1157,7 @@ class PipelineDependencyError(ModuleError):
         missing: tuple[str, ...] = (),
         **kwargs: Any,
     ) -> None:
-        msg = f"Pipeline step '{step_name}' requires {set(missing)}, " f"but no preceding step provides them."
+        msg = f"Pipeline step '{step_name}' requires {set(missing)}, but no preceding step provides them."
         super().__init__(
             code="PIPELINE_DEPENDENCY_ERROR",
             message=msg,

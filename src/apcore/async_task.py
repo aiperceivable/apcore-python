@@ -367,6 +367,15 @@ def _snapshot(info: TaskInfo | None) -> TaskInfo | None:
     return dataclasses.replace(info)
 
 
+def _completed_result(task_id: str, info: TaskInfo | None) -> Any:
+    """Return ``info.result``, or raise as :meth:`AsyncTaskManager.get_result` documents."""
+    if info is None:
+        raise KeyError(f"Task not found: {task_id}")
+    if info.status != TaskStatus.COMPLETED:
+        raise RuntimeError(f"Task {task_id} is not completed (status={info.status.value})")
+    return info.result
+
+
 class AsyncTaskManager:
     """Manages background execution of modules via asyncio tasks.
 
@@ -529,12 +538,16 @@ class AsyncTaskManager:
             KeyError: If the task_id is not found.
             RuntimeError: If the task is not in COMPLETED status.
         """
-        info = self.get_status(task_id)
-        if info is None:
-            raise KeyError(f"Task not found: {task_id}")
-        if info.status != TaskStatus.COMPLETED:
-            raise RuntimeError(f"Task {task_id} is not completed (status={info.status.value})")
-        return info.result
+        return _completed_result(task_id, self.get_status(task_id))
+
+    async def get_result_async(self, task_id: str) -> Any:
+        """Async variant of :meth:`get_result` for I/O-backed stores (D-17).
+
+        Raises:
+            KeyError: If the task_id is not found.
+            RuntimeError: If the task is not in COMPLETED status.
+        """
+        return _completed_result(task_id, await self.get_status_async(task_id))
 
     async def cancel(self, task_id: str) -> bool:
         """Cancel a running, pending, or retrying task.
@@ -770,7 +783,7 @@ class AsyncTaskManager:
 
         Drives the sweep through :meth:`TaskStore.list_expired` rather than
         :meth:`cleanup`, matching the TypeScript and Rust SDKs and
-        async-tasks.md §1.3. Two reasons this matters: a custom store whose
+        async-tasks.md § "Reaper (TTL-Based Cleanup)". Two reasons this matters: a custom store whose
         ``list_expired`` is the only efficient expiry query (Redis
         ``ZRANGEBYSCORE``, SQL ``WHERE``) is otherwise bypassed and the entire
         task set is pulled into the process on every sweep; and the two

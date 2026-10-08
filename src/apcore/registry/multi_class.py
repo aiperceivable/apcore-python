@@ -66,11 +66,14 @@ def class_name_to_segment(class_name: str) -> str:
     return s.strip("_")
 
 
+def _looks_like_module(cls: type) -> bool:
+    """Return True if cls has the Module shape, marked or not."""
+    return hasattr(cls, "input_schema") and hasattr(cls, "output_schema") and callable(getattr(cls, "execute", None))
+
+
 def _is_multi_class_candidate(cls: type) -> bool:
     """Return True if cls is @multi_class-decorated and looks like a Module."""
-    if not getattr(cls, _MULTI_CLASS_ATTR, False):
-        return False
-    return hasattr(cls, "input_schema") and hasattr(cls, "output_schema") and callable(getattr(cls, "execute", None))
+    return bool(getattr(cls, _MULTI_CLASS_ATTR, False)) and _looks_like_module(cls)
 
 
 def _compute_base_id(file_path: Path, extensions_root: str) -> str:
@@ -113,9 +116,11 @@ def discover_multi_class(
             allowlists, or audit logging.
 
     Returns:
-        List of ``(module_id, class_ref)`` pairs, one per qualifying class.
-        A file with exactly one qualifying class returns ``[(base_id, cls)]``
-        (single-class identity guarantee — no segment appended).
+        List of ``(module_id, class_ref)`` pairs, one per marked class. A file
+        whose only Module class is marked returns ``[(base_id, cls)]``
+        (single-class identity guarantee — no segment appended); in a file with
+        two or more Module classes each marked class gets ``base_id.segment``
+        and unmarked ones are not registered (D-147).
 
     Raises:
         ModuleIdConflictError: Two or more classes produce the same segment;
@@ -131,17 +136,21 @@ def discover_multi_class(
 
     loaded = _import_module_from_file(file_path, pre_approval_hook=pre_approval_hook)
 
-    qualifying: list[tuple[str, type]] = [
+    module_classes: list[tuple[str, type]] = [
         (name, obj)
         for name, obj in inspect.getmembers(loaded, inspect.isclass)
-        if _is_multi_class_candidate(obj) and obj.__module__ == loaded.__name__
+        if _looks_like_module(obj) and obj.__module__ == loaded.__name__
     ]
+    qualifying = [(name, obj) for name, obj in module_classes if _is_multi_class_candidate(obj)]
 
     if not qualifying:
         return []
 
-    # Single-class identity guarantee: one class → use bare base_id
-    if len(qualifying) == 1:
+    # Single-class identity guarantee (§2.1.1 rule 5) is about the FILE: only a
+    # file whose one Module class is marked keeps the bare base_id. Beside an
+    # unmarked Module class the marked one takes its segment (D-147), so marking
+    # a second class later never renames the first.
+    if len(module_classes) == 1:
         return [(base_id, qualifying[0][1])]
 
     # Multi-class path: derive IDs, detect conflicts, validate grammar and length

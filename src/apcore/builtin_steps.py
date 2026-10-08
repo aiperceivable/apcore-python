@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import inspect
+import json
 import logging
 import time
 from typing import Any, cast
@@ -20,7 +21,7 @@ from typing import Any, cast
 import pydantic
 
 from apcore.approval import ApprovalRequest, ApprovalResult
-from apcore.cancel import ExecutionCancelledError
+from apcore.cancel import CancelToken, ExecutionCancelledError
 from apcore.context import Context, GovernanceProjection
 from apcore.errors import (
     ACLDeniedError,
@@ -70,15 +71,33 @@ _logger = logging.getLogger(__name__)
 
 
 def _convert_validation_errors(error: pydantic.ValidationError) -> list[dict[str, Any]]:
-    """Convert a Pydantic ValidationError into a list of error dicts."""
-    return [
-        {
-            "field": ".".join(str(loc) for loc in err["loc"]),
-            "code": err["type"],
-            "message": err["msg"],
-        }
-        for err in error.errors()
-    ]
+    """Convert native validator failures to canonical JSON Schema details."""
+    keywords = {
+        "missing": "required",
+        "literal_error": "enum",
+        "enum": "enum",
+        "greater_than_equal": "minimum",
+        "greater_than": "exclusiveMinimum",
+        "less_than_equal": "maximum",
+        "less_than": "exclusiveMaximum",
+        "string_too_short": "minLength",
+        "string_too_long": "maxLength",
+        "too_short": "minItems",
+        "too_long": "maxItems",
+        "string_pattern_mismatch": "pattern",
+        "multiple_of": "multipleOf",
+        "extra_forbidden": "additionalProperties",
+    }
+    results = []
+    for item in error.errors():
+        kind = item["type"]
+        location = item["loc"][:-1] if kind in {"missing", "extra_forbidden"} else item["loc"]
+        path = "".join("/" + str(part).replace("~", "~0").replace("/", "~1") for part in location)
+        keyword = keywords.get(
+            kind, "type" if kind.endswith(("_type", "_parsing")) or kind == "is_instance_of" else "format"
+        )
+        results.append({"path": path, "keyword": keyword, "message": item["msg"]})
+    return results
 
 
 def _ensure_middleware_manager(manager: Any | None, middlewares: list[Any] | None) -> Any:
@@ -232,6 +251,10 @@ class BuiltinContextCreation(BaseStep):
         # carries the parent's `global_deadline` forward, so a nested call
         # inherits the budget of the tree it belongs to.
         ctx.context = base_ctx.child(ctx.module_id)
+        # Every invocation owns its cancellation signal. Parent cancellation
+        # propagates downward, while a timeout leaves ancestors reusable.
+        parent_token = getattr(base_ctx, "cancel_token", None)
+        ctx.context.cancel_token = parent_token.child() if parent_token is not None else CancelToken()
 
         # D-101 — the deadline belongs to the CALL TREE, not to the Context.
         # It is computed onto the context derived for THIS call, never onto
@@ -1159,7 +1182,18 @@ class BuiltinInputValidation(BaseStep):
             # configurable (TYPE_MAPPING §17.3). ``SchemaValidator`` still
             # exposes ``coerce_types`` as a library-level knob for callers
             # doing their own validation; it has no effect on this path.
-            input_schema.model_validate(ctx.inputs, strict=True)
+            try:
+                json_inputs = json.dumps(ctx.inputs)
+            except (TypeError, ValueError):
+                # Native Python callers may already supply datetime/UUID/Enum
+                # instances. Keep their strict native validation path.
+                input_schema.model_validate(ctx.inputs, strict=True)
+            else:
+                validate_json = getattr(input_schema, "model_validate_json", None)
+                if callable(validate_json):
+                    validate_json(json_inputs, strict=True)
+                else:
+                    input_schema.model_validate(ctx.inputs, strict=True)
         except pydantic.ValidationError as exc:
             errors = _convert_validation_errors(exc)
             raise SchemaValidationError(
@@ -1231,6 +1265,9 @@ class BuiltinExecute(BaseStep):
         # `time.time()` — never a monotonic reading.
         global_deadline = getattr(ctx.context, "global_deadline", None)
         if global_deadline is not None and time.time() > global_deadline:
+            token = getattr(ctx.context, "cancel_token", None)
+            if token is not None:
+                token.cancel()
             timeout_ms = int(self._default_timeout)
             raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=timeout_ms)
 
@@ -1255,6 +1292,9 @@ class BuiltinExecute(BaseStep):
         if global_deadline is not None:
             remaining = global_deadline - time.time()
             if remaining <= 0:
+                token = getattr(ctx.context, "cancel_token", None)
+                if token is not None:
+                    token.cancel()
                 raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=int(self._default_timeout))
             if timeout_s is None or remaining < timeout_s:
                 timeout_s = remaining
@@ -1267,7 +1307,18 @@ class BuiltinExecute(BaseStep):
                 coro = loop.run_in_executor(None, module.execute, inputs, ctx.context)
 
             if timeout_s is not None:
-                output = await asyncio.wait_for(coro, timeout=timeout_s)
+                task = asyncio.ensure_future(coro)
+                completed, _ = await asyncio.wait({task}, timeout=timeout_s)
+                if not completed:
+                    token = getattr(ctx.context, "cancel_token", None)
+                    if token is not None:
+                        token.cancel()
+                    # Cancellation is cooperative: do not wait for cleanup or
+                    # forcibly cancel the module's coroutine. Consume a late
+                    # exception so a discarded result cannot become a warning.
+                    task.add_done_callback(_discard_late_execution)
+                    raise ModuleTimeoutError(module_id=ctx.module_id, timeout_ms=int(timeout_s * 1000))
+                output = task.result()
             else:
                 output = await coro
             ctx.output = output
@@ -1279,6 +1330,12 @@ class BuiltinExecute(BaseStep):
             ) from None
 
         return StepResult(action="continue")
+
+
+def _discard_late_execution(task: asyncio.Future[Any]) -> None:
+    """Consume a timed-out invocation's eventual exception or output."""
+    if not task.cancelled():
+        task.exception()
 
 
 # ---------------------------------------------------------------------------
