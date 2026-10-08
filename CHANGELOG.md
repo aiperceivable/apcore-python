@@ -6,17 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.32.0] - 2026-10-08
 
 ### Added
 
 - **`canonicalize_name()` converts bare ASCII names into canonical segments and preserves the original alongside structured diagnostics** (apcore-rust #40, protocol §2.7). Exported with immutable `CanonicalNameResult` and `CanonicalNameError` from `apcore` and `apcore.utils`. Unicode is rejected, existing underscore runs are preserved, and names are never truncated. A02 module-ID normalization is unchanged; namespace reservation and collision handling remain registration concerns.
-
-### Fixed
-
-- **CI checks out the canonical spec's `main` independently of SDK branch names and verifies declared fixtures before the full test run.** An incomplete checkout fails with publication-order guidance: publish the spec changes before the SDK changes, then rerun CI. Missing canonical fixtures are never skipped or replaced with private copies.
-
-## [0.32.0] - 2026-10-08
 
 ### Security
 
@@ -25,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ObsLoggingMiddleware` and `LoggingMiddleware` log only `context.redacted_inputs` / `redacted_output`**, never the raw inputs or output, so an `x-sensitive` field is redacted with or without a `RedactionConfig`; nothing captured means nothing logged (D-131, spec §10.6.1 requirement 5). `ObsLoggingMiddleware.after` previously logged the raw output.
 
 ### Fixed
-
+- **CI checks out the canonical spec's `main` independently of SDK branch names and verifies declared fixtures before the full test run.** An incomplete checkout fails with publication-order guidance: publish the spec changes before the SDK changes, then rerun CI. Missing canonical fixtures are never skipped or replaced with private copies.
 - **Timeouts cancel a linked, invocation-owned cooperative token and return without waiting for module cleanup** (D-133). Late outputs and errors are discarded; cancellation never cancels an ancestor token or reverses external costs.
 - **Preflight preserves all evaluable checks after a failure while withholding module hooks from ACL-denied callers** (D-134). Null previews emit no check (D-141).
 - **Strict JSON input validation accepts contract-valid datetime, UUID and enum strings without enabling coercion** (D-136); native Python values remain supported.
