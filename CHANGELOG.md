@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`canonicalize_name()` converts bare ASCII names into canonical segments and preserves the original alongside structured diagnostics** (apcore-rust #40, protocol §2.7). Exported with immutable `CanonicalNameResult` and `CanonicalNameError` from `apcore` and `apcore.utils`. Unicode is rejected, existing underscore runs are preserved, and names are never truncated. A02 module-ID normalization is unchanged; namespace reservation and collision handling remain registration concerns.
 
+### Fixed
+
+- **CI checks out the canonical spec's `main` independently of SDK branch names and verifies declared fixtures before the full test run.** An incomplete checkout fails with publication-order guidance: publish the spec changes before the SDK changes, then rerun CI. Missing canonical fixtures are never skipped or replaced with private copies.
+
 ## [0.32.0] - 2026-10-08
 
 ### Security
