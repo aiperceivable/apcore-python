@@ -8,6 +8,10 @@ import re
 from collections.abc import Sequence
 from typing import Any, Union
 
+from referencing import Registry, Resource
+from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT202012, specification_with
+
 from apcore.utils.pattern import match_glob
 
 logger = logging.getLogger(__name__)
@@ -76,7 +80,8 @@ def redact_sensitive(
         data: The data dict to redact.
         schema_dict: A JSON Schema dict that may contain ``x-sensitive: true``
             on individual properties, including inside ``anyOf`` / ``oneOf`` /
-            ``allOf`` branches (D-152).
+            ``allOf`` branches (D-152) and local references/anchors. Reference
+            cycles terminate without expanding the schema or retrieving URLs.
         sensitive_keys: Optional override for the field-name match list.
         regex_patterns: Optional list of regex patterns matched against
             **string** values (case-insensitive, unanchored search). Already
@@ -106,53 +111,108 @@ def redact_sensitive(
 _COMBINATORS: tuple[str, ...] = ("anyOf", "oneOf", "allOf")
 
 
-def _branches(schema: dict[str, Any]) -> list[dict[str, Any]]:
-    """The subschemas of ``schema``'s ``anyOf`` / ``oneOf`` / ``allOf``, in that order."""
-    found: list[dict[str, Any]] = []
-    for keyword in _COMBINATORS:
-        branches = schema.get(keyword)
-        if isinstance(branches, list):
-            found.extend(b for b in branches if isinstance(b, dict))
-    return found
+class _SchemaRedactor:
+    """Walk data and local schema references together, without schema expansion."""
 
+    def __init__(self, schema: dict[str, Any], token: str) -> None:
+        self._token = token
+        declared_dialect = schema.get("$schema")
+        self._root_dialect: str = (
+            declared_dialect if isinstance(declared_dialect, str) else "https://json-schema.org/draft/2020-12/schema"
+        )
+        self._root_specification = specification_with(self._root_dialect, default=DRAFT202012)
+        resource = Resource.from_contents(schema, default_specification=self._root_specification)
+        self._resources: dict[int, Resource[Any]] = {}
+        self._dialects: dict[int, str] = {}
+        self._index_resources(resource, self._root_dialect)
+        self._resolver = Registry().resolver_with_root(resource)
 
-def _is_sensitive(schema: dict[str, Any]) -> bool:
-    """True when ``schema`` or any combinator branch below it carries ``x-sensitive: true``.
+    def _index_resources(self, root: Resource[Any], inherited_dialect: str) -> None:
+        pending = [(root, inherited_dialect)]
+        while pending:
+            resource, parent_dialect = pending.pop()
+            contents = resource.contents
+            if not isinstance(contents, dict) or id(contents) in self._resources:
+                continue
+            declared_dialect = contents.get("$schema")
+            dialect = declared_dialect if isinstance(declared_dialect, str) else parent_dialect
+            self._resources[id(contents)] = resource
+            self._dialects[id(contents)] = dialect
+            pending.extend((child, dialect) for child in resource.subresources())
 
-    D-152: a value is redacted when ANY branch that describes it marks it,
-    without deciding which branch the value matches. ``Secret | None`` puts the
-    marker in ``anyOf[0]``; requiring the marked branch to validate would leak
-    exactly the values that match an unmarked sibling.
-    """
-    if schema.get("x-sensitive") is True:
-        return True
-    return any(_is_sensitive(branch) for branch in _branches(schema))
+    def _resource(self, schema: dict[str, Any]) -> Resource[Any]:
+        resource = self._resources.get(id(schema))
+        if resource is not None:
+            return resource
+        return Resource.from_contents(schema, default_specification=self._root_specification)
 
+    def _views(self, schema: dict[str, Any], resolver: Any) -> list[tuple[dict[str, Any], Any]]:
+        # Resolver is a dialect-dependent third-party type; validate its contents.
+        pending = [(schema, resolver)]
+        views: list[tuple[dict[str, Any], Any]] = []
+        seen: set[int] = set()
+        while pending:
+            current, context = pending.pop()
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            views.append((current, context))
+            reference = current.get("$ref")
+            if isinstance(reference, str):
+                try:
+                    resolved = context.lookup(reference)
+                    if isinstance(resolved.contents, dict):
+                        pending.append((resolved.contents, resolved.resolver))
+                except Unresolvable:
+                    pass  # Unknown references never trigger network or file retrieval.
+            for keyword in _COMBINATORS:
+                branches = current.get(keyword)
+                if isinstance(branches, list):
+                    for branch in branches:
+                        if isinstance(branch, dict):
+                            pending.append((branch, context.in_subresource(self._resource(branch))))
+        return views
 
-def _property_schemas(schema: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Every ``(name, schema)`` a property is declared with, directly or inside a combinator branch.
+    def _redact_value(self, value: Any, schema: dict[str, Any], resolver: Any) -> Any:
+        views = self._views(schema, resolver)
+        if value is not None and any(view.get("x-sensitive") is True for view, _ in views):
+            return self._token
+        if isinstance(value, dict):
+            self._redact_object(value, views)
+        elif isinstance(value, list):
+            for view, context in views:
+                self._redact_array(value, view, context)
+        return value
 
-    A name declared in several branches appears once per declaration, so each
-    declaration's marker is honoured.
-    """
-    pairs: list[tuple[str, dict[str, Any]]] = []
-    properties = schema.get("properties")
-    if isinstance(properties, dict):
-        pairs.extend((name, sub) for name, sub in properties.items() if isinstance(sub, dict))
-    for branch in _branches(schema):
-        pairs.extend(_property_schemas(branch))
-    return pairs
+    def _redact_array(self, values: list[Any], schema: dict[str, Any], resolver: Any) -> None:
+        items = schema.get("items")
+        dialect = self._dialects.get(id(schema), self._root_dialect)
+        legacy = "/draft-07/" in dialect or "/2019-09/" in dialect
+        tuple_items = items if legacy and isinstance(items, list) else None
+        prefix = tuple_items if tuple_items is not None else (schema.get("prefixItems") if not legacy else None)
+        prefix = prefix if isinstance(prefix, list) else []
+        for index, positional in enumerate(prefix[: len(values)]):
+            if isinstance(positional, dict):
+                context = resolver.in_subresource(self._resource(positional))
+                values[index] = self._redact_value(values[index], positional, context)
+        tail = schema.get("additionalItems") if tuple_items is not None else items
+        if isinstance(tail, dict):
+            context = resolver.in_subresource(self._resource(tail))
+            for index in range(len(prefix), len(values)):
+                values[index] = self._redact_value(values[index], tail, context)
 
+    def _redact_object(self, data: dict[str, Any], views: list[tuple[dict[str, Any], Any]]) -> None:
+        for schema, resolver in views:
+            properties = schema.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            for name, field_schema in properties.items():
+                if name in data and isinstance(field_schema, dict):
+                    child = resolver.in_subresource(self._resource(field_schema))
+                    data[name] = self._redact_value(data[name], field_schema, child)
 
-def _items_schemas(schema: dict[str, Any]) -> list[dict[str, Any]]:
-    """The ``items`` schemas of ``schema`` and of its combinator branches."""
-    found: list[dict[str, Any]] = []
-    items = schema.get("items")
-    if isinstance(items, dict):
-        found.append(items)
-    for branch in _branches(schema):
-        found.extend(_items_schemas(branch))
-    return found
+    def redact_fields(self, data: dict[str, Any], schema: dict[str, Any]) -> None:
+        self._redact_object(data, self._views(schema, self._resolver))
 
 
 def _redact_fields(
@@ -161,32 +221,8 @@ def _redact_fields(
     *,
     token: str = REDACTED_VALUE,
 ) -> None:
-    """In-place redaction based on schema x-sensitive markers, combinator branches included (D-152)."""
-    for field_name, field_schema in _property_schemas(schema_dict):
-        if field_name not in data:
-            continue
-
-        value = data[field_name]
-
-        if _is_sensitive(field_schema):
-            if value is not None:
-                data[field_name] = token
-            continue
-
-        if isinstance(value, dict):
-            _redact_fields(value, field_schema, token=token)
-            continue
-
-        if isinstance(value, list):
-            for items_schema in _items_schemas(field_schema):
-                if _is_sensitive(items_schema):
-                    for i, item in enumerate(value):
-                        if item is not None:
-                            value[i] = token
-                    break
-                for item in value:
-                    if isinstance(item, dict):
-                        _redact_fields(item, items_schema, token=token)
+    """Redact markers across composition and cycle-safe local references."""
+    _SchemaRedactor(schema_dict, token).redact_fields(data, schema_dict)
 
 
 def _normalize_for_match(s: str) -> str:

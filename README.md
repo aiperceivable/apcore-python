@@ -486,7 +486,7 @@ class GetUserModule:
 
 ### `send_email` — Destructive module with sensitive fields and ContextLogger
 
-Shows `x-sensitive` on schema fields (for log redaction), `ModuleAnnotations` with metadata, `ModuleExample` for AI-perceivable documentation, and `ContextLogger` usage.
+Shows `x-sensitive` on schema fields (for log redaction), `ModuleAnnotations` with metadata, `ModuleExample` for AI-perceivable documentation, and `ContextLogger` usage. Schema redaction follows local JSON pointers, anchors, and self references through object, array, and composition schemas, including positional prefixes, tuple items, and their tail schemas; recursive references are evaluated alongside the data without schema expansion or external retrieval.
 
 ```python
 from pydantic import BaseModel, Field
