@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.32.2] - 2026-10-19
+
+### Fixed
+
+- Preserve optional enum, const and composed-schema constraints during A23 strict conversion by wrapping the complete schema in a nullable union. Required fields remain unchanged, null-only types are not duplicated, and shared conformance cases verify both schema parity and value validation. Tracked in [apcore#124](https://github.com/aiperceivable/apcore/issues/124).
 
 ## [0.32.1] - 2026-10-14
 

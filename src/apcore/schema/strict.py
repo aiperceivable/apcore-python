@@ -115,20 +115,16 @@ def _convert_to_strict(node: Any) -> None:
 
         for name in optional_names:
             prop = node["properties"][name]
-            if "type" in prop:
-                if isinstance(prop["type"], str):
-                    prop["type"] = [prop["type"], "null"]
-                elif isinstance(prop["type"], list):
-                    if "null" not in prop["type"]:
-                        prop["type"].append("null")
-            else:
-                # Pure $ref or composition — wrap in anyOf with null. ``anyOf``,
-                # not ``oneOf``: OpenAI structured outputs accepts only ``anyOf``
-                # as the nullable-union spelling, and strict mode exists to feed
-                # that adapter. A ``oneOf`` the module author wrote is preserved
-                # untouched inside the wrapper — rewriting it would drop the
-                # exclusivity their contract asserts.
+            constrained = any(key in prop for key in ("enum", "const", "$ref", "allOf", "anyOf", "oneOf", "not", "if"))
+            if "type" not in prop or constrained:
+                # Constraints can reject null independently of the type keyword.
+                # Preserve the complete original schema in the non-null branch.
                 node["properties"][name] = {"anyOf": [prop, {"type": "null"}]}
+            elif isinstance(prop["type"], str):
+                if prop["type"] != "null":
+                    prop["type"] = [prop["type"], "null"]
+            elif isinstance(prop["type"], list) and "null" not in prop["type"]:
+                prop["type"].append("null")
 
         node["required"] = sorted(all_names)
 

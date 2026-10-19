@@ -17,6 +17,7 @@ import json
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from apcore.schema import to_strict_schema
 from conformance.canonical_fixtures import load_fixture
@@ -46,6 +47,13 @@ class TestStrictConversionFixture:
             f"  expected: {json.dumps(tc['expected'], sort_keys=True)}\n"
             f"  got:      {json.dumps(got, sort_keys=True)}"
         )
+        if "validation_cases" in tc:
+            Draft202012Validator.check_schema(got)
+            validator = Draft202012Validator(got)
+            for example in tc["validation_cases"]:
+                assert (
+                    validator.is_valid(example["data"]) == example["valid"]
+                ), f"[{tc['id']}] unexpected validation result for {example['data']!r}"
         # A23 MUST deep-copy — the caller's schema is never mutated.
         assert schema == before, f"[{tc['id']}] to_strict_schema mutated its input"
 
