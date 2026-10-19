@@ -1,6 +1,6 @@
 implementation:
   name: apcore-python
-  version: 0.32.1
+  version: 0.32.2
   language: python
   spec_version: 1.65.0
   maintainer: AI Perceivable
