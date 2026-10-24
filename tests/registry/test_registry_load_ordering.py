@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -144,24 +145,28 @@ def test_concurrent_same_id_rejects_duplicate() -> None:
 
 
 def test_concurrent_distinct_ids_run_in_parallel() -> None:
-    """Distinct module IDs with overlapping on_load delays must both complete in < 90ms."""
+    """Distinct-ID callbacks enter together before either may finish."""
     reg = Registry()
+    gate = threading.Barrier(2, timeout=5.0)
+    callbacks_overlap = threading.Event()
 
-    start = time.monotonic()
+    class _OverlapModule(_SlowModule):
+        def on_load(self) -> None:
+            gate.wait()
+            callbacks_overlap.set()
+            super().on_load()
 
-    t1 = threading.Thread(target=reg.register, args=("executor.test.parallel_x", _SlowModule(delay_s=0.05)))
-    t2 = threading.Thread(target=reg.register, args=("executor.test.parallel_y", _SlowModule(delay_s=0.05)))
-    t1.start()
-    t2.start()
-    t1.join(timeout=5.0)
-    t2.join(timeout=5.0)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(reg.register, module_id, _OverlapModule(delay_s=0.05))
+            for module_id in ("executor.test.parallel_x", "executor.test.parallel_y")
+        ]
+        for future in futures:
+            future.result(timeout=10.0)
 
-    elapsed_ms = (time.monotonic() - start) * 1000
-
+    assert callbacks_overlap.is_set()
     assert reg.get("executor.test.parallel_x") is not None
     assert reg.get("executor.test.parallel_y") is not None
-    # If serialized, elapsed_ms would be ~100ms; parallel ≤ ~90ms
-    assert elapsed_ms < 90, f"on_load should run in parallel but took {elapsed_ms:.0f}ms"
 
 
 def test_no_version_module_not_visible_until_on_load_done() -> None:

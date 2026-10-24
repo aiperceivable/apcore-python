@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -190,39 +191,37 @@ def test_fixture_concurrent_same_id_rejects_duplicate(fixture_data: dict) -> Non
     assert len(reg.list()) == expected["post_register_count"]
 
 
-def test_fixture_concurrent_distinct_ids_run_in_parallel(fixture_data: dict) -> None:
-    """Case: concurrent_distinct_ids_run_in_parallel."""
+@pytest.mark.parametrize("startup_delay", [0.0, 0.15], ids=["normal_startup", "slow_startup"])
+def test_fixture_concurrent_distinct_ids_run_in_parallel(fixture_data: dict[str, Any], startup_delay: float) -> None:
+    """Both callbacks overlap even when worker startup is slow."""
     case = next(c for c in fixture_data["test_cases"] if c["id"] == "concurrent_distinct_ids_run_in_parallel")
     setup = case["setup"]
     expected = case["expected"]
-
     reg = Registry()
+    gate = threading.Barrier(2, timeout=5.0)
+    callbacks_overlap = threading.Event()
 
-    def make_slow_module(delay_ms: int):
-        class _SM:
-            def on_load(self) -> None:
-                time.sleep(delay_ms / 1000)
+    class _OverlapModule:
+        def __init__(self, delay_ms: int) -> None:
+            self.delay_ms = delay_ms
 
-        return _SM()
+        def on_load(self) -> None:
+            gate.wait()
+            callbacks_overlap.set()
+            time.sleep(self.delay_ms / 1000)
 
-    start = time.monotonic()
-    t1 = threading.Thread(
-        target=reg.register,
-        args=(setup["module_x"]["id"], make_slow_module(setup["module_x"]["on_load_delay_ms"])),
-    )
-    t2 = threading.Thread(
-        target=reg.register,
-        args=(setup["module_y"]["id"], make_slow_module(setup["module_y"]["on_load_delay_ms"])),
-    )
-    t1.start()
-    t2.start()
-    t1.join(timeout=5.0)
-    t2.join(timeout=5.0)
-    elapsed_ms = (time.monotonic() - start) * 1000
+    def register(key: str) -> None:
+        time.sleep(startup_delay)
+        module = setup[key]
+        reg.register(module["id"], _OverlapModule(module["on_load_delay_ms"]))
 
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(register, key) for key in ("module_x", "module_y")]
+        for future in futures:
+            future.result(timeout=10.0)
+
+    assert all(future.done() and future.exception() is None for future in futures) == expected["both_succeed"]
+    assert callbacks_overlap.is_set() == expected["callbacks_overlap"]
     assert reg.get(setup["module_x"]["id"]) is not None
     assert reg.get(setup["module_y"]["id"]) is not None
     assert len(reg.list()) == expected["post_register_count"]
-    assert elapsed_ms < expected["wall_clock_ms_less_than"], (
-        f"Expected parallel execution < {expected['wall_clock_ms_less_than']}ms, " f"got {elapsed_ms:.0f}ms"
-    )
